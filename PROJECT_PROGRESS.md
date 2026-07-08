@@ -54,25 +54,54 @@ Run command:
 python -m streamlit run apps/streamlit_demo.py --server.headless true --server.port 8501 --browser.gatherUsageStats false
 ```
 
+### Module 1/2 Adapter Architecture
+
+Completed:
+
+- `modules/system/adapters.py` defines internal provider contracts for slide, transcript, and sensing inputs.
+- Mock-backed providers convert the current manifest and scenario fixtures into stable internal dataclasses.
+- `ProviderBackedDeckStore` lets provider output run through the existing `run_interaction(...)` pipeline without duplicating tutor/context logic.
+- `modules/system/demo_view_model.py` now runs scenarios through the adapter boundary.
+- `scripts/demo_tutor_loop.py` now uses the same adapter bundle path as the UI helper.
+- Adapter-driven scenario execution matches direct pipeline execution.
+
+Current boundary:
+
+- Real Module 1/2 field mapping is not implemented yet because their final interfaces are not available.
+- Future real adapters should map their outputs into `SlideFrame`, `Transcript`, `GazePrediction`, and `LearningState`.
+- The verified checkpoint is:
+
+```text
+Mock scenario -> adapter providers -> pipeline input bundle -> run_interaction(...) -> InteractionResult
+```
+
 ## Verified Commands
 
-The latest verified commands from the UI demo implementation stage:
+The latest verified commands from the adapter architecture implementation stage:
 
 ```bash
-python -m py_compile apps/streamlit_demo.py modules/system/demo_view_model.py
+python -m py_compile modules/system/adapters.py modules/system/demo_view_model.py apps/streamlit_demo.py
 python -m unittest discover -s tests -v
+python scripts/demo_tutor_loop.py
 python evaluation/eval_reference_resolution.py
 python evaluation/eval_scenario_outputs.py
-python -m streamlit run apps/streamlit_demo.py --server.headless true --server.port 8501 --browser.gatherUsageStats false
-curl -I http://localhost:8501
 ```
 
 Observed results:
 
 - Python compile check passed.
-- Unit test suite passed: 23 tests.
+- Unit test suite passed: 29 tests.
+- CLI demo completed and wrote `data/logs/demo_interactions.jsonl`.
 - Reference-resolution evaluation reported all metrics as `1.0`.
 - Scenario-output evaluation reported `output_accuracy = 1.0`.
+
+The latest verified commands from the UI demo implementation stage also included:
+
+```bash
+python -m streamlit run apps/streamlit_demo.py --server.headless true --server.port 8501 --browser.gatherUsageStats false
+curl -I http://localhost:8501
+```
+
 - Streamlit app served `http://localhost:8501` with HTTP `200 OK`.
 - Streamlit testing rendered the app without exceptions, displayed pending confirmation, and after clicking confirm displayed the final tutor response.
 - The Streamlit server was stopped after verification.
@@ -96,9 +125,9 @@ For engineering optimization work, inspect these areas first:
 
 - Whether `apps/streamlit_demo.py` should be split into smaller UI components before adding more panels.
 - Whether `modules/system/demo_view_model.py` should become the boundary for future UI-independent contract tests.
-- Whether Module 1/2 adapters should be defined as protocol-style interfaces before those teams finalize their real APIs.
+- How real Module 1/2 outputs should map into the new protocol-style adapter interfaces once field names/formats are available.
 - Whether log files under `data/logs/` should stay untracked runtime artifacts.
 
 ## Git State Note
 
-At the time this progress document was created, the Streamlit UI demo changes were present in the working tree but not committed.
+The Streamlit UI demo and adapter execution plan were committed and pushed in commit `d51beb7`.

@@ -12,7 +12,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from modules.logging.interaction_logger import InteractionLogger
-from modules.system.pipeline import run_interaction
+from modules.system.adapters import (
+    MockManifestSlideProvider,
+    ScenarioSensingProvider,
+    ScenarioTranscriptProvider,
+    build_pipeline_input_bundle,
+    run_interaction_from_bundle,
+)
 from modules.system.scenarios import load_scenarios
 
 
@@ -23,12 +29,17 @@ def main() -> None:
 
     logger = InteractionLogger(log_path)
     results = []
+    slide_provider = MockManifestSlideProvider()
 
     for scenario in load_scenarios():
-        result = run_interaction(
-            transcript=scenario.transcript,
-            gaze_prediction=scenario.gaze_prediction,
-            learning_state=scenario.learning_state,
+        bundle = build_pipeline_input_bundle(
+            slide_provider=slide_provider,
+            transcript_provider=ScenarioTranscriptProvider(scenario),
+            sensing_provider=ScenarioSensingProvider(scenario),
+            slide_id=scenario.gaze_prediction.slide_id,
+        )
+        result = run_interaction_from_bundle(
+            bundle,
             confirmed_aoi_id=scenario.confirmed_aoi_id,
             logger=logger,
         )

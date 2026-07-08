@@ -41,6 +41,16 @@ class DemoViewModelTest(unittest.TestCase):
         self.assertGreaterEqual(len(view_model["confirmation_options"]), 5)
         self.assertIn("bottom_formula", {option["aoi_id"] for option in view_model["confirmation_options"]})
 
+    def test_run_scenario_turn_uses_adapter_boundary_without_changing_output(self):
+        scenario = load_scenarios()[0]
+
+        result = run_scenario_turn(scenario)
+        view_model = build_interaction_view_model(result, scenario)
+
+        self.assertEqual(view_model["actual"]["response_mode"], "pending_confirmation")
+        self.assertEqual(view_model["actual"]["resolved_aoi_id"], "right_figure")
+        self.assertIsNone(view_model["response"]["answer"])
+
 
 if __name__ == "__main__":
     unittest.main()

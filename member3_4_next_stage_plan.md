@@ -20,26 +20,28 @@ Next checkpoints should start from UI framework choice, real STT/LLM/webcam inte
 
 ## Next Goal: Module 1/2 Adapter Architecture
 
-Recommended next execution plan:
+Status after this goal step:
 
-```text
-docs/superpowers/plans/2026-07-09-adapter-architecture.md
-```
-
-Scope judgment:
-
-- This adapter stage can start before Module 1/2 teammates finish their real interfaces.
-- Implement internal provider contracts and mock-backed adapters now.
+- `modules/system/adapters.py` implements internal provider contracts and mock-backed adapters.
+- `MockManifestSlideProvider`, `ScenarioTranscriptProvider`, and `ScenarioSensingProvider` convert existing fixtures into stable internal dataclasses.
+- `ProviderBackedDeckStore` lets adapter output run through the existing `run_interaction(...)` path.
+- `modules/system/demo_view_model.py` and `scripts/demo_tutor_loop.py` now execute scenarios through the adapter boundary.
+- `tests/test_system_adapters.py` verifies the provider contracts and confirms adapter-driven scenarios match direct pipeline results.
 - Keep real Module 1/2 adapter implementation blocked until their actual field names, formats, and failure modes are available.
 - Preserve all current scenario behavior, UI demo behavior, and confirmation-gated answering.
 
-Checkpoint for this stage:
+Checkpoint reached:
 
 ```text
 Mock scenario -> adapter providers -> pipeline input bundle -> run_interaction(...) -> InteractionResult
 ```
 
-Pause after the mock-backed adapter architecture is implemented and verified. At that point, decide whether to wait for real Module 1/2 interfaces or continue with UI/engineering cleanup.
+Next real-interface checkpoint:
+
+- Ask Module 1 for exact fields for deck id, slide id, slide text, neighbor slide text, slide image path, and normalized AOIs.
+- Ask Module 2 for exact fields for gaze prediction and observable learning-state signals.
+- Add real adapters only after those fields, formats, and failure modes are available.
+- Continue UI design work and engineering optimization in separate threads without changing this adapter boundary unless a real interface requires it.
 
 ## Next Goal: Streamlit / Gradio UI Demo
 

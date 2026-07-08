@@ -7,7 +7,13 @@ from typing import Any
 
 from modules.common.schemas import InteractionResult
 from modules.logging.interaction_logger import InteractionLogger
-from modules.system.pipeline import run_interaction
+from modules.system.adapters import (
+    MockManifestSlideProvider,
+    ScenarioSensingProvider,
+    ScenarioTranscriptProvider,
+    build_pipeline_input_bundle,
+    run_interaction_from_bundle,
+)
 from modules.system.scenarios import InteractionScenario
 
 
@@ -29,10 +35,14 @@ def run_scenario_turn(
 ) -> InteractionResult:
     """Run one UI demo turn from a scenario and optional user-confirmed AOI."""
 
-    return run_interaction(
-        transcript=scenario.transcript,
-        gaze_prediction=scenario.gaze_prediction,
-        learning_state=scenario.learning_state,
+    bundle = build_pipeline_input_bundle(
+        slide_provider=MockManifestSlideProvider(),
+        transcript_provider=ScenarioTranscriptProvider(scenario),
+        sensing_provider=ScenarioSensingProvider(scenario),
+        slide_id=scenario.gaze_prediction.slide_id,
+    )
+    return run_interaction_from_bundle(
+        bundle,
         confirmed_aoi_id=confirmed_aoi_id,
         logger=logger,
     )
