@@ -1,0 +1,25 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Local generated data
+data/logs/*.jsonl
+data/slide_images/
+data/uploaded_decks/
+data/calibration_profiles/
+
+# Local secrets and machine-specific settings
+.env
+.env.*
+config.local.yaml
