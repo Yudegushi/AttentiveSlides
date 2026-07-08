@@ -18,6 +18,110 @@ As of the current integration-ready stage, the planned Member 3/4 local pipeline
 
 Next checkpoints should start from UI framework choice, real STT/LLM/webcam integration, or Module 1/2 input replacement. Keep the constraints below active unless explicitly revised.
 
+## Next Goal: Module 1/2 Adapter Architecture
+
+Recommended next execution plan:
+
+```text
+docs/superpowers/plans/2026-07-09-adapter-architecture.md
+```
+
+Scope judgment:
+
+- This adapter stage can start before Module 1/2 teammates finish their real interfaces.
+- Implement internal provider contracts and mock-backed adapters now.
+- Keep real Module 1/2 adapter implementation blocked until their actual field names, formats, and failure modes are available.
+- Preserve all current scenario behavior, UI demo behavior, and confirmation-gated answering.
+
+Checkpoint for this stage:
+
+```text
+Mock scenario -> adapter providers -> pipeline input bundle -> run_interaction(...) -> InteractionResult
+```
+
+Pause after the mock-backed adapter architecture is implemented and verified. At that point, decide whether to wait for real Module 1/2 interfaces or continue with UI/engineering cleanup.
+
+## Next Goal: Streamlit / Gradio UI Demo
+
+Status after this goal step:
+
+- Streamlit was selected because it is already available locally (`streamlit 1.41.1`); Gradio is not installed.
+- `modules/system/demo_view_model.py` now provides a testable thin view-model layer for UI rendering.
+- `apps/streamlit_demo.py` now runs a mock-driven local UI demo over the existing scenario fixtures and `run_interaction(...)`.
+- `tests/test_demo_view_model.py` covers pending-answer gating, confirmed correction output, and click-required AOI selection options.
+- The demo keeps real webcam, Whisper/STT, real LLM, Lenovo GPU, and Module 1/2 live interfaces out of scope.
+
+Run command:
+
+```bash
+python -m streamlit run apps/streamlit_demo.py --server.headless true --server.port 8501 --browser.gatherUsageStats false
+```
+
+Current UI capabilities:
+
+- select a scenario from `data/scenarios/member3_4_demo_cases.json`;
+- edit transcript, mock gaze prediction, confidence, stable duration, and observable learning-state signals;
+- render slide AOI boxes from `data/mock_deck/mock_aoi_manifest.json`;
+- show intent, predicted AOI, confidence, adaptive strategy, evidence, and learning-state summary;
+- preserve confirmation-gated answering: pending turns hide the final answer until the user confirms/corrects an AOI;
+- confirm/correct the AOI and rerun the same pipeline turn to produce the final slide-grounded tutor response;
+- compare expected vs actual scenario fields;
+- append the current turn to `data/logs/streamlit_demo_interactions.jsonl` and inspect recent log rows.
+
+Recommended next checkpoint:
+
+```text
+Pause here for a human visual pass of the Streamlit UI.
+After that, choose between:
+1. UI polish and demonstration scripting;
+2. adapter architecture for Module 1/2 replacement inputs;
+3. real STT / webcam / LLM integration planning.
+```
+
+The next recommended step is a UI demo, before real Module 1/2 inputs are available. This is useful because the current `run_interaction(...)` service already returns all fields needed for a human-centered demo: predicted target, confirmation mode, candidate targets, evidence, correction path, tutor answer, and logging metadata.
+
+Recommended next goal-mode scope:
+
+```text
+Build a Streamlit or Gradio demo UI for the existing mock-driven AttentiveSlides pipeline.
+
+Use current scenario fixtures, mock deck AOIs, mock gaze predictions, and mock learning-state signals.
+Do not connect real webcam, real Whisper/STT, real LLM, or Lenovo GPU yet.
+Preserve the confirmation-gated interaction:
+- first call can return pending_confirmation;
+- UI shows candidates/evidence and no final AOI-specific answer;
+- user can confirm/correct an AOI;
+- second call generates the final slide-grounded tutor response.
+```
+
+Suggested UI features:
+
+- scenario selector for `data/scenarios/member3_4_demo_cases.json`;
+- transcript input box;
+- mock gaze / learning-state controls or presets;
+- slide AOI display using normalized bounding boxes from the mock manifest;
+- evidence panel showing intent, gaze grid, predicted AOI, confidence, and adaptive strategy;
+- confirmation panel for `confirm_one`, `choose_top2`, and `click_required`;
+- final tutor response panel after confirmation or direct resolution;
+- scenario evaluation panel showing expected vs actual fields;
+- JSONL log viewer for recent interactions.
+
+Engineering constraints for this UI stage:
+
+- prefer Streamlit unless a Gradio-specific reason is chosen at goal start;
+- keep UI thin: call `modules.system.pipeline.run_interaction` rather than duplicating pipeline logic;
+- keep mock providers explicit so Module 1/2 outputs can replace them later;
+- do not require API keys;
+- ask before installing dependencies if Streamlit/Gradio is not already available;
+- ask before starting a long-running dev server if the environment requires approval.
+
+Good checkpoint for this UI stage:
+
+```text
+Pause after a local UI can run one scenario, display pending confirmation, accept corrected AOI, and render the final tutor response.
+Then decide whether to add evaluation dashboard/log viewer polish or move to system adapter architecture.
+```
+
 ---
 
 ## Important Plan Update: Confirmation-Gated Answering
