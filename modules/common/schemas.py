@@ -138,10 +138,34 @@ class InteractionLogEvent:
     target_confidence: float
     needs_confirmation: bool
     confirmation_mode: str
-    user_corrected: bool
+    user_corrected: bool | None
     adaptive_strategy: str
     response_mode: str
     latency_ms: float
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class UIState:
+    slide_id: int
+    aois: list[dict[str, Any]]
+    highlighted_aoi_id: str | None
+    confirmation_mode: ConfirmationMode
+    confirmation_message: str | None
+    candidate_targets: list[dict[str, Any]]
+    evidence: list[str]
+    learning_state_summary: dict[str, Any]
+    transcript: str
+    intent: IntentName
+    response: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class InteractionResult:
+    intent_result: IntentResult
+    resolved_query: ResolvedQuery
+    tutor_response: TutorResponse
+    log_event: InteractionLogEvent
+    ui_state: UIState

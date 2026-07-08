@@ -1,0 +1,179 @@
+[
+  {
+    "name": "high-confidence explain this",
+    "transcript": "解释这个",
+    "gaze_prediction": {
+      "slide_id": 5,
+      "gaze_grid": "middle_right",
+      "predicted_aoi_id": "right_figure",
+      "confidence": 0.76,
+      "stable_duration_sec": 2.3,
+      "alternative_targets": []
+    },
+    "learning_state": {},
+    "expected": {
+      "intent": "explain",
+      "resolved_aoi_id": "right_figure",
+      "confirmation_mode": "confirm_one",
+      "adaptive_strategy": "normal",
+      "response_mode": "pending_confirmation"
+    }
+  },
+  {
+    "name": "summarize whole slide",
+    "transcript": "总结这一页",
+    "gaze_prediction": {
+      "slide_id": 5,
+      "gaze_grid": "middle_center",
+      "predicted_aoi_id": null,
+      "confidence": 0.0,
+      "stable_duration_sec": 0.0,
+      "alternative_targets": []
+    },
+    "learning_state": {},
+    "expected": {
+      "intent": "summarize",
+      "resolved_aoi_id": "whole_slide",
+      "confirmation_mode": "none",
+      "adaptive_strategy": "normal",
+      "response_mode": "summarize"
+    }
+  },
+  {
+    "name": "medium-confidence quiz this concept",
+    "transcript": "考我一下这个概念",
+    "gaze_prediction": {
+      "slide_id": 5,
+      "gaze_grid": "bottom_right",
+      "predicted_aoi_id": "right_figure",
+      "confidence": 0.55,
+      "stable_duration_sec": 1.8,
+      "alternative_targets": [
+        {
+          "aoi_id": "right_figure",
+          "score": 0.55
+        },
+        {
+          "aoi_id": "bottom_caption",
+          "score": 0.51
+        }
+      ]
+    },
+    "learning_state": {},
+    "expected": {
+      "intent": "quiz",
+      "resolved_aoi_id": "right_figure",
+      "confirmation_mode": "choose_top2",
+      "adaptive_strategy": "normal",
+      "response_mode": "pending_confirmation"
+    }
+  },
+  {
+    "name": "explicit target overrides low gaze",
+    "transcript": "解释右边这个图",
+    "gaze_prediction": {
+      "slide_id": 5,
+      "gaze_grid": "bottom_left",
+      "predicted_aoi_id": "bottom_caption",
+      "confidence": 0.3,
+      "stable_duration_sec": 0.0,
+      "alternative_targets": []
+    },
+    "learning_state": {},
+    "expected": {
+      "intent": "explain",
+      "resolved_aoi_id": "right_figure",
+      "confirmation_mode": "none",
+      "adaptive_strategy": "normal",
+      "response_mode": "explain"
+    }
+  },
+  {
+    "name": "low screen-facing score asks confirmation",
+    "transcript": "解释这个",
+    "gaze_prediction": {
+      "slide_id": 5,
+      "gaze_grid": "middle_right",
+      "predicted_aoi_id": "right_figure",
+      "confidence": 0.78,
+      "stable_duration_sec": 2.0,
+      "alternative_targets": []
+    },
+    "learning_state": {
+      "screen_facing_score": 0.35
+    },
+    "expected": {
+      "intent": "explain",
+      "resolved_aoi_id": "right_figure",
+      "confirmation_mode": "confirm_one",
+      "adaptive_strategy": "ask_confirmation",
+      "response_mode": "pending_confirmation"
+    }
+  },
+  {
+    "name": "confirmed correction uses bottom caption",
+    "transcript": "解释这个",
+    "confirmed_aoi_id": "bottom_caption",
+    "gaze_prediction": {
+      "slide_id": 5,
+      "gaze_grid": "middle_right",
+      "predicted_aoi_id": "right_figure",
+      "confidence": 0.76,
+      "stable_duration_sec": 2.3,
+      "alternative_targets": []
+    },
+    "learning_state": {},
+    "expected": {
+      "intent": "explain",
+      "resolved_aoi_id": "bottom_caption",
+      "confirmation_mode": "none",
+      "adaptive_strategy": "normal",
+      "response_mode": "explain",
+      "confirmed_aoi_id": "bottom_caption",
+      "user_corrected": true
+    }
+  },
+  {
+    "name": "click-required low confidence waits for selection",
+    "transcript": "解释这个",
+    "gaze_prediction": {
+      "slide_id": 5,
+      "gaze_grid": "bottom_left",
+      "predicted_aoi_id": "bottom_formula",
+      "confidence": 0.2,
+      "stable_duration_sec": 0.4,
+      "alternative_targets": []
+    },
+    "learning_state": {},
+    "expected": {
+      "intent": "explain",
+      "resolved_aoi_id": null,
+      "confirmation_mode": "click_required",
+      "adaptive_strategy": "normal",
+      "response_mode": "pending_confirmation"
+    }
+  },
+  {
+    "name": "click-required selected formula answers",
+    "transcript": "解释这个",
+    "confirmed_aoi_id": "bottom_formula",
+    "gaze_prediction": {
+      "slide_id": 5,
+      "gaze_grid": "bottom_left",
+      "predicted_aoi_id": "bottom_formula",
+      "confidence": 0.2,
+      "stable_duration_sec": 0.4,
+      "alternative_targets": []
+    },
+    "learning_state": {},
+    "expected": {
+      "intent": "explain",
+      "resolved_aoi_id": "bottom_formula",
+      "confirmation_mode": "none",
+      "adaptive_strategy": "normal",
+      "response_mode": "explain",
+      "confirmed_aoi_id": "bottom_formula",
+      "user_corrected": false
+    }
+  }
+]
