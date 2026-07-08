@@ -1,0 +1,56 @@
+{
+  "deck_id": "mock_deck",
+  "title": "Mock AttentiveSlides Deck",
+  "slides": [
+    {
+      "slide_id": 5,
+      "slide_image_path": "data/mock_deck/slide_005.png",
+      "ocr_text": "This slide introduces SHAP values. The left text block defines local explanation. The right figure shows how positive and negative feature contributions move a model prediction from a base value to the final output. The bottom caption says SHAP values attribute prediction differences to individual features.",
+      "neighbor_slide_text": "Previous slide: feature importance gives global ranking. Next slide: force plots visualize local SHAP explanations for one prediction.",
+      "aois": [
+        {
+          "aoi_id": "whole_slide",
+          "bbox": [0.0, 0.0, 1.0, 1.0],
+          "type": "slide",
+          "name": "Whole slide",
+          "text": "This slide introduces SHAP values and contrasts the definition, figure, and caption."
+        },
+        {
+          "aoi_id": "title",
+          "bbox": [0.05, 0.03, 0.95, 0.14],
+          "type": "title",
+          "name": "Title",
+          "text": "SHAP Values for Local Model Explanation"
+        },
+        {
+          "aoi_id": "left_text",
+          "bbox": [0.06, 0.18, 0.46, 0.75],
+          "type": "text",
+          "name": "Left text block",
+          "text": "SHAP explains a single model prediction by assigning each feature a contribution value."
+        },
+        {
+          "aoi_id": "right_figure",
+          "bbox": [0.54, 0.18, 0.94, 0.72],
+          "type": "figure",
+          "name": "Right figure",
+          "text": "The figure shows positive and negative feature contributions pushing the prediction away from the base value."
+        },
+        {
+          "aoi_id": "bottom_caption",
+          "bbox": [0.10, 0.78, 0.90, 0.92],
+          "type": "caption",
+          "name": "Bottom caption",
+          "text": "Caption: SHAP values attribute the difference between the expected prediction and the final prediction to each feature."
+        },
+        {
+          "aoi_id": "bottom_formula",
+          "bbox": [0.18, 0.82, 0.82, 0.96],
+          "type": "formula",
+          "name": "Bottom formula",
+          "text": "f(x) = E[f(x)] + sum of SHAP feature contributions."
+        }
+      ]
+    }
+  ]
+}

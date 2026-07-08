@@ -72,3 +72,10 @@ evaluation/
 - Tutor responses must be grounded in provided slide context.
 - Adaptive policy may respond to observable learning-state signals, but should not claim true emotion, fatigue, confusion, or attention.
 - The first stage can be developed on this Mac. Later webcam, gaze calibration, Whisper, and final demo work should be validated on the configured 4060 Linux laptop.
+
+## Current Verification Commands
+
+```bash
+python -m unittest discover -s tests -v
+python scripts/demo_tutor_loop.py
+```
