@@ -9,7 +9,9 @@ from typing import Any
 
 import streamlit as st
 
+from modules.audio.model_policy import transcription_config_for_profile
 from modules.common.schemas import GazePrediction, LearningState
+from modules.interaction.speech_to_text import transcribe_audio
 from modules.logging.interaction_logger import InteractionLogger
 from modules.system.demo_view_model import (
     build_interaction_view_model,
@@ -21,6 +23,7 @@ from modules.system.scenarios import InteractionScenario, load_scenarios
 
 
 LOG_PATH = Path("data/logs/streamlit_demo_interactions.jsonl")
+RECORDED_AUDIO_DIR = Path("data/audio_samples/recorded")
 GAZE_GRIDS = [
     "top_left",
     "top_center",
@@ -40,15 +43,8 @@ def main() -> None:
 
     scenarios = _load_scenarios()
     scenario = _select_scenario(scenarios)
+    _ensure_session_state(scenario)
     edited_scenario = _sidebar_controls(scenario)
-
-    if "confirmed_aoi_id" not in st.session_state:
-        st.session_state.confirmed_aoi_id = None
-    if "active_scenario_name" not in st.session_state:
-        st.session_state.active_scenario_name = edited_scenario.name
-    if st.session_state.active_scenario_name != edited_scenario.name:
-        st.session_state.active_scenario_name = edited_scenario.name
-        st.session_state.confirmed_aoi_id = None
 
     st.html(_app_header_html())
 
@@ -84,9 +80,32 @@ def _select_scenario(scenarios: list[InteractionScenario]) -> InteractionScenari
     return scenarios[names.index(selected)]
 
 
+def _ensure_session_state(scenario: InteractionScenario) -> None:
+    if "confirmed_aoi_id" not in st.session_state:
+        st.session_state.confirmed_aoi_id = None
+    if "active_scenario_name" not in st.session_state:
+        st.session_state.active_scenario_name = scenario.name
+    if "learner_utterance" not in st.session_state:
+        st.session_state.learner_utterance = scenario.transcript
+    if "latest_audio_path" not in st.session_state:
+        st.session_state.latest_audio_path = None
+    if "audio_transcript_text" not in st.session_state:
+        st.session_state.audio_transcript_text = ""
+    if "audio_error" not in st.session_state:
+        st.session_state.audio_error = None
+    if "audio_profile" not in st.session_state:
+        st.session_state.audio_profile = "balanced"
+
+    if st.session_state.active_scenario_name != scenario.name:
+        st.session_state.active_scenario_name = scenario.name
+        st.session_state.confirmed_aoi_id = None
+        st.session_state.learner_utterance = scenario.transcript
+
+
 def _sidebar_controls(scenario: InteractionScenario) -> InteractionScenario:
-    st.sidebar.header("Mock input desk")
-    transcript = st.sidebar.text_area("Learner utterance", scenario.transcript, height=96)
+    st.sidebar.header("Input desk")
+    _render_audio_input_controls()
+    transcript = st.sidebar.text_area("Learner utterance", height=96, key="learner_utterance")
 
     aoi_ids = [aoi["aoi_id"] for aoi in _scenario_aois()]
     predicted_options = ["None", *aoi_ids]
@@ -173,6 +192,93 @@ def _sidebar_controls(scenario: InteractionScenario) -> InteractionScenario:
         gaze_prediction=gaze_prediction,
         learning_state=learning_state,
     )
+
+
+def _render_audio_input_controls() -> None:
+    mode = st.sidebar.radio(
+        "Input mode",
+        ["Mock scenario text", "Audio file upload", "Recorded wav path"],
+        key="audio_input_mode",
+    )
+    selected_label = st.sidebar.selectbox(
+        "STT profile",
+        _audio_profile_options(),
+        index=0,
+        key="audio_profile_label",
+    )
+    profile = _profile_from_audio_label(selected_label)
+    st.session_state.audio_profile = profile
+
+    uploaded_audio = None
+    recorded_path = ""
+    if mode == "Audio file upload":
+        with st.sidebar:
+            if hasattr(st, "audio_input"):
+                uploaded_audio = st.audio_input("Record command")
+            if uploaded_audio is None:
+                uploaded_audio = st.file_uploader("Upload audio file", type=["wav", "mp3", "m4a"])
+    elif mode == "Recorded wav path":
+        recorded_path = st.sidebar.text_input(
+            "Audio path",
+            value=str(st.session_state.latest_audio_path or "data/audio_samples/recorded/latest.wav"),
+        )
+
+    if mode != "Mock scenario text" and st.sidebar.button("Transcribe audio", use_container_width=True):
+        try:
+            audio_path = _audio_path_from_input(uploaded_audio, recorded_path)
+            transcript_text = _transcribe_audio_for_ui(audio_path, profile)
+        except Exception as exc:  # pragma: no cover - Streamlit surface for runtime model/device errors
+            st.session_state.audio_error = str(exc)
+        else:
+            st.session_state.latest_audio_path = audio_path
+            st.session_state.audio_transcript_text = transcript_text
+            st.session_state.learner_utterance = transcript_text
+            st.session_state.confirmed_aoi_id = None
+            st.session_state.audio_error = None
+
+    if st.session_state.audio_error:
+        st.sidebar.error(
+            f"{st.session_state.audio_error} "
+            "Try the balanced profile, cpu fallback, or edit the transcript manually."
+        )
+    if st.session_state.latest_audio_path:
+        st.sidebar.caption(f"Latest audio: {st.session_state.latest_audio_path}")
+
+
+def _audio_path_from_input(uploaded_audio: Any, recorded_path: str) -> str:
+    if uploaded_audio is not None:
+        return _save_uploaded_audio(uploaded_audio)
+    if recorded_path.strip():
+        return recorded_path.strip()
+    raise ValueError("Record, upload, or provide a wav path before transcription.")
+
+
+def _audio_profile_options() -> list[str]:
+    return ["balanced (medium)", "accurate (large-v3)", "fast (small)", "cpu fallback"]
+
+
+def _profile_from_audio_label(label: str) -> str:
+    mapping = {
+        "balanced (medium)": "balanced",
+        "accurate (large-v3)": "accurate",
+        "fast (small)": "fast",
+        "cpu fallback": "cpu",
+    }
+    return mapping[label]
+
+
+def _save_uploaded_audio(uploaded_audio: Any, output_dir: Path = RECORDED_AUDIO_DIR) -> str:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    filename = Path(getattr(uploaded_audio, "name", "latest.wav")).name or "latest.wav"
+    output_path = output_dir / filename
+    output_path.write_bytes(bytes(uploaded_audio.getbuffer()))
+    return output_path.as_posix()
+
+
+def _transcribe_audio_for_ui(audio_path: str, profile: str) -> str:
+    config = transcription_config_for_profile(profile)
+    transcript = transcribe_audio(audio_path, config)
+    return transcript.text
 
 
 def _scenario_aois() -> list[dict[str, Any]]:

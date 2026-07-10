@@ -1,0 +1,24 @@
+{
+  "dataset": "local_mock",
+  "language": "zh-CN",
+  "source": "test fixture",
+  "license": "test-only",
+  "cases": [
+    {
+      "case_id": "mock_explain",
+      "audio_path": "data/audio_samples/explain_this.wav",
+      "expected_transcript": "解释一下这个",
+      "expected_intent": "explain",
+      "expected_resolved_aoi_id": "right_figure",
+      "sensing_preset": "high_confidence_right_figure"
+    },
+    {
+      "case_id": "mock_unknown",
+      "audio_path": "data/audio_samples/meaning_this_figure.wav",
+      "expected_transcript": "这个图是什么意思",
+      "expected_intent": "explain",
+      "expected_resolved_aoi_id": "right_figure",
+      "sensing_preset": "high_confidence_right_figure"
+    }
+  ]
+}

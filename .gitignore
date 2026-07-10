@@ -15,6 +15,12 @@ htmlcov/
 
 # Local generated data
 data/logs/*.jsonl
+data/audio_samples/*
+!data/audio_samples/.gitkeep
+!data/audio_samples/README.md
+data/audio_eval/*
+!data/audio_eval/.gitkeep
+!data/audio_eval/README.md
 data/slide_images/
 data/uploaded_decks/
 data/calibration_profiles/

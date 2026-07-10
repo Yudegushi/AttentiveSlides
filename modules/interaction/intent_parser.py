@@ -15,7 +15,7 @@ INTENT_PATTERNS: list[tuple[IntentName, tuple[str, ...], float]] = [
     ("summarize", ("总结", "概括", "这一页", "整页", "summarize", "summary", "main point"), 0.88),
     ("review", ("复习", "review", "recap", "哪里需要看"), 0.86),
     ("break", ("休息", "累了", "break", "pause", "tired"), 0.86),
-    ("explain", ("解释", "讲一下", "说明", "explain", "what is", "why is"), 0.86),
+    ("explain", ("解释", "讲一下", "讲讲", "说明", "什么意思", "是什么意思", "explain", "what is", "why is"), 0.86),
 ]
 
 DEICTIC_PATTERNS = (
