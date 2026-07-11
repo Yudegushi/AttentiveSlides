@@ -56,7 +56,12 @@ export HF_ENDPOINT=https://hf-mirror.com
 
 ## Recording And UI Demo
 
-Record a short local wav for terminal smoke tests:
+The terminal recorder is an optional local-machine smoke helper, not the presentation
+path. It needs both a physical microphone visible to that machine and the system PortAudio
+library in addition to the Python `sounddevice` package. A headless 4060 session is not
+expected to capture the presenter's Mac microphone directly.
+
+If those prerequisites are available, record a short local wav for terminal smoke tests:
 
 ```bash
 python scripts/record_audio_file.py --duration 4 --output data/audio_samples/recorded/smoke.wav
@@ -94,6 +99,10 @@ For the current English user-recording workflow, the Streamlit transcription cal
 passes `language="en"`. The sidebar also displays the selected STT profile, measured
 transcription latency, and whether the source was uploaded audio or a local recorded path.
 The audio button remains manually triggered; there is no background recording or streaming.
+
+Continuous/background microphone monitoring, speech-end detection, and automatic
+recording-to-lecture turns are future system-design work. They are deliberately outside the
+current file-based audio module.
 
 For project-specific profile evaluation, use
 [audio_usability_eval.md](audio_usability_eval.md).

@@ -1,8 +1,7 @@
 # Audio merge-readiness checklist
 
-Status: **not ready for merge to `main`**. Real-audio profile evaluation is complete;
-the user-triggered recording and browser interaction gates remain. This document does not
-authorize a merge.
+Status: **audio module ready for merge review**. This document does not authorize a merge
+to `main`; an explicit user decision and final Git hygiene check are still required.
 
 ## Branch snapshot
 
@@ -43,6 +42,9 @@ Evidence at this snapshot:
 - The remote full suite passed: 78 tests.
 - Streamlit 1.59.1 installed from `requirements-audio.txt`; a headless startup check
   reached `127.0.0.1:8501` and exited cleanly without microphone use.
+- User browser validation confirmed that a recorded clip reaches STT and yields the spoken
+  transcript. The recording widget's preview reports an error after capture, but this does
+  not block the uploaded audio bytes or transcription path.
 - The 10 reviewed English `.m4a` files and the manifest mapped one-to-one. Audio, CSV,
   JSON results, and the Markdown comparison remained Git-ignored.
 
@@ -65,19 +67,16 @@ scores as balanced while reducing end-to-end latency by about 27%. `accurate` wa
 the required fast/balanced comparison already selected fast, and no remaining error pointed
 to STT model capacity. CPU remains fallback-only.
 
-## Real-audio gates still required
+## Before any main merge
 
-1. Perform the user-triggered record-to-transcribe check on the 4060. This requires a
-   user recording and any necessary microphone/browser permission; do not replace it with
-   streaming ASR.
-2. Manually exercise the Streamlit flow in a browser: upload/select or record audio,
-   click `Transcribe audio`, edit the transcript if needed, confirm/correct the AOI, and
-   verify the final tutor response is withheld until confirmation.
-3. Review `git status --short` and ignore rules again immediately before any main-merge
+1. Review `git status --short` and ignore rules again immediately before any main-merge
    request. A merge to `main` still requires explicit user approval.
 
 ## Known limitations
 
-- The Streamlit browser input/permission path and an actual user-triggered short recording
-  still require manual verification on the target machine.
+- The Streamlit recording widget may show a non-blocking preview error after capture even
+  though its bytes are accepted by STT. Treat this as a later UI compatibility follow-up.
 - CPU remains fallback-only; it is not a recommended primary demo profile.
+- Continuous/background microphone monitoring, speech-end detection, automatic turn
+  submission, and automatic lecture start are intentionally deferred to future system
+  design. They are not part of this file-based audio module.
