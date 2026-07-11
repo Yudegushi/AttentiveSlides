@@ -90,6 +90,14 @@ After clicking `Transcribe audio`, the transcript is copied into the existing
 learner utterance text area. Edit the transcript if needed, then use the existing
 AOI confirmation/correction flow before reading the tutor response.
 
+For the current English user-recording workflow, the Streamlit transcription call
+passes `language="en"`. The sidebar also displays the selected STT profile, measured
+transcription latency, and whether the source was uploaded audio or a local recorded path.
+The audio button remains manually triggered; there is no background recording or streaming.
+
+For project-specific profile evaluation, use
+[audio_usability_eval.md](audio_usability_eval.md).
+
 ## Recommended 4060 Settings
 
 For the Lenovo Linux machine with an RTX 4060 Laptop GPU, the recommended

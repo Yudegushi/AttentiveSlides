@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from html import escape
 from pathlib import Path
+import time
 from typing import Any
 
 import streamlit as st
@@ -35,6 +36,14 @@ GAZE_GRIDS = [
     "bottom_center",
     "bottom_right",
 ]
+
+
+@dataclass(frozen=True)
+class AudioTranscriptionMetadata:
+    text: str
+    profile: str
+    source: str
+    latency_ms: float
 
 
 def main() -> None:
@@ -95,6 +104,10 @@ def _ensure_session_state(scenario: InteractionScenario) -> None:
         st.session_state.audio_error = None
     if "audio_profile" not in st.session_state:
         st.session_state.audio_profile = "balanced"
+    if "audio_transcription_latency_ms" not in st.session_state:
+        st.session_state.audio_transcription_latency_ms = None
+    if "audio_transcript_source" not in st.session_state:
+        st.session_state.audio_transcript_source = None
 
     if st.session_state.active_scenario_name != scenario.name:
         st.session_state.active_scenario_name = scenario.name
@@ -226,13 +239,16 @@ def _render_audio_input_controls() -> None:
     if mode != "Mock scenario text" and st.sidebar.button("Transcribe audio", use_container_width=True):
         try:
             audio_path = _audio_path_from_input(uploaded_audio, recorded_path)
-            transcript_text = _transcribe_audio_for_ui(audio_path, profile)
+            source = "uploaded audio" if mode == "Audio file upload" else "local recorded path"
+            transcription = _transcribe_audio_with_metadata(audio_path, profile, source)
         except Exception as exc:  # pragma: no cover - Streamlit surface for runtime model/device errors
             st.session_state.audio_error = str(exc)
         else:
             st.session_state.latest_audio_path = audio_path
-            st.session_state.audio_transcript_text = transcript_text
-            st.session_state.learner_utterance = transcript_text
+            st.session_state.audio_transcript_text = transcription.text
+            st.session_state.audio_transcription_latency_ms = transcription.latency_ms
+            st.session_state.audio_transcript_source = transcription.source
+            st.session_state.learner_utterance = transcription.text
             st.session_state.confirmed_aoi_id = None
             st.session_state.audio_error = None
 
@@ -243,6 +259,13 @@ def _render_audio_input_controls() -> None:
         )
     if st.session_state.latest_audio_path:
         st.sidebar.caption(f"Latest audio: {st.session_state.latest_audio_path}")
+    if st.session_state.audio_transcription_latency_ms is not None:
+        st.sidebar.caption(
+            "STT: "
+            f"{st.session_state.audio_profile} · "
+            f"{st.session_state.audio_transcription_latency_ms:.0f} ms · "
+            f"{st.session_state.audio_transcript_source}"
+        )
 
 
 def _audio_path_from_input(uploaded_audio: Any, recorded_path: str) -> str:
@@ -276,9 +299,23 @@ def _save_uploaded_audio(uploaded_audio: Any, output_dir: Path = RECORDED_AUDIO_
 
 
 def _transcribe_audio_for_ui(audio_path: str, profile: str) -> str:
-    config = transcription_config_for_profile(profile)
+    return _transcribe_audio_with_metadata(audio_path, profile, "unspecified audio").text
+
+
+def _transcribe_audio_with_metadata(
+    audio_path: str,
+    profile: str,
+    source: str,
+) -> AudioTranscriptionMetadata:
+    config = replace(transcription_config_for_profile(profile), language="en")
+    start = time.perf_counter()
     transcript = transcribe_audio(audio_path, config)
-    return transcript.text
+    return AudioTranscriptionMetadata(
+        text=transcript.text,
+        profile=profile,
+        source=source,
+        latency_ms=(time.perf_counter() - start) * 1000,
+    )
 
 
 def _scenario_aois() -> list[dict[str, Any]]:

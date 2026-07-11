@@ -14,6 +14,7 @@ build/
 htmlcov/
 
 # Local generated data
+audio_eval/
 data/logs/*.jsonl
 data/audio_samples/*
 !data/audio_samples/.gitkeep

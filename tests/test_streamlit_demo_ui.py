@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from apps import streamlit_demo
 from apps.streamlit_demo import (
+    _transcribe_audio_with_metadata,
     _aoi_box_html,
     _app_header_html,
     _audio_profile_options,
@@ -185,6 +186,23 @@ class StreamlitDemoUITest(unittest.TestCase):
         self.assertEqual(config.model_size, "large-v3")
         self.assertEqual(config.device, "cuda")
         self.assertEqual(config.compute_type, "int8_float16")
+
+    def test_audio_transcription_metadata_records_profile_latency_source_and_english(self):
+        with patch(
+            "apps.streamlit_demo.transcribe_audio",
+            return_value=Transcript(text="explain this", language="en", confidence=None),
+        ) as transcribe_mock:
+            result = _transcribe_audio_with_metadata(
+                "sample.m4a",
+                "balanced",
+                "uploaded audio",
+            )
+
+        self.assertEqual(result.text, "explain this")
+        self.assertEqual(result.profile, "balanced")
+        self.assertEqual(result.source, "uploaded audio")
+        self.assertGreaterEqual(result.latency_ms, 0.0)
+        self.assertEqual(transcribe_mock.call_args.args[1].language, "en")
 
     def test_sidebar_controls_include_audio_input_mode_and_manual_transcribe_button(self):
         source = inspect.getsource(streamlit_demo._sidebar_controls)
