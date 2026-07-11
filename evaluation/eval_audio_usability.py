@@ -26,6 +26,17 @@ from modules.system.adapters import MockManifestSlideProvider, build_pipeline_in
 
 
 MANIFEST_FIELDS = ("case_id", "audio_path", "expected_text", "scenario")
+SCENARIO_REFERENCE_TEXTS = {
+    "explain_deictic": "explain this",
+    "explain_explicit_right": "explain right figure",
+    "summarize_whole_slide": "summarize this slide",
+    "quiz_deictic": "quiz this",
+    "compare_deictic": "compare this",
+    "simplify_current": "simplify this",
+    "step_by_step_current": "walk me through this",
+    "review_whole_slide": "review this slide",
+    "break_or_short_recap": "I need a break",
+}
 
 
 class StaticTranscriptProvider:
@@ -88,17 +99,22 @@ def _evaluate_case(
     transcription_latency_ms = (time.perf_counter() - transcription_start) * 1000
 
     expected_transcript = Transcript(text=case["expected_text"], language=language)
-    expected_result = _run_pipeline(expected_transcript, slide_provider)
+    semantic_reference = Transcript(
+        text=SCENARIO_REFERENCE_TEXTS.get(case["scenario"], expected_transcript.text),
+        language=language,
+    )
+    expected_result = _run_pipeline(semantic_reference, slide_provider)
     actual_result = _run_pipeline(transcript, slide_provider)
     end_to_end_latency_ms = (time.perf_counter() - start) * 1000
 
-    expected_intent = parse_intent(expected_transcript)
+    expected_intent = parse_intent(semantic_reference)
     actual_intent = parse_intent(transcript)
     return {
         "case_id": case["case_id"],
         "scenario": case["scenario"],
         "audio_path": audio_path,
         "expected_text": expected_transcript.text,
+        "semantic_reference_text": semantic_reference.text,
         "actual_transcript": transcript.text,
         "transcript_language": transcript.language,
         "transcript_usable": bool(transcript.text.strip()),

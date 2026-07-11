@@ -15,10 +15,12 @@ The reviewed CSV uses exactly these fields:
 case_id,audio_path,expected_text,scenario
 ```
 
-`expected_text` is the speaker-approved reference. The evaluator runs that reference
-and the STT output through the same parser and pipeline, so semantic accuracies measure
-whether STT changed intent, deictic handling, target hints, confirmation mode, or response
-mode. It does not silently substitute filename-derived text for the reviewed value.
+`expected_text` is the speaker-approved reference for CER. For semantic accuracy, known
+`scenario` values map to a canonical intent/reference phrase (for example,
+`explain_deictic` maps to `explain this`). This makes a parser failure visible even when
+the spoken phrase itself is not yet covered by the rule-based parser. `unknown` keeps the
+reviewed text as its semantic reference; the evaluator never substitutes filename-derived
+text for the reviewed value.
 
 ## Local preparation
 
