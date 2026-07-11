@@ -1,12 +1,13 @@
 # Audio merge-readiness checklist
 
-Status: **not ready for merge to `main`**. This document records verified local work and
-the remaining real-audio gates. It does not authorize a merge.
+Status: **not ready for merge to `main`**. Real-audio profile evaluation is complete;
+the user-triggered recording and browser interaction gates remain. This document does not
+authorize a merge.
 
 ## Branch snapshot
 
 - Branch: `codex-audio-first-step`
-- Audio usability implementation baseline: `bb77f7ca5292c8dbaff4ee8c188259b7df7feeab`
+- Audio usability implementation baseline: `4c94a82`
 - Private source recordings: repository-root `audio_eval/` (Git-ignored)
 - Reviewed manifest: `data/audio_eval/user_smoke_manifest.csv` (Git-ignored)
 
@@ -35,39 +36,48 @@ Evidence at this snapshot:
 - `audio_eval/`, `data/audio_eval/user_smoke_manifest.csv`, result directories, and JSONL
   logs are ignored. No private audio was included in the implementation commit.
 
+## Verified on LenovoLinux_Dorm
+
+- Clone: `/home/charles/repos/AttentiveSlides`, branch `codex-audio-first-step`.
+- Environment: `pyboe`, Python 3.10.20, faster-whisper 1.2.1, and RTX 4060 Laptop GPU.
+- The remote full suite passed: 78 tests.
+- Streamlit 1.59.1 installed from `requirements-audio.txt`; a headless startup check
+  reached `127.0.0.1:8501` and exited cleanly without microphone use.
+- The 10 reviewed English `.m4a` files and the manifest mapped one-to-one. Audio, CSV,
+  JSON results, and the Markdown comparison remained Git-ignored.
+
+### Real-audio profile results
+
+| Metric | fast | balanced |
+|---|---:|---:|
+| Transcript usable rate | 1.000 | 1.000 |
+| Mean CER | 0.0846 | 0.0877 |
+| Intent accuracy | 1.000 | 1.000 |
+| Deictic detection accuracy | 1.000 | 1.000 |
+| Explicit target hint accuracy | 1.000 | 1.000 |
+| Confirmation mode accuracy | 1.000 | 1.000 |
+| Response mode accuracy | 1.000 | 1.000 |
+| Mean transcription latency | 348.0 ms | 476.4 ms |
+| Mean end-to-end latency | 348.4 ms | 476.8 ms |
+
+Recommendation: **fast** for both live and recorded demos. It retained the same semantic
+scores as balanced while reducing end-to-end latency by about 27%. `accurate` was not run:
+the required fast/balanced comparison already selected fast, and no remaining error pointed
+to STT model capacity. CPU remains fallback-only.
+
 ## Real-audio gates still required
 
-1. Confirm the actual Git repository path on `LenovoLinux_Dorm`. The candidate
-   `/home/charles/attentive_slides_eval_work` exists but is not a Git repository.
-2. Sync this branch and the confirmed private recordings into an ignored remote
-   `data/audio_eval/user_smoke/` directory.
-3. On `pyboe`, verify CUDA and faster-whisper, then run `fast` and `balanced`:
-
-   ```bash
-   python evaluation/eval_audio_usability.py \
-     --manifest data/audio_eval/user_smoke_manifest.csv \
-     --audio-root data/audio_eval/user_smoke \
-     --engine faster_whisper --profile fast \
-     --output data/audio_eval/results/user_smoke_fast.json
-
-   python evaluation/eval_audio_usability.py \
-     --manifest data/audio_eval/user_smoke_manifest.csv \
-     --audio-root data/audio_eval/user_smoke \
-     --engine faster_whisper --profile balanced \
-     --output data/audio_eval/results/user_smoke_balanced.json
-   ```
-
-4. Generate `profile_comparison.md` and choose the real demo default from its semantic
-   metrics and latency. No real-audio recommendation exists until these commands finish.
-5. Perform the user-triggered record-to-transcribe check on the 4060. This requires a
+1. Perform the user-triggered record-to-transcribe check on the 4060. This requires a
    user recording and any necessary microphone/browser permission; do not replace it with
    streaming ASR.
-6. Review `git status --short` and ignore rules again immediately before any main-merge
+2. Manually exercise the Streamlit flow in a browser: upload/select or record audio,
+   click `Transcribe audio`, edit the transcript if needed, confirm/correct the AOI, and
+   verify the final tutor response is withheld until confirmation.
+3. Review `git status --short` and ignore rules again immediately before any main-merge
    request. A merge to `main` still requires explicit user approval.
 
 ## Known limitations
 
-- All local results above use deterministic mocks, not the ten private recordings.
-- The Streamlit audio flow has unit coverage but its browser input/permission path still
-  requires manual verification on the target machine.
+- The Streamlit browser input/permission path and an actual user-triggered short recording
+  still require manual verification on the target machine.
 - CPU remains fallback-only; it is not a recommended primary demo profile.
