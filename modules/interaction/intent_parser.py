@@ -9,13 +9,13 @@ from modules.common.schemas import IntentName, IntentResult, Transcript
 
 INTENT_PATTERNS: list[tuple[IntentName, tuple[str, ...], float]] = [
     ("step_by_step", ("一步一步", "逐步", "step by step", "walk me through"), 0.92),
-    ("simplify", ("简单", "更简单", "讲简单", "simplify", "simpler"), 0.9),
+    ("simplify", ("简单", "更简单", "讲简单", "simplify", "simpler", "intuitive explanation"), 0.9),
     ("compare", ("比较", "区别", "相比", "compare", "difference", "versus", "vs"), 0.9),
     ("quiz", ("考我", "测验", "测试我", "quiz", "test me", "question me"), 0.9),
     ("summarize", ("总结", "概括", "这一页", "整页", "summarize", "summary", "main point"), 0.88),
     ("review", ("复习", "review", "recap", "哪里需要看"), 0.86),
     ("break", ("休息", "累了", "break", "pause", "tired"), 0.86),
-    ("explain", ("解释", "讲一下", "说明", "explain", "what is", "why is"), 0.86),
+    ("explain", ("解释", "讲一下", "讲讲", "说明", "什么意思", "是什么意思", "explain", "what is", "what does", "why is"), 0.86),
 ]
 
 DEICTIC_PATTERNS = (

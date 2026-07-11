@@ -1,16 +1,25 @@
 import unittest
 import inspect
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 from apps import streamlit_demo
 from apps.streamlit_demo import (
+    _transcribe_audio_with_metadata,
     _aoi_box_html,
     _app_header_html,
+    _audio_profile_options,
     _confirmation_status_html,
     _default_confirmation_index,
+    _profile_from_audio_label,
     _grounding_chips_html,
+    _save_uploaded_audio,
     _section_heading_html,
     _slide_html,
+    _transcribe_audio_for_ui,
 )
+from modules.common.schemas import Transcript
 from modules.system.demo_view_model import build_interaction_view_model, run_scenario_turn
 from modules.system.scenarios import load_scenarios
 
@@ -139,6 +148,73 @@ class StreamlitDemoUITest(unittest.TestCase):
         self.assertIn("min-height: clamp(390px, 36vw, 640px);", css_source)
         self.assertIn(".as-grounding-panel", css_source)
         self.assertIn("grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);", css_source)
+
+    def test_audio_profile_labels_map_to_model_policy_profiles(self):
+        labels = _audio_profile_options()
+
+        self.assertEqual(labels[0], "fast (small)")
+        self.assertIn("balanced (medium)", labels)
+        self.assertIn("accurate (large-v3)", labels)
+        self.assertIn("fast (small)", labels)
+        self.assertIn("cpu fallback", labels)
+        self.assertEqual(_profile_from_audio_label("balanced (medium)"), "balanced")
+        self.assertEqual(_profile_from_audio_label("accurate (large-v3)"), "accurate")
+        self.assertEqual(_profile_from_audio_label("fast (small)"), "fast")
+        self.assertEqual(_profile_from_audio_label("cpu fallback"), "cpu")
+
+    def test_save_uploaded_audio_writes_to_recorded_directory(self):
+        class UploadedAudio:
+            name = "explain.wav"
+
+            def getbuffer(self):
+                return b"RIFF fake wav"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = _save_uploaded_audio(UploadedAudio(), output_dir=Path(temp_dir))
+
+            self.assertEqual(Path(output_path).name, "explain.wav")
+            self.assertEqual(Path(output_path).read_bytes(), b"RIFF fake wav")
+
+    def test_transcribe_audio_for_ui_uses_selected_profile(self):
+        with patch(
+            "apps.streamlit_demo.transcribe_audio",
+            return_value=Transcript(text="解释这个", language="zh", confidence=None),
+        ) as transcribe_mock:
+            text = _transcribe_audio_for_ui("sample.wav", "accurate")
+
+        self.assertEqual(text, "解释这个")
+        config = transcribe_mock.call_args.args[1]
+        self.assertEqual(config.model_size, "large-v3")
+        self.assertEqual(config.device, "cuda")
+        self.assertEqual(config.compute_type, "int8_float16")
+
+    def test_audio_transcription_metadata_records_profile_latency_source_and_english(self):
+        with patch(
+            "apps.streamlit_demo.transcribe_audio",
+            return_value=Transcript(text="explain this", language="en", confidence=None),
+        ) as transcribe_mock:
+            result = _transcribe_audio_with_metadata(
+                "sample.m4a",
+                "balanced",
+                "uploaded audio",
+            )
+
+        self.assertEqual(result.text, "explain this")
+        self.assertEqual(result.profile, "balanced")
+        self.assertEqual(result.source, "uploaded audio")
+        self.assertGreaterEqual(result.latency_ms, 0.0)
+        self.assertEqual(transcribe_mock.call_args.args[1].language, "en")
+
+    def test_sidebar_controls_include_audio_input_mode_and_manual_transcribe_button(self):
+        source = inspect.getsource(streamlit_demo._sidebar_controls)
+        audio_source = inspect.getsource(streamlit_demo._render_audio_input_controls)
+
+        self.assertIn("_render_audio_input_controls()", source)
+        self.assertIn("Mock scenario text", audio_source)
+        self.assertIn("Audio file upload", audio_source)
+        self.assertIn("Recorded wav path", audio_source)
+        self.assertIn("Transcribe audio", audio_source)
+        self.assertIn("st.audio_input", audio_source)
 
 
 if __name__ == "__main__":
