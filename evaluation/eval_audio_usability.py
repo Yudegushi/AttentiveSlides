@@ -103,18 +103,19 @@ def _evaluate_case(
         text=SCENARIO_REFERENCE_TEXTS.get(case["scenario"], expected_transcript.text),
         language=language,
     )
-    expected_result = _run_pipeline(semantic_reference, slide_provider)
+    expected_result = _run_pipeline(expected_transcript, slide_provider)
     actual_result = _run_pipeline(transcript, slide_provider)
     end_to_end_latency_ms = (time.perf_counter() - start) * 1000
 
     expected_intent = parse_intent(semantic_reference)
+    expected_text_intent = parse_intent(expected_transcript)
     actual_intent = parse_intent(transcript)
     return {
         "case_id": case["case_id"],
         "scenario": case["scenario"],
         "audio_path": audio_path,
         "expected_text": expected_transcript.text,
-        "semantic_reference_text": semantic_reference.text,
+        "intent_reference_text": semantic_reference.text,
         "actual_transcript": transcript.text,
         "transcript_language": transcript.language,
         "transcript_usable": bool(transcript.text.strip()),
@@ -123,14 +124,14 @@ def _evaluate_case(
         "expected_intent": expected_intent.intent,
         "intent_match": actual_intent.intent == expected_intent.intent,
         "has_deictic_reference": actual_intent.has_deictic_reference,
-        "expected_has_deictic_reference": expected_intent.has_deictic_reference,
+        "expected_has_deictic_reference": expected_text_intent.has_deictic_reference,
         "deictic_detection_match": (
-            actual_intent.has_deictic_reference == expected_intent.has_deictic_reference
+            actual_intent.has_deictic_reference == expected_text_intent.has_deictic_reference
         ),
         "explicit_target_hint": actual_intent.explicit_target_hint,
-        "expected_explicit_target_hint": expected_intent.explicit_target_hint,
+        "expected_explicit_target_hint": expected_text_intent.explicit_target_hint,
         "explicit_target_hint_match": (
-            actual_intent.explicit_target_hint == expected_intent.explicit_target_hint
+            actual_intent.explicit_target_hint == expected_text_intent.explicit_target_hint
         ),
         "confirmation_mode": actual_result.resolved_query.confirmation_mode,
         "expected_confirmation_mode": expected_result.resolved_query.confirmation_mode,

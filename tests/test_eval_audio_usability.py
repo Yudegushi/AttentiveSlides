@@ -64,7 +64,7 @@ class AudioUsabilityEvalTest(unittest.TestCase):
         self.assertGreaterEqual(summary["mean_transcription_latency_ms"], 0.0)
         self.assertGreaterEqual(summary["mean_end_to_end_latency_ms"], 0.0)
 
-    def test_scenario_supplies_semantic_ground_truth_when_text_parser_does_not_recognize_phrase(self):
+    def test_scenario_supplies_intent_ground_truth_when_text_and_scenario_disagree(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manifest_path = Path(temp_dir) / "manifest.csv"
             with manifest_path.open("w", newline="", encoding="utf-8") as handle:
@@ -75,9 +75,9 @@ class AudioUsabilityEvalTest(unittest.TestCase):
                 writer.writeheader()
                 writer.writerow(
                     {
-                        "case_id": "what_does_this_chart_mean",
-                        "audio_path": "audio_eval/what-does-this-chart-mean.m4a",
-                        "expected_text": "what does this chart mean",
+                        "case_id": "summarize_this_slide",
+                        "audio_path": "audio_eval/summarize-this-slide.m4a",
+                        "expected_text": "summarize this slide",
                         "scenario": "explain_deictic",
                     }
                 )
@@ -87,7 +87,7 @@ class AudioUsabilityEvalTest(unittest.TestCase):
                 engine="mock",
                 profile="fast",
                 transcriber=MockTranscriber(
-                    transcripts={"what-does-this-chart-mean": "what does this chart mean"},
+                    transcripts={"summarize-this-slide": "summarize this slide"},
                     language="en",
                 ),
             )
@@ -95,6 +95,37 @@ class AudioUsabilityEvalTest(unittest.TestCase):
         self.assertEqual(summary["intent_accuracy"], 0.0)
         self.assertEqual(summary["deictic_detection_accuracy"], 1.0)
         self.assertEqual(summary["cases"][0]["expected_intent"], "explain")
+
+    def test_reviewed_text_controls_deictic_ground_truth_even_when_scenario_is_explain_deictic(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.csv"
+            with manifest_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["case_id", "audio_path", "expected_text", "scenario"],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "case_id": "explain_the_figure",
+                        "audio_path": "audio_eval/explain-the-figure.m4a",
+                        "expected_text": "explain the meaning of the figure",
+                        "scenario": "explain_deictic",
+                    }
+                )
+
+            summary = evaluate_audio_usability_manifest(
+                manifest_path=manifest_path,
+                engine="mock",
+                profile="fast",
+                transcriber=MockTranscriber(
+                    transcripts={"explain-the-figure": "explain the meaning of the figure"},
+                    language="en",
+                ),
+            )
+
+        self.assertEqual(summary["deictic_detection_accuracy"], 1.0)
+        self.assertFalse(summary["cases"][0]["expected_has_deictic_reference"])
 
 
 if __name__ == "__main__":

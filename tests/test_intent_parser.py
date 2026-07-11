@@ -41,6 +41,19 @@ class IntentParserTest(unittest.TestCase):
                 self.assertEqual(result.has_deictic_reference, has_deictic_reference)
                 self.assertEqual(result.explicit_target_hint, explicit_target_hint)
 
+    def test_parse_english_audio_eval_paraphrases(self):
+        cases = [
+            ("What does this chart mean?", "explain", True),
+            ("Please provide intuitive explanation.", "simplify", False),
+        ]
+
+        for text, intent, has_deictic_reference in cases:
+            with self.subTest(text=text):
+                result = parse_intent(text)
+
+                self.assertEqual(result.intent, intent)
+                self.assertEqual(result.has_deictic_reference, has_deictic_reference)
+
 
 if __name__ == "__main__":
     unittest.main()
