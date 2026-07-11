@@ -23,10 +23,11 @@ class AudioCliTest(unittest.TestCase):
         payload = json.loads(completed.stdout)
 
         self.assertEqual(payload["text"], "解释一下这个")
-        self.assertEqual(payload["language"], "zh")
+        self.assertEqual(payload["language"], "en")
         self.assertIsNone(payload["confidence"])
         self.assertEqual(payload["source"], "audio_file")
         self.assertEqual(payload["engine"], "mock")
+        self.assertEqual(payload["language"], "en")
 
     def test_transcribe_audio_file_profile_defaults_to_balanced_and_allows_overrides(self):
         completed = subprocess.run(
@@ -99,6 +100,7 @@ class AudioCliTest(unittest.TestCase):
 
         self.assertEqual(payload["transcript"]["engine"], "mock")
         self.assertEqual(payload["transcript"]["model_size"], "small")
+        self.assertEqual(payload["transcript"]["language"], "en")
 
     def test_record_audio_file_cli_outputs_recording_metadata(self):
         completed = subprocess.run(

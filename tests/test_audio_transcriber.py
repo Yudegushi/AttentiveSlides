@@ -1,6 +1,7 @@
 import builtins
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from modules.common.schemas import Transcript
@@ -78,6 +79,30 @@ class AudioTranscriberTest(unittest.TestCase):
 
         with self.assertRaisesRegex(FileNotFoundError, "Audio file not found"):
             transcriber.transcribe("data/audio_samples/missing.wav")
+
+    def test_faster_whisper_retries_failed_m4a_decode_with_temporary_wav(self):
+        class FakeSegment:
+            text = "decoded fallback"
+
+        class FakeInfo:
+            language = "en"
+
+        class DecodeFailingModel:
+            def transcribe(self, audio_path, **kwargs):
+                if audio_path.endswith(".m4a"):
+                    raise RuntimeError("m4a decode failed")
+                return [FakeSegment()], FakeInfo()
+
+        with tempfile.NamedTemporaryFile(suffix=".m4a") as original, tempfile.NamedTemporaryFile(
+            suffix=".wav", delete=False
+        ) as converted:
+            transcriber = FasterWhisperTranscriber(TranscriptionConfig(engine="faster_whisper", language="en"))
+            transcriber._model = DecodeFailingModel()
+            with mock.patch.object(transcriber, "_convert_m4a_to_wav", return_value=Path(converted.name)) as convert:
+                transcript = transcriber.transcribe(original.name)
+
+        self.assertEqual(transcript.text, "decoded fallback")
+        convert.assert_called_once_with(mock.ANY)
 
 
 if __name__ == "__main__":

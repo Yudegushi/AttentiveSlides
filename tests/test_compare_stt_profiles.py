@@ -7,6 +7,8 @@ def _summary(profile, latency, **metrics):
     base = {
         "profile": profile,
         "case_count": 10,
+        "transcript_usable_rate": 1.0,
+        "mean_cer": 0.08,
         "mean_transcription_latency_ms": latency - 20,
         "mean_end_to_end_latency_ms": latency,
         "intent_accuracy": 0.96,
@@ -42,6 +44,8 @@ class CompareSttProfilesTest(unittest.TestCase):
         self.assertEqual(comparison["recommendation"]["live_profile"], "balanced")
         markdown = render_comparison_markdown(comparison)
         self.assertIn("Recommended live profile: **balanced**", markdown)
+        self.assertIn("Transcript usable rate", markdown)
+        self.assertIn("Mean CER", markdown)
         self.assertIn("Deictic detection", markdown)
 
 

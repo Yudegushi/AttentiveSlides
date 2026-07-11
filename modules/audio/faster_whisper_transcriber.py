@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 from typing import Any
 
 from modules.audio.transcriber import TranscriptionConfig
@@ -19,10 +22,46 @@ class FasterWhisperTranscriber:
         if not path.exists():
             raise FileNotFoundError(f"Audio file not found: {path}")
 
-        segments, info = self._get_model().transcribe(str(path), **self._transcribe_kwargs())
+        model = self._get_model()
+        try:
+            return self._transcribe_path(model, path)
+        except Exception:
+            if path.suffix.lower() != ".m4a":
+                raise
+
+        converted_path = self._convert_m4a_to_wav(path)
+        try:
+            return self._transcribe_path(model, converted_path)
+        finally:
+            converted_path.unlink(missing_ok=True)
+
+    def _transcribe_path(self, model: Any, path: Path) -> Transcript:
+        segments, info = model.transcribe(str(path), **self._transcribe_kwargs())
         text = _merge_segment_text(segments)
         language = getattr(info, "language", None) or self.config.language
         return Transcript(text=text, language=language, confidence=None)
+
+    def _convert_m4a_to_wav(self, path: Path) -> Path:
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            raise RuntimeError(
+                "Could not decode .m4a directly and ffmpeg is unavailable for WAV fallback. "
+                "Install ffmpeg or provide a .wav file."
+            )
+
+        with tempfile.NamedTemporaryFile(prefix=f"{path.stem}-", suffix=".wav", delete=False) as file:
+            converted_path = Path(file.name)
+        try:
+            subprocess.run(
+                [ffmpeg, "-nostdin", "-y", "-i", str(path), "-ac", "1", "-ar", "16000", str(converted_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            converted_path.unlink(missing_ok=True)
+            raise RuntimeError("Could not convert .m4a to a temporary WAV fallback.") from exc
+        return converted_path
 
     def _get_model(self) -> Any:
         if self._model is None:

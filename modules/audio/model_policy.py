@@ -10,25 +10,25 @@ _PROFILE_CONFIGS = {
         "model_size": "small",
         "device": "cuda",
         "compute_type": "int8_float16",
-        "language": "zh",
+        "language": "en",
     },
     "balanced": {
         "model_size": "medium",
         "device": "cuda",
         "compute_type": "int8_float16",
-        "language": "zh",
+        "language": "en",
     },
     "accurate": {
         "model_size": "large-v3",
         "device": "cuda",
         "compute_type": "int8_float16",
-        "language": "zh",
+        "language": "en",
     },
     "cpu": {
         "model_size": "small",
         "device": "cpu",
         "compute_type": "int8",
-        "language": "zh",
+        "language": "en",
     },
 }
 
