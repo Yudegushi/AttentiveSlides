@@ -28,6 +28,12 @@ class TestStreamlitAttentiveSlides(
             ),
             required_buttons=(
                 "Load PDF",
+                "Explain",
+                "Summarize",
+                "Simplify",
+                "Step by step",
+                "Compare",
+                "Quiz",
                 "Reset current turn",
             ),
             forbidden_buttons=(

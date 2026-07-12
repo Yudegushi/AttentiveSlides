@@ -34,6 +34,14 @@ from modules.system.main_ui_state import (
     build_main_ui_view_model,
     reset_main_turn_state,
 )
+from modules.system.manual_intent import (
+    QUICK_INTENT_ACTIONS,
+    ManualIntentResolution,
+    assess_intent_target,
+    make_quick_action_intent_input,
+    make_typed_intent_input,
+    resolve_manual_intent,
+)
 from modules.system.manual_targeting import (
     ManualSelectionResult,
     extract_latest_rectangle,
@@ -869,9 +877,201 @@ def _set_whole_slide_target(
     )
 
 
+
+def _on_typed_command_change() -> None:
+    """Mark manually edited text as typed-text input."""
+    command = st.session_state[
+        "main_typed_command"
+    ].strip()
+
+    st.session_state[
+        "main_intent_source"
+    ] = (
+        "typed_text"
+        if command
+        else None
+    )
+
+    st.session_state[
+        "main_explicit_intent"
+    ] = None
+
+    st.session_state[
+        "main_intent_result"
+    ] = None
+
+    st.session_state[
+        "main_intent_error"
+    ] = None
+
+    st.session_state[
+        "main_confirmed"
+    ] = False
+
+
+def _apply_quick_intent(
+    intent_name: str,
+    command: str,
+) -> None:
+    """Apply an explicit intent selected by the learner."""
+    st.session_state[
+        "main_typed_command"
+    ] = command
+
+    st.session_state[
+        "main_intent_source"
+    ] = "ui_action"
+
+    st.session_state[
+        "main_explicit_intent"
+    ] = intent_name
+
+    st.session_state[
+        "main_intent_result"
+    ] = None
+
+    st.session_state[
+        "main_intent_error"
+    ] = None
+
+    st.session_state[
+        "main_confirmed"
+    ] = False
+
+
+def _resolve_current_intent(
+) -> ManualIntentResolution | None:
+    """Resolve the current command and update session state."""
+    command = st.session_state[
+        "main_typed_command"
+    ].strip()
+
+    if not command:
+        st.session_state[
+            "main_intent_source"
+        ] = None
+        st.session_state[
+            "main_explicit_intent"
+        ] = None
+        st.session_state[
+            "main_intent_result"
+        ] = None
+        st.session_state[
+            "main_intent_error"
+        ] = None
+        return None
+
+    source = st.session_state.get(
+        "main_intent_source"
+    )
+
+    explicit_intent = (
+        st.session_state.get(
+            "main_explicit_intent"
+        )
+    )
+
+    try:
+        if (
+            source == "ui_action"
+            and explicit_intent
+        ):
+            intent_input = (
+                make_quick_action_intent_input(
+                    explicit_intent
+                )
+            )
+        else:
+            intent_input = (
+                make_typed_intent_input(
+                    command
+                )
+            )
+
+        resolution = resolve_manual_intent(
+            intent_input
+        )
+
+    except Exception as exc:
+        st.session_state[
+            "main_intent_error"
+        ] = (
+            f"{type(exc).__name__}: {exc}"
+        )
+
+        st.session_state[
+            "main_intent_result"
+        ] = None
+
+        return None
+
+    st.session_state[
+        "main_intent_source"
+    ] = intent_input.source
+
+    st.session_state[
+        "main_intent_result"
+    ] = resolution.to_dict()
+
+    st.session_state[
+        "main_intent_error"
+    ] = None
+
+    return resolution
+
+
+def _render_quick_intent_actions() -> None:
+    """Render explicit intent buttons in two rows."""
+    st.markdown(
+        "#### Quick actions"
+    )
+
+    first_row = st.columns(3)
+
+    for column, action in zip(
+        first_row,
+        QUICK_INTENT_ACTIONS[:3],
+    ):
+        column.button(
+            action.label,
+            key=(
+                "quick_intent_"
+                f"{action.intent}"
+            ),
+            help=action.description,
+            width="stretch",
+            on_click=_apply_quick_intent,
+            args=(
+                action.intent,
+                action.command,
+            ),
+        )
+
+    second_row = st.columns(3)
+
+    for column, action in zip(
+        second_row,
+        QUICK_INTENT_ACTIONS[3:],
+    ):
+        column.button(
+            action.label,
+            key=(
+                "quick_intent_"
+                f"{action.intent}"
+            ),
+            help=action.description,
+            width="stretch",
+            on_click=_apply_quick_intent,
+            args=(
+                action.intent,
+                action.command,
+            ),
+        )
+
 def _render_manual_interaction(
     view: MainUIViewModel,
 ) -> None:
+    """Render manual target and typed-intent interaction."""
     st.subheader("Manual interaction")
 
     st.radio(
@@ -885,6 +1085,8 @@ def _render_manual_interaction(
         on_change=_on_target_scope_change,
     )
 
+    _render_quick_intent_actions()
+
     st.text_area(
         "Typed command",
         key="main_typed_command",
@@ -894,6 +1096,7 @@ def _render_manual_interaction(
             "summarize this, quiz me "
             "on this"
         ),
+        on_change=_on_typed_command_change,
     )
 
     command = st.session_state[
@@ -906,7 +1109,87 @@ def _render_manual_interaction(
         ]
     )
 
-    command_ready = bool(command)
+    selected_aoi_count = len(
+        st.session_state[
+            "main_selected_aoi_ids"
+        ]
+    )
+
+    resolution = (
+        _resolve_current_intent()
+    )
+
+    assessment = assess_intent_target(
+        resolution,
+        target_available=target_ready,
+        selected_aoi_count=(
+            selected_aoi_count
+        ),
+    )
+
+    st.markdown(
+        "#### Intent resolution"
+    )
+
+    if st.session_state[
+        "main_intent_error"
+    ]:
+        st.error(
+            st.session_state[
+                "main_intent_error"
+            ]
+        )
+
+    elif resolution is None:
+        st.info(
+            assessment.message
+        )
+
+    else:
+        columns = st.columns(3)
+
+        columns[0].metric(
+            "Intent",
+            resolution.intent_result.intent,
+        )
+
+        columns[1].metric(
+            "Confidence",
+            (
+                f"{resolution.intent_result.confidence:.2f}"
+            ),
+        )
+
+        columns[2].metric(
+            "Source",
+            resolution.intent_input.source,
+        )
+
+        if not resolution.recognized:
+            st.error(
+                assessment.message
+            )
+        elif assessment.status == "warning":
+            st.warning(
+                assessment.message
+            )
+        else:
+            st.success(
+                assessment.message
+            )
+
+        with st.expander(
+            "Intent provenance",
+            expanded=False,
+        ):
+            for item in resolution.provenance:
+                st.write(
+                    f"- {item}"
+                )
+
+            st.json(
+                resolution.to_dict()
+            )
 
     if target_ready:
         st.success(
@@ -915,15 +1198,6 @@ def _render_manual_interaction(
     else:
         st.warning(
             "Select a target region."
-        )
-
-    if command_ready:
-        st.success(
-            "Typed command captured."
-        )
-    else:
-        st.info(
-            "Enter a typed command."
         )
 
     st.markdown(
@@ -966,11 +1240,13 @@ def _render_manual_interaction(
         st.markdown(
             "#### AOI matches"
         )
+
         st.dataframe(
             matches,
             hide_index=True,
             width="stretch",
         )
+
     elif (
         st.session_state[
             "main_target_scope"
@@ -979,8 +1255,8 @@ def _render_manual_interaction(
         and bbox
     ):
         st.warning(
-            "The rectangle does not "
-            "strongly overlap a known AOI."
+            "The rectangle does not strongly "
+            "overlap a known AOI."
         )
 
     selected_text = (
@@ -1006,6 +1282,19 @@ def _render_manual_interaction(
             "has been selected."
         )
 
+    if not command:
+        intent_status = "missing"
+    elif resolution is None:
+        intent_status = "error"
+    elif resolution.recognized:
+        intent_status = (
+            "recognized"
+            if assessment.ready
+            else "blocked"
+        )
+    else:
+        intent_status = "unknown"
+
     readiness = [
         {
             "step": "Slide",
@@ -1023,17 +1312,17 @@ def _render_manual_interaction(
             "step": "Typed command",
             "status": (
                 "captured"
-                if command_ready
+                if command
                 else "missing"
             ),
         },
         {
             "step": "Intent resolution",
-            "status": "next stage",
+            "status": intent_status,
         },
         {
             "step": "Confirmation",
-            "status": "not connected",
+            "status": "next stage",
         },
         {
             "step": "Tutor",
@@ -1158,11 +1447,23 @@ def _render_lower_workspace(
                     ]
                 ),
                 "intent_source": (
-                    "typed_text"
+                    st.session_state[
+                        "main_intent_source"
+                    ]
                 ),
                 "typed_command": (
                     st.session_state[
                         "main_typed_command"
+                    ]
+                ),
+                "explicit_intent": (
+                    st.session_state[
+                        "main_explicit_intent"
+                    ]
+                ),
+                "intent_resolution": (
+                    st.session_state[
+                        "main_intent_result"
                     ]
                 ),
                 "confirmation": (
@@ -1204,6 +1505,21 @@ def _render_lower_workspace(
                 "typed_command": (
                     st.session_state[
                         "main_typed_command"
+                    ]
+                ),
+                "intent_source": (
+                    st.session_state[
+                        "main_intent_source"
+                    ]
+                ),
+                "explicit_intent": (
+                    st.session_state[
+                        "main_explicit_intent"
+                    ]
+                ),
+                "intent_result": (
+                    st.session_state[
+                        "main_intent_result"
                     ]
                 ),
                 "camera_enabled": False,

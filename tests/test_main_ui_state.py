@@ -428,5 +428,72 @@ class TestMainUIState(unittest.TestCase):
         )
 
 
+    def test_reset_clears_intent_state(
+        self,
+    ) -> None:
+        state = {
+            "main_target_scope": "Manual region",
+            "main_typed_command": "explain this",
+            "main_manual_bbox": [
+                0.1,
+                0.1,
+                0.8,
+                0.8,
+            ],
+            "main_selected_aoi_ids": [
+                "aoi_1"
+            ],
+            "main_selection_matches": [
+                {
+                    "aoi_id": "aoi_1"
+                }
+            ],
+            "main_selection_text": "Example",
+            "main_selection_error": "temporary",
+            "main_intent_source": "ui_action",
+            "main_explicit_intent": "explain",
+            "main_intent_result": {
+                "intent": "explain"
+            },
+            "main_intent_error": "temporary",
+            "main_confirmed": True,
+            "main_tutor_result": {
+                "answer": "temporary"
+            },
+            "main_xai_result": {
+                "status": "temporary"
+            },
+            "main_active_slide_id": 3,
+        }
+
+        reset_main_turn_state(state)
+
+        self.assertEqual(
+            state["main_typed_command"],
+            "",
+        )
+
+        self.assertIsNone(
+            state["main_intent_source"]
+        )
+
+        self.assertIsNone(
+            state["main_explicit_intent"]
+        )
+
+        self.assertIsNone(
+            state["main_intent_result"]
+        )
+
+        self.assertIsNone(
+            state["main_intent_error"]
+        )
+
+        self.assertEqual(
+            state["main_active_slide_id"],
+            3,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
