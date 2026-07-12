@@ -1,0 +1,74 @@
+[
+  {
+    "schema_version": "1.0",
+    "interaction_id": "manual_example_001",
+    "deck_id": "demo_deck",
+    "slide_id": 5,
+    "mode": "manual",
+    "target": {
+      "source": "manual_rectangle",
+      "slide_id": 5,
+      "bbox": [0.5, 0.1, 0.95, 0.8],
+      "selected_aoi_id": "right_figure",
+      "predicted_aoi_id": null,
+      "confidence": null,
+      "alternatives": [],
+      "stable_duration_sec": 0.0
+    },
+    "intent": {
+      "source": "typed_text",
+      "text": "explain this",
+      "explicit_intent": null,
+      "source_confidence": null,
+      "language": "en"
+    },
+    "confirmation": {
+      "confirmed": true,
+      "source": "explicit_user_confirmation",
+      "confirmed_aoi_id": "right_figure",
+      "corrected_from_aoi_id": null
+    },
+    "metadata": {
+      "privacy_mode": "camera_and_microphone_disabled"
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "interaction_id": "sensor_example_001",
+    "deck_id": "demo_deck",
+    "slide_id": 5,
+    "mode": "sensor_assisted",
+    "target": {
+      "source": "gaze_prediction",
+      "slide_id": 5,
+      "bbox": null,
+      "selected_aoi_id": null,
+      "predicted_aoi_id": "right_figure",
+      "confidence": 0.82,
+      "alternatives": [
+        {
+          "aoi_id": "right_figure",
+          "score": 0.82,
+          "evidence": [
+            "stable gaze candidate"
+          ]
+        }
+      ],
+      "stable_duration_sec": 2.0
+    },
+    "intent": {
+      "source": "speech_transcript",
+      "text": "explain this",
+      "explicit_intent": null,
+      "source_confidence": 0.93,
+      "language": "en"
+    },
+    "confirmation": {
+      "confirmed": true,
+      "source": "automatic_high_confidence",
+      "confirmed_aoi_id": null,
+      "corrected_from_aoi_id": null
+    },
+    "metadata": {}
+  }
+]
