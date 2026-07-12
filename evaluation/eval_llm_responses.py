@@ -5,9 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import subprocess
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +14,9 @@ from typing import Any, Protocol
 from evaluation.llm_dataset import (
     LLMEvaluationCase,
     load_llm_cases,
+)
+from modules.tutor.api_llm_client import (
+    OpenAICompatibleLLMClient,
 )
 from modules.tutor.grounded_prompt import (
     GroundedPrompt,
@@ -70,35 +71,8 @@ class FixtureResponseProvider:
 
 class DashScopeResponseProvider:
     def __init__(self) -> None:
-        from openai import OpenAI
-
-        api_key = os.environ.get(
-            "DASHSCOPE_API_KEY"
-        )
-
-        if not api_key:
-            raise RuntimeError(
-                "DASHSCOPE_API_KEY is not configured."
-            )
-
-        self.model = os.environ.get(
-            "DASHSCOPE_MODEL",
-            "qwen3.7-plus",
-        )
-
-        base_url = os.environ.get(
-            "DASHSCOPE_BASE_URL",
-            (
-                "https://dashscope.aliyuncs.com/"
-                "compatible-mode/v1"
-            ),
-        )
-
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url=base_url,
-            timeout=120.0,
-            max_retries=2,
+        self.client = (
+            OpenAICompatibleLLMClient.from_env()
         )
 
     def generate(
@@ -108,52 +82,21 @@ class DashScopeResponseProvider:
     ) -> ProviderOutput:
         del case
 
-        started = time.perf_counter()
-
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=prompt.messages(),
-            temperature=0.2,
-            max_tokens=700,
-            response_format={
-                "type": "json_object",
-            },
-            extra_body={
-                "enable_thinking": False,
-            },
+        response = self.client.generate(
+            prompt.messages()
         )
-
-        latency_ms = (
-            time.perf_counter() - started
-        ) * 1000
-
-        content = (
-            response.choices[0].message.content
-            or ""
-        )
-
-        usage = None
-
-        if response.usage is not None:
-            usage = {
-                "prompt_tokens": (
-                    response.usage.prompt_tokens
-                ),
-                "completion_tokens": (
-                    response.usage.completion_tokens
-                ),
-                "total_tokens": (
-                    response.usage.total_tokens
-                ),
-            }
 
         return ProviderOutput(
-            provider="dashscope",
-            model=response.model or self.model,
-            raw_text=content,
-            latency_ms=latency_ms,
-            usage=usage,
-            request_id=response.id,
+            provider=response.provider,
+            model=response.model,
+            raw_text=response.raw_text,
+            latency_ms=response.latency_ms,
+            usage=(
+                response.usage.to_dict()
+                if response.usage is not None
+                else None
+            ),
+            request_id=response.request_id,
         )
 
 
