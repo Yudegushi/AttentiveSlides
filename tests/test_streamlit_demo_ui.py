@@ -152,6 +152,7 @@ class StreamlitDemoUITest(unittest.TestCase):
     def test_audio_profile_labels_map_to_model_policy_profiles(self):
         labels = _audio_profile_options()
 
+        self.assertEqual(labels[0], "fast (small)")
         self.assertIn("balanced (medium)", labels)
         self.assertIn("accurate (large-v3)", labels)
         self.assertIn("fast (small)", labels)

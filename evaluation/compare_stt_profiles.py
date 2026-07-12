@@ -16,6 +16,8 @@ SEMANTIC_METRICS = (
     "response_mode_accuracy",
 )
 METRIC_LABELS = {
+    "transcript_usable_rate": "Transcript usable rate",
+    "mean_cer": "Mean CER",
     "intent_accuracy": "Intent accuracy",
     "deictic_detection_accuracy": "Deictic detection",
     "explicit_target_hint_accuracy": "Explicit target hint",
@@ -125,7 +127,13 @@ def render_comparison_markdown(comparison: dict[str, Any]) -> str:
     profiles = comparison["profiles"]
     profile_names = [str(summary["profile"]) for summary in profiles]
     lines = ["# STT profile comparison", "", "| Metric | " + " | ".join(profile_names) + " |", "|---|" + "|".join("---:" for _ in profiles) + "|"]
-    for metric in (*SEMANTIC_METRICS, "mean_transcription_latency_ms", "mean_end_to_end_latency_ms"):
+    for metric in (
+        "transcript_usable_rate",
+        "mean_cer",
+        *SEMANTIC_METRICS,
+        "mean_transcription_latency_ms",
+        "mean_end_to_end_latency_ms",
+    ):
         values = []
         for summary in profiles:
             value = summary[metric]

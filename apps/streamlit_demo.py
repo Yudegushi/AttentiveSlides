@@ -103,7 +103,7 @@ def _ensure_session_state(scenario: InteractionScenario) -> None:
     if "audio_error" not in st.session_state:
         st.session_state.audio_error = None
     if "audio_profile" not in st.session_state:
-        st.session_state.audio_profile = "balanced"
+        st.session_state.audio_profile = "fast"
     if "audio_transcription_latency_ms" not in st.session_state:
         st.session_state.audio_transcription_latency_ms = None
     if "audio_transcript_source" not in st.session_state:
@@ -277,7 +277,7 @@ def _audio_path_from_input(uploaded_audio: Any, recorded_path: str) -> str:
 
 
 def _audio_profile_options() -> list[str]:
-    return ["balanced (medium)", "accurate (large-v3)", "fast (small)", "cpu fallback"]
+    return ["fast (small)", "balanced (medium)", "accurate (large-v3)", "cpu fallback"]
 
 
 def _profile_from_audio_label(label: str) -> str:

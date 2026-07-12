@@ -70,6 +70,7 @@ def main() -> None:
     rows = create_manifest_rows(args.audio_dir)
     write_manifest(rows, args.output)
     print(f"Wrote {len(rows)} audio smoke cases to {args.output}.")
+    print(f"Review {args.output}: confirm expected_text and scenario before running evaluation.")
 
 
 def _parse_args() -> argparse.Namespace:

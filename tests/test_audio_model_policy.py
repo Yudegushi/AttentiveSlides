@@ -11,16 +11,16 @@ class AudioModelPolicyTest(unittest.TestCase):
         self.assertEqual(config.model_size, "medium")
         self.assertEqual(config.device, "cuda")
         self.assertEqual(config.compute_type, "int8_float16")
-        self.assertEqual(config.language, "zh")
+        self.assertEqual(config.language, "en")
         self.assertEqual(config.beam_size, 1)
         self.assertTrue(config.vad_filter)
 
     def test_profiles_match_audio_demo_policy(self):
         expected = {
-            "fast": ("small", "cuda", "int8_float16", "zh"),
-            "balanced": ("medium", "cuda", "int8_float16", "zh"),
-            "accurate": ("large-v3", "cuda", "int8_float16", "zh"),
-            "cpu": ("small", "cpu", "int8", "zh"),
+            "fast": ("small", "cuda", "int8_float16", "en"),
+            "balanced": ("medium", "cuda", "int8_float16", "en"),
+            "accurate": ("large-v3", "cuda", "int8_float16", "en"),
+            "cpu": ("small", "cpu", "int8", "en"),
         }
 
         for profile, fields in expected.items():

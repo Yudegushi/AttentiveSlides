@@ -28,8 +28,8 @@ Profiles:
 
 | Profile | Model | Device | Compute type | Use |
 |---|---|---|---|---|
-| `fast` | `small` | `cuda` | `int8_float16` | quick fallback |
-| `balanced` | `medium` | `cuda` | `int8_float16` | default interactive demo |
+| `fast` | `small` | `cuda` | `int8_float16` | default interactive demo |
+| `balanced` | `medium` | `cuda` | `int8_float16` | quality fallback |
 | `accurate` | `large-v3` | `cuda` | `int8_float16` | accuracy candidate |
 | `cpu` | `small` | `cpu` | `int8` | no-CUDA fallback |
 
@@ -42,8 +42,10 @@ pip install -r requirements-audio.txt
 ```
 
 `faster-whisper` uses PyAV and usually does not require system `ffmpeg`, because PyAV
-bundles FFmpeg libraries. If a local environment still reports media decoding errors,
-installing system `ffmpeg` can be used as a troubleshooting step.
+bundles FFmpeg libraries. If direct `.m4a` decoding fails, the transcriber automatically
+creates a temporary mono 16 kHz WAV through `ffmpeg`, retries once, and removes that
+temporary file. The original recording is never overwritten. If `ffmpeg` is unavailable,
+the error explains how to install it or use a WAV input.
 
 The first model load may download weights from Hugging Face Hub. Warm up the model
 before a live demo so download and cache time do not affect the presentation.
@@ -56,7 +58,12 @@ export HF_ENDPOINT=https://hf-mirror.com
 
 ## Recording And UI Demo
 
-Record a short local wav for terminal smoke tests:
+The terminal recorder is an optional local-machine smoke helper, not the presentation
+path. It needs both a physical microphone visible to that machine and the system PortAudio
+library in addition to the Python `sounddevice` package. A headless 4060 session is not
+expected to capture the presenter's Mac microphone directly.
+
+If those prerequisites are available, record a short local wav for terminal smoke tests:
 
 ```bash
 python scripts/record_audio_file.py --duration 4 --output data/audio_samples/recorded/smoke.wav
@@ -68,7 +75,7 @@ Then transcribe it with the default interactive profile:
 python scripts/transcribe_audio_file.py \
   --audio data/audio_samples/recorded/smoke.wav \
   --engine faster_whisper \
-  --profile balanced
+  --profile fast
 ```
 
 Run the Streamlit demo:
@@ -95,6 +102,10 @@ passes `language="en"`. The sidebar also displays the selected STT profile, meas
 transcription latency, and whether the source was uploaded audio or a local recorded path.
 The audio button remains manually triggered; there is no background recording or streaming.
 
+Continuous/background microphone monitoring, speech-end detection, and automatic
+recording-to-lecture turns are future system-design work. They are deliberately outside the
+current file-based audio module.
+
 For project-specific profile evaluation, use
 [audio_usability_eval.md](audio_usability_eval.md).
 
@@ -107,7 +118,7 @@ interactive command is:
 python scripts/transcribe_audio_file.py \
   --audio data/audio_samples/recorded/smoke.wav \
   --engine faster_whisper \
-  --profile balanced
+  --profile fast
 ```
 
 Run the pipeline demo through the adapter boundary:
@@ -116,12 +127,13 @@ Run the pipeline demo through the adapter boundary:
 python scripts/demo_audio_to_tutor_loop.py \
   --audio data/audio_samples/recorded/smoke.wav \
   --engine faster_whisper \
-  --profile balanced \
+  --profile fast \
   --sensing-preset high_confidence_right_figure
 ```
 
-Use `--profile accurate` only after warming up `large-v3`; keep `balanced` as the
-default if `large-v3` is too slow or unstable.
+Use `--profile accurate` only after warming up `large-v3`; keep `fast` as the default
+because the reviewed 10-recording evaluation matched balanced semantic accuracy with lower
+latency. Use `balanced` when a future recording demonstrates a meaningful semantic gain.
 
 ## CPU Fallback
 
