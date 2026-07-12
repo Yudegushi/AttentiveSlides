@@ -152,14 +152,36 @@ class TestGroundedPromptBuilder(unittest.TestCase):
             prompt.user_prompt,
         )
 
-    def test_quiz_requires_active_recall_question(self) -> None:
+    def test_quiz_requires_active_recall_question(
+        self,
+    ) -> None:
         prompt = GroundedPromptBuilder().build(
             self.make_request(response_mode="quiz")
         )
 
+        template_section = prompt.user_prompt.split(
+            "OUTPUT_OBJECT_TEMPLATE\n\n",
+            maxsplit=1,
+        )[1].split(
+            "\n\nVALIDATION_RULES",
+            maxsplit=1,
+        )[0]
+
+        template = json.loads(template_section)
+
+        self.assertEqual(
+            template["response_mode"],
+            "quiz",
+        )
+        self.assertEqual(
+            template["active_recall_question"],
+            "<non-empty active-recall question>",
+        )
         self.assertIn(
-            '"active_recall_question": '
-            '"non-empty string"',
+            (
+                "active_recall_question must be "
+                "a non-empty string."
+            ),
             prompt.user_prompt,
         )
 
@@ -280,6 +302,31 @@ class TestGroundedPromptBuilder(unittest.TestCase):
             parsed[0]["source_kind"],
             "confirmed_aoi",
         )
+
+    def test_output_template_does_not_expose_rules_field(
+        self,
+    ) -> None:
+        prompt = GroundedPromptBuilder().build(
+            self.make_request()
+        )
+
+        self.assertIn(
+            "OUTPUT_OBJECT_TEMPLATE",
+            prompt.user_prompt,
+        )
+        self.assertIn(
+            "VALIDATION_RULES",
+            prompt.user_prompt,
+        )
+        self.assertNotIn(
+            '"rules":',
+            prompt.user_prompt,
+        )
+        self.assertIn(
+            "Do not output a rules",
+            prompt.user_prompt,
+        )
+
 
     def test_invalid_builder_limits_are_rejected(self) -> None:
         with self.assertRaises(ValueError):
