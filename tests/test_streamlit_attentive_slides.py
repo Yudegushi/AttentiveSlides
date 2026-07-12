@@ -1,4 +1,4 @@
-"""Isolated AppTest for the grounded Tutor XAI application."""
+"""Isolated AppTest for the AttentiveSlides Main UI."""
 
 from __future__ import annotations
 
@@ -10,31 +10,36 @@ from tests.streamlit_subprocess_test_utils import (
 )
 
 
-class TestStreamlitGroundedXAI(
+class TestStreamlitAttentiveSlides(
     unittest.TestCase
 ):
-    def test_initial_app_render_has_no_exception(
+    def test_main_ui_shell_renders(
         self,
     ) -> None:
         result = run_isolated_apptest(
             app_path=(
                 "apps/"
-                "streamlit_grounded_xai.py"
+                "streamlit_attentive_slides.py"
             ),
-            expected_title=(
-                "AttentiveSlides · "
-                "Grounded Tutor XAI"
-            ),
+            expected_title="AttentiveSlides",
             required_subheaders=(
-                "Interaction context",
-                "Target confirmation",
-                "Grounded API tutor",
+                "Slide workspace",
+                "Manual interaction",
+            ),
+            required_buttons=(
+                "Reset current turn",
+            ),
+            forbidden_buttons=(
+                "Generate grounded API answer",
             ),
             required_selectboxes=(
-                "Scenario",
+                "Current slide",
+            ),
+            required_radios=(
+                "Target scope",
             ),
             required_text_areas=(
-                "Learner utterance",
+                "Typed command",
             ),
         )
 

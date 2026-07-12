@@ -277,7 +277,7 @@ def _render_interaction_context(
     st.dataframe(
         aoi_rows,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
     with st.expander(
@@ -310,7 +310,7 @@ def _render_confirmation(
 
         if st.button(
             "Reopen confirmation",
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state.xai_confirmed_aoi_id = (
                 None
@@ -356,7 +356,7 @@ def _render_confirmation(
     if st.button(
         f"Confirm {selected_aoi_id}",
         type="primary",
-        use_container_width=True,
+        width="stretch",
     ):
         st.session_state.xai_confirmed_aoi_id = (
             selected_aoi_id
@@ -390,7 +390,7 @@ def _render_generation_controls(
     if st.button(
         "Generate grounded API answer",
         type="primary",
-        use_container_width=True,
+        width="stretch",
     ):
         st.session_state.xai_api_error = None
 
@@ -525,7 +525,7 @@ def _render_xai_result(
         st.dataframe(
             view["claims"],
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )
     else:
         st.caption(
@@ -537,7 +537,7 @@ def _render_xai_result(
     st.dataframe(
         view["sources"],
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
     with st.expander(
@@ -554,7 +554,7 @@ def _render_xai_result(
             st.dataframe(
                 view["attempts"],
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.caption(
@@ -579,7 +579,7 @@ def _render_xai_result(
             f"{view['query_id']}_xai.json"
         ),
         mime="application/json",
-        use_container_width=True,
+        width="stretch",
     )
 
 
