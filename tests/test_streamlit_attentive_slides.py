@@ -1,4 +1,4 @@
-"""Isolated AppTest for the AttentiveSlides Main UI."""
+"""Isolated AppTest for the interactive AttentiveSlides Main UI."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from tests.streamlit_subprocess_test_utils import (
 class TestStreamlitAttentiveSlides(
     unittest.TestCase
 ):
-    def test_main_ui_shell_renders(
+    def test_main_ui_renders(
         self,
     ) -> None:
         result = run_isolated_apptest(
@@ -27,6 +27,7 @@ class TestStreamlitAttentiveSlides(
                 "Manual interaction",
             ),
             required_buttons=(
+                "Load PDF",
                 "Reset current turn",
             ),
             forbidden_buttons=(
@@ -46,7 +47,9 @@ class TestStreamlitAttentiveSlides(
         self.assertEqual(
             result.returncode,
             0,
-            format_subprocess_failure(result),
+            format_subprocess_failure(
+                result
+            ),
         )
 
         self.assertIn(
