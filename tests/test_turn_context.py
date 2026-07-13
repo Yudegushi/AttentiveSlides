@@ -46,14 +46,24 @@ class TurnContextCollectorTest(unittest.TestCase):
             max_sample_dwell_seconds=0.5,
         )
 
-    def snapshot(self, context, processed_at, target, confidence=0.8, *, valid=True, manifest=True):
+    def snapshot(
+        self,
+        context,
+        processed_at,
+        target,
+        confidence=0.8,
+        *,
+        grid="middle_center",
+        valid=True,
+        manifest=True,
+    ):
         self.store.put(
             SensingSnapshot(
                 slide_id=context.slide_id,
                 source_timestamp=processed_at,
                 source_timestamp_clock="browser_performance_seconds",
                 processed_at=processed_at,
-                frame=frame(context.slide_id, target, confidence),
+                frame=frame(context.slide_id, target, confidence, grid=grid),
                 is_valid=valid,
                 invalid_reason=None if valid else "no_face",
                 manifest_identity=context.manifest_identity if manifest else None,
@@ -115,6 +125,40 @@ class TurnContextCollectorTest(unittest.TestCase):
         downgraded = self.collector.aggregate(empty_context)
         self.assertIsNone(downgraded.frame.gaze_prediction.predicted_aoi_id)
         self.assertEqual(downgraded.frame.gaze_prediction.confidence, 0.0)
+
+    def test_grid_aggregation_returns_dwell_winner_without_aoi(self):
+        collector = TurnContextCollector(
+            slide_provider=FakeSlideProvider(),
+            snapshot_store=self.store,
+            aggregation_key="gaze_grid",
+            minimum_dwell_seconds=0.15,
+            max_sample_dwell_seconds=0.5,
+        )
+        context = collector.freeze_end(
+            collector.freeze_start(slide_id=2, speech_started_at=10.0),
+            speech_ended_at=10.8,
+            current_slide_id=2,
+        )
+        self.snapshot(
+            context,
+            10.0,
+            "temporary-grid-key",
+            0.9,
+            grid="middle_left",
+        )
+        self.snapshot(
+            context,
+            10.5,
+            "temporary-grid-key",
+            0.6,
+            grid="middle_right",
+        )
+
+        gaze = collector.aggregate(context).frame.gaze_prediction
+
+        self.assertEqual(gaze.gaze_grid, "middle_left")
+        self.assertIsNone(gaze.predicted_aoi_id)
+        self.assertGreater(gaze.confidence, 0.5)
 
 
 if __name__ == "__main__":

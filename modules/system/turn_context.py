@@ -58,16 +58,20 @@ class TurnContextCollector:
         sensing_lookback_seconds: float = 0.5,
         minimum_dwell_seconds: float = 0.15,
         max_sample_dwell_seconds: float = 0.5,
+        aggregation_key: str = "aoi_id",
     ) -> None:
         if sensing_lookback_seconds < 0:
             raise ValueError("sensing_lookback_seconds must be non-negative")
         if minimum_dwell_seconds <= 0 or max_sample_dwell_seconds <= 0:
             raise ValueError("dwell thresholds must be positive")
+        if aggregation_key not in {"aoi_id", "gaze_grid"}:
+            raise ValueError("aggregation_key must be 'aoi_id' or 'gaze_grid'")
         self.slide_provider = slide_provider
         self.snapshot_store = snapshot_store
         self.sensing_lookback_seconds = float(sensing_lookback_seconds)
         self.minimum_dwell_seconds = float(minimum_dwell_seconds)
         self.max_sample_dwell_seconds = float(max_sample_dwell_seconds)
+        self.aggregation_key = aggregation_key
 
     def freeze_start(self, *, slide_id: int, speech_started_at: float) -> FrozenTurnContext:
         frame = self.slide_provider.get_slide_frame(slide_id)
@@ -109,7 +113,11 @@ class TurnContextCollector:
             and snapshot.invalid_reason is None
             and snapshot.manifest_identity == context.manifest_identity
             and snapshot.frame.gaze_prediction.gaze_grid != "unknown"
-            and snapshot.frame.gaze_prediction.predicted_aoi_id not in {None, "whole_slide"}
+            and (
+                self.aggregation_key == "gaze_grid"
+                or snapshot.frame.gaze_prediction.predicted_aoi_id
+                not in {None, "whole_slide"}
+            )
             and snapshot.frame.gaze_prediction.confidence > 0.0
         ]
         valid.sort(key=lambda snapshot: snapshot.processed_at)
@@ -124,9 +132,14 @@ class TurnContextCollector:
                 self.max_sample_dwell_seconds,
                 max(0.0, next_at - snapshot.processed_at),
             )
-            target = snapshot.frame.gaze_prediction.predicted_aoi_id
+            gaze = snapshot.frame.gaze_prediction
+            target = (
+                gaze.gaze_grid
+                if self.aggregation_key == "gaze_grid"
+                else gaze.predicted_aoi_id
+            )
             assert target is not None
-            contribution = round(snapshot.frame.gaze_prediction.confidence * dwell, 9)
+            contribution = round(gaze.confidence * dwell, 9)
             weights[target] = round(weights.get(target, 0.0) + contribution, 9)
 
         total_weight = sum(weights.values())
@@ -152,13 +165,14 @@ class TurnContextCollector:
         ]
         top_target, top_weight = ranked[0]
         latest_learning = valid[-1].frame.learning_state
+        grid_mode = self.aggregation_key == "gaze_grid"
         gaze = GazePrediction(
             slide_id=context.slide_id,
-            gaze_grid="aggregated",
-            predicted_aoi_id=top_target,
+            gaze_grid=top_target if grid_mode else "aggregated",
+            predicted_aoi_id=None if grid_mode else top_target,
             confidence=round(top_weight / total_weight, 3),
             stable_duration_sec=round(total_weight, 3),
-            alternative_targets=alternatives,
+            alternative_targets=[] if grid_mode else alternatives,
         )
         return AggregatedSensing(
             frame=SensingFrame(gaze_prediction=gaze, learning_state=latest_learning),
