@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+    #root { width: 100%; }
+    #slide { position: relative; width: 100%; line-height: 0; user-select: none; }
+    #slide img { display: block; width: 100%; height: auto; border-radius: 12px; }
+    #overlay { position: absolute; inset: 0; pointer-events: none; }
+    .aoi { position: absolute; border: 2px solid rgba(15, 118, 110, .72); background: rgba(45, 212, 191, .10); }
+    #manual { position: absolute; border: 2px solid #f97316; background: rgba(249, 115, 22, .14); display: none; }
+    #slide.drawing { cursor: crosshair; touch-action: none; }
+    #error { padding: 12px; color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    window.parent.postMessage({
+      isStreamlitMessage: true,
+      type: "streamlit:componentReady",
+      apiVersion: 1,
+    }, "*");
+    window.parent.postMessage({
+      isStreamlitMessage: true,
+      type: "streamlit:setFrameHeight",
+      height: 50,
+    }, "*");
+  </script>
+  <script>
+    (() => {
+      const root = document.getElementById("root");
+      let args = null;
+      let image = null;
+      let slide = null;
+      let overlay = null;
+      let manual = null;
+      let observer = null;
+      let revision = 0;
+      let manualBBox = null;
+      let dragStart = null;
+      let scheduled = false;
+      let parentScrollHandler = null;
+      let resizeHandler = null;
+
+      function send(type, payload = {}) {
+        window.parent.postMessage({
+          isStreamlitMessage: true,
+          type,
+          ...payload,
+        }, "*");
+      }
+
+      function setValue(value) {
+        send("streamlit:setComponentValue", { value });
+      }
+
+      function setFrameHeight() {
+        send("streamlit:setFrameHeight", {
+          height: Math.ceil(root.getBoundingClientRect().height),
+        });
+      }
+
+      function coordinateContext() {
+        try {
+          if (!window.frameElement) {
+            throw new Error("component frame element is unavailable");
+          }
+          const frameRect = window.frameElement.getBoundingClientRect();
+          const viewportWidth = window.parent.innerWidth;
+          const viewportHeight = window.parent.innerHeight;
+          if (!(viewportWidth > 0 && viewportHeight > 0)) {
+            throw new Error("parent viewport dimensions are unavailable");
+          }
+          return { frameRect, viewportWidth, viewportHeight };
+        } catch (error) {
+          setValue({
+            deck_id: args ? args.deck_id : null,
+            slide_id: args ? args.slide_id : null,
+            coordinate_error: String(error && error.message ? error.message : error),
+          });
+          return null;
+        }
+      }
+
+      function viewportRect(localRect, frameRect) {
+        return {
+          x1: frameRect.left + localRect.left,
+          y1: frameRect.top + localRect.top,
+          x2: frameRect.left + localRect.right,
+          y2: frameRect.top + localRect.bottom,
+        };
+      }
+
+      function report(incrementRevision) {
+        scheduled = false;
+        if (!args || !image || !image.complete || !image.naturalWidth) return;
+        if (incrementRevision) revision += 1;
+        setFrameHeight();
+        const context = coordinateContext();
+        if (!context) return;
+        const localSlideRect = image.getBoundingClientRect();
+        if (!(localSlideRect.width > 0 && localSlideRect.height > 0)) return;
+        const slideRect = viewportRect(localSlideRect, context.frameRect);
+        const aoiRects = {};
+        for (const aoi of args.aois || []) {
+          if (!aoi || !aoi.aoi_id || !Array.isArray(aoi.bbox) || aoi.bbox.length !== 4) continue;
+          const [x1, y1, x2, y2] = aoi.bbox.map(Number);
+          aoiRects[String(aoi.aoi_id)] = {
+            x1: slideRect.x1 + x1 * localSlideRect.width,
+            y1: slideRect.y1 + y1 * localSlideRect.height,
+            x2: slideRect.x1 + x2 * localSlideRect.width,
+            y2: slideRect.y1 + y2 * localSlideRect.height,
+          };
+        }
+        setValue({
+          deck_id: String(args.deck_id),
+          slide_id: Number(args.slide_id),
+          layout_revision: revision,
+          viewport_width: Number(context.viewportWidth),
+          viewport_height: Number(context.viewportHeight),
+          device_pixel_ratio: Number(window.devicePixelRatio || 1),
+          slide_rect: slideRect,
+          slide_pixel_width: localSlideRect.width,
+          slide_pixel_height: localSlideRect.height,
+          aoi_rects: aoiRects,
+          manual_bbox: manualBBox,
+        });
+        setFrameHeight();
+      }
+
+      function scheduleReport(incrementRevision = true) {
+        if (scheduled) return;
+        scheduled = true;
+        window.requestAnimationFrame(() => report(incrementRevision));
+      }
+
+      function normalizedPoint(event) {
+        const rect = image.getBoundingClientRect();
+        return {
+          x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+          y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+        };
+      }
+
+      function drawManual(current) {
+        if (!dragStart || !current) return;
+        const x1 = Math.min(dragStart.x, current.x);
+        const y1 = Math.min(dragStart.y, current.y);
+        const x2 = Math.max(dragStart.x, current.x);
+        const y2 = Math.max(dragStart.y, current.y);
+        manual.style.display = "block";
+        manual.style.left = `${x1 * 100}%`;
+        manual.style.top = `${y1 * 100}%`;
+        manual.style.width = `${(x2 - x1) * 100}%`;
+        manual.style.height = `${(y2 - y1) * 100}%`;
+      }
+
+      function beginDraw(event) {
+        if (!args.drawing_enabled) return;
+        event.preventDefault();
+        slide.setPointerCapture(event.pointerId);
+        dragStart = normalizedPoint(event);
+        drawManual(dragStart);
+      }
+
+      function moveDraw(event) {
+        if (!dragStart) return;
+        event.preventDefault();
+        drawManual(normalizedPoint(event));
+      }
+
+      function endDraw(event) {
+        if (!dragStart) return;
+        event.preventDefault();
+        const end = normalizedPoint(event);
+        const bbox = [
+          Math.min(dragStart.x, end.x),
+          Math.min(dragStart.y, end.y),
+          Math.max(dragStart.x, end.x),
+          Math.max(dragStart.y, end.y),
+        ];
+        if (bbox[2] - bbox[0] < 0.005 || bbox[3] - bbox[1] < 0.005) {
+          manualBBox = null;
+          manual.style.display = "none";
+        } else {
+          manualBBox = bbox;
+          drawManual(end);
+        }
+        dragStart = null;
+        scheduleReport(true);
+      }
+
+      function cleanupListeners() {
+        if (observer) observer.disconnect();
+        observer = null;
+        if (resizeHandler) {
+          window.removeEventListener("resize", resizeHandler);
+          try { window.parent.removeEventListener("resize", resizeHandler); } catch (_) {}
+        }
+        if (parentScrollHandler) {
+          try { window.parent.removeEventListener("scroll", parentScrollHandler, true); } catch (_) {}
+        }
+      }
+
+      function render(nextArgs) {
+        cleanupListeners();
+        args = nextArgs;
+        revision = Math.max(revision, Number(args.layout_revision) || 0);
+        manualBBox = null;
+        root.innerHTML = "";
+
+        slide = document.createElement("div");
+        slide.id = "slide";
+        slide.className = args.drawing_enabled ? "drawing" : "";
+        image = document.createElement("img");
+        image.alt = `Slide ${args.slide_id}`;
+        image.draggable = false;
+        overlay = document.createElement("div");
+        overlay.id = "overlay";
+        manual = document.createElement("div");
+        manual.id = "manual";
+
+        if (args.show_aoi_overlay) {
+          for (const aoi of args.aois || []) {
+            if (!aoi || !Array.isArray(aoi.bbox) || aoi.bbox.length !== 4) continue;
+            const box = document.createElement("div");
+            box.className = "aoi";
+            box.dataset.aoiId = String(aoi.aoi_id || "");
+            box.style.left = `${Number(aoi.bbox[0]) * 100}%`;
+            box.style.top = `${Number(aoi.bbox[1]) * 100}%`;
+            box.style.width = `${(Number(aoi.bbox[2]) - Number(aoi.bbox[0])) * 100}%`;
+            box.style.height = `${(Number(aoi.bbox[3]) - Number(aoi.bbox[1])) * 100}%`;
+            overlay.appendChild(box);
+          }
+        }
+        overlay.appendChild(manual);
+        slide.appendChild(image);
+        slide.appendChild(overlay);
+        root.appendChild(slide);
+
+        slide.addEventListener("pointerdown", beginDraw);
+        slide.addEventListener("pointermove", moveDraw);
+        slide.addEventListener("pointerup", endDraw);
+        slide.addEventListener("pointercancel", endDraw);
+        image.addEventListener("load", () => scheduleReport(true), { once: true });
+        image.src = args.image_data_url;
+
+        resizeHandler = () => scheduleReport(true);
+        parentScrollHandler = () => scheduleReport(true);
+        window.addEventListener("resize", resizeHandler);
+        try {
+          window.parent.addEventListener("resize", resizeHandler);
+          window.parent.addEventListener("scroll", parentScrollHandler, true);
+        } catch (_) {
+          scheduleReport(false);
+        }
+        observer = new ResizeObserver(() => scheduleReport(true));
+        observer.observe(slide);
+        setFrameHeight();
+        scheduleReport(false);
+      }
+
+      window.addEventListener("message", (event) => {
+        if (event.data && event.data.type === "streamlit:render") {
+          render(event.data.args || {});
+        }
+      });
+      setFrameHeight();
+    })();
+  </script>
+</body>
+</html>
