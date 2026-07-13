@@ -20,8 +20,10 @@ from modules.audio.faster_whisper_transcriber import FasterWhisperTranscriber
 from modules.audio.streaming_vad import default_vad_backend
 from modules.audio.voice_turn_detector import VoiceTurnDetector
 from modules.media import BrowserMediaSource
+from modules.logging.interaction_logger import InteractionLogger
 from modules.system.audio_worker import AudioWorker
 from modules.system.controller import SystemController
+from modules.system.live_tutor_adapter import LiveTelemetryLogger, LiveTutorAdapter
 from modules.system.live_turn_runner import LiveTurnRunner
 from modules.system.live_view_model import LiveViewModel
 from modules.system.real_slide_provider import RealSlideProvider
@@ -50,9 +52,15 @@ def _live_runtime() -> LiveViewModel:
         slide_provider=provider,
         snapshot_store=snapshots,
     )
+    tutor_adapter = LiveTutorAdapter()
     runner = LiveTurnRunner(
         slide_provider=provider,
         context_collector=collector,
+        tutor=tutor_adapter,
+        logger=LiveTelemetryLogger(
+            InteractionLogger("data/logs/live_interactions.jsonl"),
+            tutor_adapter,
+        ),
     )
     controller = SystemController(
         media_source=media_source,
@@ -66,6 +74,7 @@ def _live_runtime() -> LiveViewModel:
         media_source=media_source,
         slide_provider=provider,
         snapshot_store=snapshots,
+        tutor_adapter=tutor_adapter,
     )
 
 
@@ -196,6 +205,20 @@ def main() -> None:
         if loaded:
             st.success(f"Loaded deck {loaded}.")
         snapshot = runtime.snapshot()
+        use_grounded = st.toggle(
+            "Use grounded API tutor",
+            value=snapshot["tutor"]["selection"] == "grounded",
+            key="live_grounded_tutor",
+        )
+        if use_grounded != (snapshot["tutor"]["selection"] == "grounded"):
+            runtime.configure_grounded_tutor(use_grounded)
+            snapshot = runtime.snapshot()
+        if snapshot["tutor"]["configuration_error"]:
+            st.error(f"Grounded tutor unavailable; using deterministic fallback: {snapshot['tutor']['configuration_error']}")
+        st.caption(
+            f"Tutor: {snapshot['tutor']['selection']} · "
+            f"{snapshot['tutor']['provider']} / {snapshot['tutor']['model']}"
+        )
         master_switch = st.toggle("Master switch", value=False, key="live_master_switch")
         if snapshot["deck"]["loaded"]:
             selected_slide = st.number_input(
@@ -234,6 +257,8 @@ def main() -> None:
             st.caption("No completed tutor response yet.")
         else:
             st.json(snapshot["interaction"]["response"])
+        if snapshot["grounded_xai"] is not None:
+            st.json(snapshot["grounded_xai"])
 
     with st.expander("Developer transport trace", expanded=False):
         st.json(snapshot["developer"])

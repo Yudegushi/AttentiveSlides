@@ -26,12 +26,14 @@ class LiveViewModel:
         media_source: Any,
         slide_provider: Any,
         snapshot_store: Any,
+        tutor_adapter: Any | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.controller = controller
         self.media_source = media_source
         self.slide_provider = slide_provider
         self.snapshot_store = snapshot_store
+        self.tutor_adapter = tutor_adapter
         self._clock = clock
         self._lock = RLock()
         self._slide_id: int | None = None
@@ -93,6 +95,18 @@ class LiveViewModel:
         self.controller.handle_disconnect()
         with self._lock:
             self._status_copy = "Browser disconnected; live workers were stopped."
+
+    def configure_grounded_tutor(self, enabled: bool) -> bool:
+        if self.tutor_adapter is None:
+            self._last_error = "The live runtime has no configurable grounded tutor."
+            return not enabled
+        if enabled:
+            enabled_now = bool(self.tutor_adapter.enable_grounded())
+            if not enabled_now:
+                self._last_error = self.tutor_adapter.status().get("configuration_error")
+            return enabled_now
+        self.tutor_adapter.disable_grounded()
+        return True
 
     def poll(self) -> list[LiveTurnOutcome]:
         outcomes = self.controller.poll()
@@ -180,12 +194,32 @@ class LiveViewModel:
                 "candidates": interaction["confirmation_options"] if pending and interaction else [],
             },
             "interaction": interaction,
+            "tutor": self._tutor_status(),
+            "grounded_xai": self._grounded_xai(),
             "developer": {
                 "media_running": stats.is_running,
                 "source_cleanup_state": stats.cleanup_state,
                 "queue_drops": stats.video_drops + stats.audio_drops,
             },
         }
+
+    def _tutor_status(self) -> dict[str, Any]:
+        if self.tutor_adapter is None:
+            return {
+                "selection": "deterministic",
+                "configuration_error": None,
+                "provider_error": None,
+                "last_status": "deterministic",
+                "provider": "deterministic_mock",
+                "model": "mock",
+                "fallback_used": False,
+            }
+        return dict(self.tutor_adapter.status())
+
+    def _grounded_xai(self) -> dict[str, Any] | None:
+        if self.tutor_adapter is None:
+            return None
+        return self.tutor_adapter.latest_xai_view()
 
     def _frame(self, slide_id: int | None) -> Any | None:
         if slide_id is None:

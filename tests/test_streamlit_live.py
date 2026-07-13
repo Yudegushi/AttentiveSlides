@@ -41,6 +41,7 @@ class StreamlitLiveSurfaceTest(unittest.TestCase):
             "Latest gaze evidence",
             "Target confirmation",
             "Grounded tutor response",
+            "Use grounded API tutor",
             "Observable signals only",
         ):
             with self.subTest(expected=expected):

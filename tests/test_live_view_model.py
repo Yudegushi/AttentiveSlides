@@ -20,6 +20,35 @@ class FakeClock:
         return self.value
 
 
+class FakeTutorAdapter:
+    def __init__(self) -> None:
+        self.enabled = False
+        self.calls: list[bool] = []
+
+    def enable_grounded(self) -> bool:
+        self.enabled = True
+        self.calls.append(True)
+        return True
+
+    def disable_grounded(self) -> None:
+        self.enabled = False
+        self.calls.append(False)
+
+    def status(self):
+        return {
+            "selection": "grounded" if self.enabled else "deterministic",
+            "configuration_error": None,
+            "provider_error": None,
+            "last_status": "success" if self.enabled else "deterministic",
+            "provider": "test_provider" if self.enabled else "deterministic_mock",
+            "model": "test_model" if self.enabled else "mock",
+            "fallback_used": False,
+        }
+
+    def latest_xai_view(self):
+        return {"status": "success"} if self.enabled else None
+
+
 class FakeController:
     def __init__(self) -> None:
         self.state = RuntimeState.STOPPED
@@ -135,6 +164,27 @@ class LiveViewModelTest(unittest.TestCase):
         self.assertTrue(snapshot["confirmation"]["pending"])
         self.assertEqual(snapshot["confirmation"]["query_id"], pending_result.resolved_query.query_id)
         self.assertTrue(snapshot["interaction"]["pending_confirmation"])
+
+    def test_grounded_selection_is_routed_without_recreating_workers(self) -> None:
+        adapter = FakeTutorAdapter()
+        view = LiveViewModel(
+            controller=self.controller,
+            media_source=self.source,
+            slide_provider=self.provider,
+            snapshot_store=self.store,
+            tutor_adapter=adapter,
+            clock=self.clock,
+        )
+        view.set_slide(5)
+
+        self.assertTrue(view.configure_grounded_tutor(True))
+        grounded = view.snapshot()
+        view.configure_grounded_tutor(False)
+
+        self.assertEqual(adapter.calls, [True, False])
+        self.assertEqual(grounded["tutor"]["selection"], "grounded")
+        self.assertEqual(grounded["grounded_xai"], {"status": "success"})
+        self.assertEqual(view.snapshot()["tutor"]["selection"], "deterministic")
 
     def test_correction_routes_to_controller_and_disconnect_copy_is_explicit(self) -> None:
         self.controller.outcomes.append(
