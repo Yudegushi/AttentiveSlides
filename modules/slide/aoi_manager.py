@@ -7,6 +7,7 @@ import json
 from dataclasses import asdict, dataclass
 from json import JSONDecodeError
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from .ocr import OCREngine, TextBox, clamp
@@ -55,6 +56,7 @@ class AOIManager:
         self.data_dir = Path(data_dir)
         self.manifest_file = self.data_dir / "aoi_manifest.json"
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        self._lock = RLock()
         self.manifest: dict[str, dict[str, Any]] = self._load_manifest()
 
     def _load_manifest(self) -> dict[str, dict[str, Any]]:
@@ -70,10 +72,11 @@ class AOIManager:
         return data
 
     def _save_manifest(self) -> None:
-        tmp_path = self.manifest_file.with_suffix(".json.tmp")
-        with tmp_path.open("w", encoding="utf-8") as file:
-            json.dump(self.manifest, file, ensure_ascii=False, indent=2)
-        tmp_path.replace(self.manifest_file)
+        with self._lock:
+            tmp_path = self.manifest_file.with_suffix(".json.tmp")
+            with tmp_path.open("w", encoding="utf-8") as file:
+                json.dump(self.manifest, file, ensure_ascii=False, indent=2)
+            tmp_path.replace(self.manifest_file)
 
     @staticmethod
     def _slide_key(deck_id: str, slide_id: int) -> str:
@@ -226,8 +229,9 @@ class AOIManager:
         for aoi in slide_data.aois:
             self._validate_bbox(aoi.bbox)
         data = slide_data.to_dict()
-        self.manifest[self._slide_key(deck_id, slide_data.slide_id)] = data
-        self._save_manifest()
+        with self._lock:
+            self.manifest[self._slide_key(deck_id, slide_data.slide_id)] = data
+            self._save_manifest()
         return data
 
     def get_slide_aois(self, deck_id: str, slide_id: int) -> list[dict[str, Any]]:
@@ -247,16 +251,17 @@ class AOIManager:
         text: str,
     ) -> dict[str, Any]:
         self._validate_bbox(bbox)
-        slide_data = self._ensure_slide_data(deck_id, slide_id)
-        for aoi in slide_data["aois"]:
-            if aoi["aoi_id"] == aoi_id:
-                aoi["bbox"] = [float(value) for value in bbox]
-                aoi["type"] = aoi_type
-                aoi["text"] = text
-                aoi["source"] = "manual"
-                self.manifest[self._slide_key(deck_id, slide_id)] = slide_data
-                self._save_manifest()
-                return aoi
+        with self._lock:
+            slide_data = self._ensure_slide_data(deck_id, slide_id)
+            for aoi in slide_data["aois"]:
+                if aoi["aoi_id"] == aoi_id:
+                    aoi["bbox"] = [float(value) for value in bbox]
+                    aoi["type"] = aoi_type
+                    aoi["text"] = text
+                    aoi["source"] = "manual"
+                    self.manifest[self._slide_key(deck_id, slide_id)] = slide_data
+                    self._save_manifest()
+                    return aoi
         raise ValueError(f"AOI does not exist: {aoi_id}")
 
     def add_aoi(
@@ -269,23 +274,25 @@ class AOIManager:
         text: str = "",
     ) -> dict[str, Any]:
         self._validate_bbox(bbox)
-        slide_data = self._ensure_slide_data(deck_id, slide_id)
-        if any(aoi["aoi_id"] == aoi_id for aoi in slide_data["aois"]):
-            raise ValueError(f"AOI already exists: {aoi_id}")
-        new_aoi = AOI(aoi_id, [float(value) for value in bbox], aoi_type, text, source="manual").to_dict()
-        slide_data["aois"].append(new_aoi)
-        self.manifest[self._slide_key(deck_id, slide_id)] = slide_data
-        self._save_manifest()
-        return new_aoi
+        with self._lock:
+            slide_data = self._ensure_slide_data(deck_id, slide_id)
+            if any(aoi["aoi_id"] == aoi_id for aoi in slide_data["aois"]):
+                raise ValueError(f"AOI already exists: {aoi_id}")
+            new_aoi = AOI(aoi_id, [float(value) for value in bbox], aoi_type, text, source="manual").to_dict()
+            slide_data["aois"].append(new_aoi)
+            self.manifest[self._slide_key(deck_id, slide_id)] = slide_data
+            self._save_manifest()
+            return new_aoi
 
     def delete_aoi(self, deck_id: str, slide_id: int, aoi_id: str) -> None:
-        slide_data = self._ensure_slide_data(deck_id, slide_id)
-        original_count = len(slide_data["aois"])
-        slide_data["aois"] = [aoi for aoi in slide_data["aois"] if aoi["aoi_id"] != aoi_id]
-        if len(slide_data["aois"]) == original_count:
-            raise ValueError(f"AOI does not exist: {aoi_id}")
-        self.manifest[self._slide_key(deck_id, slide_id)] = slide_data
-        self._save_manifest()
+        with self._lock:
+            slide_data = self._ensure_slide_data(deck_id, slide_id)
+            original_count = len(slide_data["aois"])
+            slide_data["aois"] = [aoi for aoi in slide_data["aois"] if aoi["aoi_id"] != aoi_id]
+            if len(slide_data["aois"]) == original_count:
+                raise ValueError(f"AOI does not exist: {aoi_id}")
+            self.manifest[self._slide_key(deck_id, slide_id)] = slide_data
+            self._save_manifest()
 
     def get_gaze_payload(self, deck_id: str, slide_id: int) -> dict[str, Any]:
         aois = [

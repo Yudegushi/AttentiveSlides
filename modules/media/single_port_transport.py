@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from dataclasses import dataclass
 import math
 from threading import RLock
 import time
@@ -34,6 +35,22 @@ class MediaPayloadTooLarge(MediaIngressError):
     """A browser media body exceeds the documented bounded request size."""
 
 
+@dataclass(frozen=True)
+class MediaIngressSessionSnapshot:
+    armed: bool
+    active: bool
+    generation: int | None
+    pending_generation: int | None
+    session_pending: bool
+    video_fresh: bool
+    audio_fresh: bool
+    heartbeat_fresh: bool
+    last_video_received_at: float | None
+    last_audio_received_at: float | None
+    last_heartbeat_at: float | None
+    cleanup_reason: str | None
+
+
 class FallbackMediaIngress:
     """Accept bounded browser chunks and feed the existing source queues."""
 
@@ -43,64 +60,122 @@ class FallbackMediaIngress:
         *,
         clock: Callable[[], float] = time.monotonic,
         inactive_after_seconds: float = 2.0,
+        media_stale_after_seconds: float = 2.0,
+        start_armed: bool = True,
+        coordinated_activation: bool = False,
         max_video_bytes: int = 512 * 1024,
         max_audio_bytes: int = 128 * 1024,
         max_input_pixels: int = 640 * 480,
     ) -> None:
         if inactive_after_seconds <= 0:
             raise ValueError("inactive_after_seconds must be positive")
+        if media_stale_after_seconds <= 0:
+            raise ValueError("media_stale_after_seconds must be positive")
         if max_video_bytes <= 0 or max_audio_bytes <= 0:
             raise ValueError("media byte limits must be positive")
         self.source = source
         self._clock = clock
         self.inactive_after_seconds = float(inactive_after_seconds)
+        self.media_stale_after_seconds = float(media_stale_after_seconds)
         self.max_video_bytes = int(max_video_bytes)
         self.max_audio_bytes = int(max_audio_bytes)
         self.max_input_pixels = int(max_input_pixels)
         self._lock = RLock()
+        self._armed = bool(start_armed)
+        self._coordinated_activation = bool(coordinated_activation)
+        self._generation_counter = 0
         self._active_session_id: str | None = None
-        self._last_activity: float | None = None
+        self._active_generation: int | None = None
+        self._pending_session_id: str | None = None
+        self._pending_generation: int | None = None
+        self._last_video_received_at: float | None = None
+        self._last_audio_received_at: float | None = None
+        self._last_heartbeat_at: float | None = None
+        self._cleanup_reason: str | None = None
+
+    def arm(self) -> None:
+        with self._lock:
+            self._armed = True
+
+    def disarm(self, *, reason: str = "master switch off") -> None:
+        with self._lock:
+            self._armed = False
+            self._clear_sessions(reason=reason)
 
     def start(self, session_id: str) -> None:
         """Activate one browser session, replacing any previous session safely."""
 
         session_id = self._validated_session_id(session_id)
         with self._lock:
-            replacing_session = (
-                self._active_session_id is not None
-                and self._active_session_id != session_id
-            )
+            if not self._armed:
+                raise InactiveMediaSession("browser media ingress is not armed")
+            if session_id in {self._active_session_id, self._pending_session_id}:
+                return
+            replacing_session = self._active_session_id is not None or self._pending_session_id is not None
             if replacing_session:
                 self.source.stop(reason="browser session replaced")
+            self._generation_counter += 1
+            generation = self._generation_counter
+            self._active_session_id = None
+            self._active_generation = None
+            self._reset_receive_times()
+            self._cleanup_reason = "browser session replaced" if replacing_session else None
+            if self._coordinated_activation:
+                self._pending_session_id = session_id
+                self._pending_generation = generation
+                return
+            self._pending_session_id = None
+            self._pending_generation = None
             self._active_session_id = session_id
-            self._last_activity = self._clock()
+            self._active_generation = generation
+            self._last_heartbeat_at = self._clock()
             self.source.start()
+
+    def activate_pending(self) -> bool:
+        with self._lock:
+            if not self._armed or self._pending_session_id is None:
+                return False
+            self._active_session_id = self._pending_session_id
+            self._active_generation = self._pending_generation
+            self._pending_session_id = None
+            self._pending_generation = None
+            self._reset_receive_times()
+            self._last_heartbeat_at = self._clock()
+            self._cleanup_reason = None
+            self.source.start()
+            return True
 
     def stop(self, session_id: str, *, reason: str = "browser stopped") -> None:
         """Stop the active session. A stale page is never allowed to stop a newer one."""
 
         with self._lock:
+            if session_id == self._pending_session_id:
+                self._clear_sessions(reason=reason)
+                return
             self._require_active_session(session_id)
-            self.source.stop(reason=reason)
-            self._active_session_id = None
-            self._last_activity = None
+            self._clear_sessions(reason=reason)
+
+    def stop_active(self, *, reason: str) -> bool:
+        with self._lock:
+            if self._active_session_id is None and self._pending_session_id is None:
+                return False
+            self._clear_sessions(reason=reason)
+            return True
 
     def heartbeat(self, session_id: str) -> None:
         with self._lock:
             self._require_active_session(session_id)
-            self._touch()
+            self._last_heartbeat_at = self._clock()
 
     def stop_if_inactive(self) -> bool:
         """Apply disconnect cleanup when no browser activity arrives for the deadline."""
 
         with self._lock:
-            if self._active_session_id is None or self._last_activity is None:
+            if self._active_session_id is None or self._last_heartbeat_at is None:
                 return False
-            if self._clock() - self._last_activity < self.inactive_after_seconds:
+            if self._clock() - self._last_heartbeat_at < self.inactive_after_seconds:
                 return False
-            self.source.stop(reason="browser inactive")
-            self._active_session_id = None
-            self._last_activity = None
+            self._clear_sessions(reason="browser inactive")
             return True
 
     def accept_video_jpeg(
@@ -123,7 +198,7 @@ class FallbackMediaIngress:
                 timestamp=timestamp,
                 timestamp_clock="browser_performance_seconds",
             )
-            self._touch()
+            self._last_video_received_at = self._clock()
             return accepted
 
     def accept_audio_pcm(
@@ -157,16 +232,40 @@ class FallbackMediaIngress:
                 channels=channels,
                 timestamp_clock="browser_performance_seconds",
             )
-            self._touch()
+            self._last_audio_received_at = self._clock()
             return accepted
+
+    def session_snapshot(self) -> MediaIngressSessionSnapshot:
+        with self._lock:
+            now = self._clock()
+            active = self._active_session_id is not None
+            return MediaIngressSessionSnapshot(
+                armed=self._armed,
+                active=active,
+                generation=self._active_generation,
+                pending_generation=self._pending_generation,
+                session_pending=self._pending_session_id is not None,
+                video_fresh=active and self._is_fresh(self._last_video_received_at, now, self.media_stale_after_seconds),
+                audio_fresh=active and self._is_fresh(self._last_audio_received_at, now, self.media_stale_after_seconds),
+                heartbeat_fresh=active and self._is_fresh(self._last_heartbeat_at, now, self.inactive_after_seconds),
+                last_video_received_at=self._last_video_received_at,
+                last_audio_received_at=self._last_audio_received_at,
+                last_heartbeat_at=self._last_heartbeat_at,
+                cleanup_reason=self._cleanup_reason,
+            )
 
     def stats_payload(self) -> dict[str, object]:
         stats = self.source.stats()
-        with self._lock:
-            active = self._active_session_id is not None
+        session = self.session_snapshot()
         return {
             "transport": "single-port-http",
-            "active_session": active,
+            "active_session": session.active,
+            "armed": session.armed,
+            "session_state": "pending" if session.session_pending else ("active" if session.active else "inactive"),
+            "generation": session.generation if session.generation is not None else session.pending_generation,
+            "video_fresh": session.video_fresh,
+            "audio_fresh": session.audio_fresh,
+            "heartbeat_fresh": session.heartbeat_fresh,
             "video_fps": stats.video_fps,
             "audio_chunks_per_second": stats.audio_chunks_per_second,
             "last_video_timestamp": stats.last_video_timestamp,
@@ -201,8 +300,23 @@ class FallbackMediaIngress:
         if session_id != self._active_session_id:
             raise InactiveMediaSession("browser media session is not active")
 
-    def _touch(self) -> None:
-        self._last_activity = self._clock()
+    def _clear_sessions(self, *, reason: str) -> None:
+        self.source.stop(reason=reason)
+        self._active_session_id = None
+        self._active_generation = None
+        self._pending_session_id = None
+        self._pending_generation = None
+        self._reset_receive_times()
+        self._cleanup_reason = reason
+
+    def _reset_receive_times(self) -> None:
+        self._last_video_received_at = None
+        self._last_audio_received_at = None
+        self._last_heartbeat_at = None
+
+    @staticmethod
+    def _is_fresh(received_at: float | None, now: float, deadline: float) -> bool:
+        return received_at is not None and now - received_at <= deadline
 
     @staticmethod
     def _validated_session_id(session_id: str) -> str:
@@ -465,6 +579,8 @@ WATCHDOG_TASK_KEY: web.AppKey[asyncio.Task[None]] = web.AppKey(
 
 def build_fallback_app(
     ingress: FallbackMediaIngress | None = None,
+    *,
+    capture_html: str | None = None,
 ) -> web.Application:
     """Build the one-origin fallback application without starting a device."""
 
@@ -476,6 +592,14 @@ def build_fallback_app(
 
     async def page(_request: web.Request) -> web.Response:
         return web.Response(text=fallback_page_html(), content_type="text/html")
+
+    async def health(_request: web.Request) -> web.Response:
+        return web.json_response({"status": "ok"})
+
+    async def capture(_request: web.Request) -> web.Response:
+        return web.Response(
+            text=capture_html or fallback_page_html(), content_type="text/html"
+        )
 
     async def start(request: web.Request) -> web.Response:
         try:
@@ -526,6 +650,8 @@ def build_fallback_app(
         return web.json_response(ingress.stats_payload())
 
     app.router.add_get("/", page)
+    app.router.add_get("/health", health)
+    app.router.add_get("/capture", capture)
     app.router.add_post("/media/start", start)
     app.router.add_post("/media/video", video)
     app.router.add_post("/media/audio", audio)

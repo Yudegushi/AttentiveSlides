@@ -115,6 +115,8 @@ class SinglePortTransportTest(unittest.TestCase):
         self.assertTrue(
             {
                 "/",
+                "/health",
+                "/capture",
                 "/media/start",
                 "/media/video",
                 "/media/audio",

@@ -214,6 +214,13 @@ class AudioWorker:
             )
         finally:
             path.unlink(missing_ok=True)
+        if not transcript.text.strip():
+            return AudioTurnResult(
+                turn=turn,
+                transcript=None,
+                status="invalid",
+                error="empty_transcript",
+            )
         return AudioTurnResult(turn=turn, transcript=transcript, status="completed")
 
     def _write_temporary_wav(self, turn: SpeechTurn) -> Path:

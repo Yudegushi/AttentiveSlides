@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -6,6 +7,11 @@ from modules.audio.streaming_vad import EnergyVadBackend, VadBackend, default_va
 
 
 class StreamingVadTest(unittest.TestCase):
+    def test_audio_requirements_install_the_preferred_pcm_vad_backend(self):
+        requirements = Path("requirements-audio.txt").read_text(encoding="utf-8")
+
+        self.assertIn("webrtcvad-wheels==2.0.14", requirements.splitlines())
+
     def test_energy_backend_classifies_deterministic_pcm_without_external_model(self):
         backend = EnergyVadBackend(speech_threshold=100)
 

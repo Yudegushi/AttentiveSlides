@@ -120,6 +120,27 @@ class AudioWorkerTest(unittest.TestCase):
         self.assertIn("synthetic stt failure", result.error)
         self.assertFalse(observed_paths[0].exists())
 
+    def test_empty_stt_result_is_invalid_and_does_not_enter_the_turn_pipeline(self):
+        worker = AudioWorker(
+            media_source=self.source,
+            detector=make_detector(),
+            transcribe=lambda path: Transcript("  ", language="zh"),
+            clock=self.clock,
+        )
+        self.source.accept_audio_samples(
+            pcm([1_000, 0, 0]),
+            timestamp=3.0,
+            sample_rate=16_000,
+            channels=1,
+            timestamp_clock="browser_performance_seconds",
+        )
+
+        result = worker.process_available_audio()[0]
+
+        self.assertEqual(result.status, "invalid")
+        self.assertIsNone(result.transcript)
+        self.assertEqual(result.error, "empty_transcript")
+
     def test_queue_overrun_invalidates_active_turn_without_transcribing(self):
         self.source.stop()
         self.source = BrowserMediaSource(audio_queue_size=1)

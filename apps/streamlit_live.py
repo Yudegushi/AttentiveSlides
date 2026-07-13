@@ -2,24 +2,31 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+from dataclasses import dataclass
+from html import escape
+from io import BytesIO
+import os
 from pathlib import Path
 import sys
 from typing import Any
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 import streamlit as st
-from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
 from modules.audio.faster_whisper_transcriber import FasterWhisperTranscriber
 from modules.audio.streaming_vad import default_vad_backend
+from modules.audio.transcriber import TranscriptionConfig
 from modules.audio.voice_turn_detector import VoiceTurnDetector
 from modules.media import BrowserMediaSource
+from modules.media.live_ingress_service import LiveIngressService
+from modules.media.single_port_transport import FallbackMediaIngress
 from modules.logging.interaction_logger import InteractionLogger
 from modules.system.audio_worker import AudioWorker
 from modules.system.controller import SystemController
@@ -32,8 +39,14 @@ from modules.system.sensing_worker import SensingWorker
 from modules.system.turn_context import TurnContextCollector
 
 
-@st.cache_resource
-def _live_runtime() -> LiveViewModel:
+@dataclass(frozen=True)
+class LiveResources:
+    runtime: LiveViewModel
+    ingress: FallbackMediaIngress
+    service: LiveIngressService
+
+
+def build_live_resources(*, start_ingress: bool = True) -> LiveResources:
     media_source = BrowserMediaSource()
     provider = RealSlideProvider()
     snapshots = SensingSnapshotStore()
@@ -42,7 +55,12 @@ def _live_runtime() -> LiveViewModel:
         slide_provider=provider,
         snapshot_store=snapshots,
     )
-    transcriber = FasterWhisperTranscriber()
+    transcriber = FasterWhisperTranscriber(
+        TranscriptionConfig(
+            engine="faster_whisper",
+            model_size=os.environ.get("ATTENTIVE_WHISPER_MODEL", "small"),
+        )
+    )
     audio_worker = AudioWorker(
         media_source=media_source,
         detector=VoiceTurnDetector(default_vad_backend()),
@@ -69,13 +87,37 @@ def _live_runtime() -> LiveViewModel:
         context_collector=collector,
         turn_runner=runner,
     )
-    return LiveViewModel(
+    runtime = LiveViewModel(
         controller=controller,
         media_source=media_source,
         slide_provider=provider,
         snapshot_store=snapshots,
         tutor_adapter=tutor_adapter,
     )
+    ingress = FallbackMediaIngress(
+        media_source,
+        start_armed=False,
+        coordinated_activation=True,
+        media_stale_after_seconds=2.0,
+        inactive_after_seconds=3.0,
+    )
+    capture_html = (
+        REPOSITORY_ROOT / "modules/media/live_capture_component/index.html"
+    ).read_text(encoding="utf-8")
+    service = LiveIngressService(
+        runtime=runtime,
+        source=media_source,
+        ingress=ingress,
+        capture_html=capture_html,
+    )
+    if start_ingress:
+        service.ensure_started()
+    return LiveResources(runtime=runtime, ingress=ingress, service=service)
+
+
+@st.cache_resource
+def _live_resources() -> LiveResources:
+    return build_live_resources()
 
 
 def _load_uploaded_deck(runtime: LiveViewModel, uploaded: Any) -> str | None:
@@ -96,39 +138,20 @@ def next_master_switch_state(current_state: bool, button_pressed: bool) -> bool:
     return not current_state if button_pressed else current_state
 
 
-def _render_media(runtime: LiveViewModel, master_switch: bool, deck_loaded: bool) -> None:
-    if not master_switch or not deck_loaded:
-        if runtime.is_running:
-            runtime.stop(reason="master switch off")
-        return
-    try:
-        context = webrtc_streamer(
-            key="attentive-slides-live-media",
-            mode=WebRtcMode.SENDRECV,
-            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-            media_stream_constraints={"video": True, "audio": True},
-            desired_playing_state=master_switch,
-            video_frame_callback=runtime.media_source.video_frame_callback,
-            audio_frame_callback=runtime.media_source.audio_frame_callback,
-            on_video_ended=runtime.handle_disconnect,
-            on_audio_ended=runtime.handle_disconnect,
-            async_processing=False,
-            sendback_video=True,
-            sendback_audio=False,
-            media_toggle_controls=False,
-            video_html_attrs={"autoPlay": True, "controls": False, "muted": True},
-        )
-    except Exception as exc:  # pragma: no cover - browser component path
-        runtime.handle_disconnect()
-        st.error(f"Browser media component error: {exc}")
-        return
+def render_capture_component(*, embed: Any = st.iframe) -> None:
+    embed("/capture", height=340)
 
-    if context.state.playing:
-        runtime.start()
-    elif runtime.is_running:
-        runtime.handle_disconnect()
-    else:
-        st.info("Waiting for browser camera/microphone permission and media negotiation.")
+
+def poll_live_runtime(runtime: LiveViewModel) -> None:
+    runtime.poll()
+
+
+def _render_media(resources: LiveResources, master_switch: bool, deck_loaded: bool) -> None:
+    enabled = bool(master_switch and deck_loaded)
+    resources.service.set_master_enabled(enabled)
+    resources.service.reconcile_once()
+    if enabled:
+        render_capture_component()
 
 
 def build_aoi_overlay(
@@ -142,17 +165,71 @@ def build_aoi_overlay(
     overlay = image.convert("RGB").copy()
     draw = ImageDraw.Draw(overlay)
     width, height = overlay.size
-    for aoi in aois:
+    font_size = max(14, round(min(width, height) * 0.022))
+    try:
+        badge_font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
+    except OSError:
+        badge_font = ImageFont.load_default()
+    for index, aoi in enumerate(aois, start=1):
         bbox = aoi.get("bbox", [])
         if not isinstance(bbox, list) or len(bbox) != 4:
             continue
         x1, y1, x2, y2 = (round(float(value) * axis) for value, axis in zip(bbox, (width, height, width, height)))
         highlighted = aoi.get("aoi_id") == highlighted_aoi_id
-        draw.rectangle((x1, y1, x2, y2), outline="#e4572e" if highlighted else "#2b6cb0", width=3)
+        color = "#e4572e" if highlighted else "#2b6cb0"
+        draw.rectangle((x1, y1, x2, y2), outline=color, width=3)
+        badge = str(index)
+        left, top, right, bottom = badge_font.getbbox(badge)
+        badge_width = right - left + 10
+        badge_height = bottom - top + 8
+        badge_x = max(1, min(x1 + 2, width - badge_width - 1))
+        badge_y = max(1, min(y1 + 2, height - badge_height - 1))
+        draw.rounded_rectangle(
+            (badge_x, badge_y, badge_x + badge_width, badge_y + badge_height),
+            radius=3,
+            fill=color,
+        )
+        draw.text(
+            (badge_x + 5, badge_y + 4 - top),
+            badge,
+            fill="white",
+            font=badge_font,
+        )
     return overlay
 
 
-def _render_slide(snapshot: dict[str, Any]) -> None:
+def build_aoi_display_label(aoi: dict[str, Any], index: int) -> str:
+    """Return the slide badge number plus a useful PDF-derived AOI description."""
+
+    aoi_id = str(aoi.get("aoi_id") or "unknown_aoi")
+    kind = str(aoi.get("type") or "region").replace("_", " ")
+    text = " ".join(str(aoi.get("text") or "").split())
+    if not text:
+        text = "Whole slide" if aoi_id == "whole_slide" else aoi_id.replace("_", " ")
+    excerpt = text if len(text) <= 72 else f"{text[:69].rstrip()}..."
+    return f"{index} · {excerpt} [{kind}] ({aoi_id})"
+
+
+def build_slide_image_html(image: Image.Image, *, caption: str) -> str:
+    renderable = image.convert("RGB")
+    if renderable.width > 1600:
+        height = max(1, round(renderable.height * 1600 / renderable.width))
+        renderable = renderable.resize((1600, height), Image.Resampling.LANCZOS)
+    output = BytesIO()
+    renderable.save(output, format="JPEG", quality=88, optimize=True)
+    encoded = base64.b64encode(output.getvalue()).decode("ascii")
+    safe_caption = escape(caption, quote=True)
+    return (
+        '<figure style="margin:0">'
+        f'<img src="data:image/jpeg;base64,{encoded}" alt="{safe_caption}" '
+        'style="display:block;width:100%;height:auto;border-radius:0.35rem">'
+        f'<figcaption style="margin-top:0.4rem">{safe_caption}</figcaption>'
+        "</figure>"
+    )
+
+
+def _render_slide_panel(resources: LiveResources) -> None:
+    snapshot = resources.runtime.snapshot()
     st.subheader("Slide and AOI overlay")
     image_path = snapshot["slide"]["image_path"]
     if image_path:
@@ -166,11 +243,34 @@ def _render_slide(snapshot: dict[str, Any]) -> None:
                     else None
                 ),
             )
-        st.image(overlay, caption=f"Slide {snapshot['slide']['id']} with canonical AOI overlay")
+        st.markdown(
+            build_slide_image_html(
+                overlay,
+                caption=f"Slide {snapshot['slide']['id']} with canonical AOI overlay",
+            ),
+            unsafe_allow_html=True,
+        )
+        st.caption("AOI numbers on the slide match the Target confirmation choices below.")
     else:
         st.info("Upload a PDF deck to render the current slide.")
     if snapshot["slide"]["aois"]:
-        st.dataframe(snapshot["slide"]["aois"], hide_index=True, use_container_width=True)
+        with st.expander("Canonical AOI details", expanded=False):
+            for index, aoi in enumerate(snapshot["slide"]["aois"], start=1):
+                st.write(build_aoi_display_label(aoi, index))
+
+
+def render_live_workspace(
+    resources: LiveResources,
+    *,
+    master_switch: bool,
+    deck_loaded: bool,
+    columns: Any = st.columns,
+) -> None:
+    capture_column, slide_column = columns((0.42, 0.58), gap="large")
+    with capture_column:
+        _render_media(resources, master_switch, deck_loaded)
+    with slide_column:
+        _render_slide_panel(resources)
 
 
 def _render_confirmation(runtime: LiveViewModel, snapshot: dict[str, Any]) -> None:
@@ -183,12 +283,60 @@ def _render_confirmation(runtime: LiveViewModel, snapshot: dict[str, Any]) -> No
     if not candidates:
         st.warning("No candidate AOIs are available; select a slide region after fresh evidence arrives.")
         return
-    labels = [f"{item['name']} ({item['aoi_id']})" for item in candidates]
+    slide_aois = snapshot["slide"]["aois"]
+    canonical = {str(aoi["aoi_id"]): (index, aoi) for index, aoi in enumerate(slide_aois, start=1)}
+    labels = []
+    for item in candidates:
+        aoi_id = str(item["aoi_id"])
+        index, aoi = canonical.get(aoi_id, (len(slide_aois) + 1, item))
+        labels.append(build_aoi_display_label(aoi, index))
     selected = st.selectbox("Confirm or correct the intended target", labels, key="live_confirmation_target")
     selected_id = candidates[labels.index(selected)]["aoi_id"]
     if st.button("Confirm selected target", type="primary"):
         runtime.confirm(confirmation["query_id"], selected_id)
         st.rerun()
+
+
+@st.fragment(run_every=0.5)
+def _render_periodic(resources: LiveResources) -> None:
+    runtime = resources.runtime
+    poll_live_runtime(runtime)
+    snapshot = runtime.snapshot()
+    transport = dict(snapshot["transport"])
+    transport["ingress"] = resources.service.stats_payload()
+
+    status_left, status_right = st.columns(2)
+    with status_left:
+        st.subheader("Transport state")
+        st.json(transport)
+        st.caption(
+            f"Runtime state: {snapshot['runtime']['state']} — "
+            f"{snapshot['runtime']['status_copy']}"
+        )
+    with status_right:
+        st.subheader("Latest gaze evidence")
+        st.json(snapshot["gaze"])
+        st.caption(
+            "Camera preview is provided by the media component and is distinct "
+            "from derived gaze evidence."
+        )
+
+    turn_column, response_column = st.columns((0.48, 0.52))
+    with turn_column:
+        st.subheader("Turn transcript and timing")
+        st.json(snapshot["turn"])
+        _render_confirmation(runtime, snapshot)
+    with response_column:
+        st.subheader("Grounded tutor response")
+        if snapshot["interaction"] is None:
+            st.caption("No completed tutor response yet.")
+        else:
+            st.json(snapshot["interaction"]["response"])
+        if snapshot["grounded_xai"] is not None:
+            st.json(snapshot["grounded_xai"])
+
+    with st.expander("Developer transport trace", expanded=False):
+        st.json(snapshot["developer"])
 
 
 def main() -> None:
@@ -198,7 +346,8 @@ def main() -> None:
         "Observable signals only: gaze is coarse AOI evidence, not eye tracking; "
         "no cognition or emotion claim is shown."
     )
-    runtime = _live_runtime()
+    resources = _live_resources()
+    runtime = resources.runtime
 
     with st.sidebar:
         st.subheader("PDF deck")
@@ -248,40 +397,15 @@ def main() -> None:
             if selected_slide != snapshot["slide"]["id"]:
                 runtime.set_slide(int(selected_slide))
 
-    _render_media(runtime, master_switch, runtime.snapshot()["deck"]["loaded"])
-    runtime.poll()
-    snapshot = runtime.snapshot()
-
-    status_left, status_right = st.columns(2)
-    with status_left:
-        st.subheader("Transport state")
-        st.json(snapshot["transport"])
-        st.caption(f"Runtime state: {snapshot['runtime']['state']} — {snapshot['runtime']['status_copy']}")
-    with status_right:
-        st.subheader("Latest gaze evidence")
-        st.json(snapshot["gaze"])
-        st.caption("Camera preview is provided by the media component and is distinct from derived gaze evidence.")
-
-    left, right = st.columns((1.15, 0.85))
-    with left:
-        _render_slide(snapshot)
-    with right:
-        st.subheader("Turn transcript and timing")
-        st.json(snapshot["turn"])
-        _render_confirmation(runtime, snapshot)
-        st.subheader("Grounded tutor response")
-        if snapshot["interaction"] is None:
-            st.caption("No completed tutor response yet.")
-        else:
-            st.json(snapshot["interaction"]["response"])
-        if snapshot["grounded_xai"] is not None:
-            st.json(snapshot["grounded_xai"])
-
-    with st.expander("Developer transport trace", expanded=False):
-        st.json(snapshot["developer"])
+    render_live_workspace(
+        resources,
+        master_switch=master_switch,
+        deck_loaded=runtime.snapshot()["deck"]["loaded"],
+    )
+    _render_periodic(resources)
     st.caption(
         "Manual transcript/file-audio regression workflows remain available in the existing demo apps. "
-        "For AutoDL SSH forwarding, use the documented same-origin single-port fallback when WebRTC cannot play."
+        "For AutoDL SSH forwarding, launch the formal same-origin single-port HTTP media path."
     )
 
 

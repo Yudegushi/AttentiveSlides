@@ -59,6 +59,8 @@ class FakeController:
         self.disconnect_count = 0
         self.outcomes: list[LiveTurnOutcome] = []
         self.confirmations: list[tuple[str, str]] = []
+        self.audio_worker = type("WorkerState", (), {"is_running": False})()
+        self.sensing_worker = type("WorkerState", (), {"is_running": False})()
 
     def set_slide(self, slide_id: int) -> None:
         self.slides.append(slide_id)
@@ -165,6 +167,30 @@ class LiveViewModelTest(unittest.TestCase):
         self.assertEqual(snapshot["confirmation"]["query_id"], pending_result.resolved_query.query_id)
         self.assertTrue(snapshot["interaction"]["pending_confirmation"])
 
+    def test_stop_clears_a_pending_turn_from_the_rendering_snapshot(self) -> None:
+        self.view.start()
+        self.controller.outcomes.append(
+            LiveTurnOutcome(
+                interaction_result=run_interaction(
+                    transcript="解释这个",
+                    gaze_prediction=GazePrediction(5, "middle_right", "right_figure", 0.76),
+                    learning_state=LearningState(),
+                ),
+                pending_confirmation=True,
+                transcript="解释这个",
+                turn_started_at=10.0,
+                turn_ended_at=10.5,
+            )
+        )
+        self.view.poll()
+
+        self.view.stop(reason="master switch off")
+
+        snapshot = self.view.snapshot()
+        self.assertFalse(snapshot["confirmation"]["pending"])
+        self.assertIsNone(snapshot["interaction"])
+        self.assertIsNone(snapshot["turn"]["transcript"])
+
     def test_grounded_selection_is_routed_without_recreating_workers(self) -> None:
         adapter = FakeTutorAdapter()
         view = LiveViewModel(
@@ -185,6 +211,15 @@ class LiveViewModelTest(unittest.TestCase):
         self.assertEqual(grounded["tutor"]["selection"], "grounded")
         self.assertEqual(grounded["grounded_xai"], {"status": "success"})
         self.assertEqual(view.snapshot()["tutor"]["selection"], "deterministic")
+
+    def test_developer_snapshot_exposes_worker_cleanup_state(self) -> None:
+        self.controller.audio_worker.is_running = True
+        self.controller.sensing_worker.is_running = False
+
+        developer = self.view.snapshot()["developer"]
+
+        self.assertTrue(developer["audio_worker_running"])
+        self.assertFalse(developer["sensing_worker_running"])
 
     def test_correction_routes_to_controller_and_disconnect_copy_is_explicit(self) -> None:
         self.controller.outcomes.append(

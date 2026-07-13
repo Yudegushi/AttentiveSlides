@@ -85,15 +85,17 @@ class LiveViewModel:
 
     def stop(self, *, reason: str = "requested") -> None:
         with self._lock:
-            if self.controller.state == RuntimeState.STOPPED:
-                return
-        self.controller.stop(reason=reason)
+            already_stopped = self.controller.state == RuntimeState.STOPPED
+        if not already_stopped:
+            self.controller.stop(reason=reason)
         with self._lock:
+            self._last_outcome = None
             self._status_copy = "Stopped; live workers and media queues were cleaned up."
 
     def handle_disconnect(self) -> None:
         self.controller.handle_disconnect()
         with self._lock:
+            self._last_outcome = None
             self._status_copy = "Browser disconnected; live workers were stopped."
 
     def configure_grounded_tutor(self, enabled: bool) -> bool:
@@ -200,6 +202,12 @@ class LiveViewModel:
                 "media_running": stats.is_running,
                 "source_cleanup_state": stats.cleanup_state,
                 "queue_drops": stats.video_drops + stats.audio_drops,
+                "audio_worker_running": _worker_is_running(
+                    getattr(self.controller, "audio_worker", None)
+                ),
+                "sensing_worker_running": _worker_is_running(
+                    getattr(self.controller, "sensing_worker", None)
+                ),
             },
         }
 
@@ -266,3 +274,8 @@ def _unknown_gaze(status_copy: str) -> dict[str, Any]:
         "freshness_seconds": None,
         "status_copy": status_copy,
     }
+
+
+def _worker_is_running(worker: Any | None) -> bool:
+    state = getattr(worker, "is_running", False)
+    return bool(state() if callable(state) else state)

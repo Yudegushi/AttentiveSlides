@@ -1,129 +1,166 @@
 # Live UI and Release Handoff
 
-Status: partial - automated Checkpoints 6-7 complete; PDF upload and master control verified, but live tutor turns remain blocked by AutoDL SSH-WebRTC peer transport.
+Status: implementation, automated integration, and formal five-turn manual gate
+complete; final regression/commit/push in progress.
+
 Branch: `codex/live-system-integration-v1`
-Scope: Checkpoints 6–7
 
-## Purpose
+Start HEAD: `aaadb51bb5a1d01149a965bd340de7b4c1fa7d4f`
 
-对话 4 必须先读取 `../03_continuous_runtime/handoff.md`，并在结束前用最终实测结果重写本文件。完整字段和证据要求见 `../../00_global_contract.md` 第 7 节。
+Scope: formal single-port HTTP media integration into the existing continuous
+runtime. No main change, merge, or PR is authorized.
 
-## Required completion record
+## Ownership and invariants
 
-- Start/end commit、Checkpoint 6–7 commits 与最终 branch HEAD。
-- live app/controller ownership、confirmation/correction 与 grounded tutor integration。
-- automated/manual verification matrix、5-turn live evidence、启动与 SSH forwarding 命令。
-- provider/model/dependency requirements、latency/transport observations与 error recovery。
-- known limitations、not-run/blocked items、push 状态与 clean workspace evidence。
+- `apps/streamlit_live.py` no longer imports or calls `streamlit-webrtc`.
+- One cached `LiveResources` graph owns exactly one `BrowserMediaSource`,
+  `SystemController`, audio worker, sensing worker, `LiveTurnRunner`, ingress,
+  and lifecycle service. The controller and ingress share the identical source.
+- HTTP handlers validate/decode/timestamp/enqueue only. They never run sensing,
+  VAD, STT, LLM/tutor work, or Streamlit commands.
+- Existing single-active-turn, frozen context, confirmation resume, correction
+  override, `SensingSnapshotStore`, canonical pipeline, and bounded queue
+  contracts remain in force.
+- No raw audio/video persistence was added.
 
-## Dependency on previous conversation
+## Formal route and launcher
 
-在对话 3 handoff 未完成且 controller lifecycle/E2E tests 不稳定时，不得用 Streamlit UI 掩盖 backend 缺口。现有 grounded API/XAI pipeline 必须复用，不能新建平行 DashScope client。
+`scripts/run_live_single_port.py` exposes one loopback public port. `/capture`
+and `/media/*` route to the internal aiohttp ingress; Streamlit page/upload,
+assets, health, and WebSocket route to internal Streamlit. The browser uses one
+`ssh -N -L` mapping only.
 
-## Completion record
+The launcher uses its own `sys.executable`, preserves WebSocket subprotocols and
+binary/text frames, streams large HTTP bodies, preserves header multiplicity,
+rewrites internal redirects, waits for both internal health endpoints, inherits
+child output, fails fixed-port collisions, and exits if a healthy internal
+service later dies.
 
-- Start HEAD: 4f19b6b; baseline: feature/api-llm-pipeline@705f1a2.
-- Checkpoint 6: a01d8e7 feat: add live Streamlit interface.
-- Checkpoint 7: af29b1a feat: connect live runtime to grounded tutor.
-- Follow-up UI fix: 383f393 fix: make live master switch automation-safe.
-- This handoff and its release documentation are committed after final checks.
-  No branch was pushed, merged, reset, cleaned, or switched.
+## Media lifecycle
 
-## Interfaces and lifecycle choices
+- Master ON arms ingress and renders the capture iframe outside the periodic
+  fragment. Automatic capture has one permission-recovery button only.
+- Browser video is bounded 320-pixel JPEG; audio is 16 kHz mono signed-16 PCM.
+  Both use relative same-origin requests, one in-flight request per track, a
+  heartbeat, track ended/mute handlers, and pagehide cleanup.
+- The coordinator owns session replacement ordering: stop old runtime, activate
+  the shared source for the pending generation, clear readiness, then require
+  new fresh video and audio before starting the runtime.
+- Freshness uses server monotonic receive times: 2.0 seconds per track and a
+  3.0-second heartbeat timeout. OFF, disconnect, heartbeat loss, stale track,
+  ended track, and persistent mute converge on idempotent controller/worker/
+  source/queue cleanup.
 
-- apps/streamlit_live.py caches one LiveViewModel. The UI owns only commands
-  and rendering; callbacks only convert, timestamp, and enqueue packets.
-- SystemController retains idempotent lifecycle, a single active turn, frozen
-  turn context, and confirmation resume. LiveTurnRunner still builds
-  PipelineInputBundle and calls the canonical pipeline. Corrections replace
-  predictions before the tutor call.
-- LiveTutorAdapter defaults to deterministic TutorAgent. Optional grounded mode
-  lazily reuses GroundedTutorAgent, OpenAICompatibleLLMClient, prompt, parser,
-  validator, and fallback; it returns the compatible legacy response.
-- LiveTelemetryLogger wraps InteractionLogger. JSONL keeps canonical fields and
-  safe provider/model/latency/usage, resolved/confirmed AOI, context sources,
-  validation, and fallback fields. No raw media, prompts, request IDs, secrets,
-  raw provider responses, or hidden reasoning are logged.
-- The view exposes safe state, packet stats, coarse gaze, transcript/timing,
-  confirmation, response, sanitized XAI, and diagnostics. It never recreates
-  workers on a Streamlit rerun.
+## Test and browser evidence so far
 
-## Automated evidence
+The formal-path technical spike passed before lifecycle implementation:
 
-All commands ran in
-/root/autodl-tmp/workspace/AttentiveSlides-live-system with
-/root/miniconda3/envs/attentive-app/bin/python because the SSH shell has no
-python alias.
+- Streamlit 1.59.1 WebSocket stayed connected after forwarding its requested
+  subprotocols.
+- The embedded `/capture` iframe received camera and microphone permission.
+- Real media reached roughly 4.6–4.9 video frames/s and 9.1–10.8 audio chunks/s.
+- `lecture_11_human_ai_interaction.pdf` crossed the public proxy with exact
+  13,499,116-byte size and SHA-256
+  `9c3ea47a5746cb6681447b3a51fd125ddf17485412ec79629f3c2d20fd5601d8`.
+- Page close/heartbeat cleanup stopped the source and cleared both queues.
 
-- C6 targeted: 30 tests passed; C6 RED -> GREEN focused: 11 tests; C6 full:
-  222 tests passed.
-- C7 RED -> GREEN focused suite: 25 tests; full
-  python -m unittest discover -s tests -v: 227 tests passed.
-- python -m compileall modules apps scripts tests passed.
-- python scripts/demo_tutor_loop.py completed deterministic
-  confirmation/correction scenarios and wrote its existing demo JSONL.
-- Both evaluations passed: reference-resolution had all four metrics 1.0 over
-  eight scenarios; scenario-output accuracy was 1.0.
-- Follow-up Master-switch RED -> GREEN:
-  `/root/miniconda3/envs/attentive-app/bin/python -m unittest tests.test_streamlit_live.StreamlitLiveSurfaceTest.test_master_switch_uses_a_button_state_transition -v`
-  passed.
-- Related regression:
-  `/root/miniconda3/envs/attentive-app/bin/python -m unittest tests.test_streamlit_live tests.test_live_view_model tests.test_live_turn_runner tests.test_system_controller tests.test_system_pipeline -v`
-  passed 22 tests.
+Targeted transport/runtime tests passed before manual acceptance, including
+shared-source identity, dual-track freshness, single-track refusal, OFF and
+disconnect cleanup, replacement generation ordering, rerun idempotency,
+multi-megabyte upload, WebSocket frames/subprotocols, confirmation, correction,
+and OFF-to-ON restart. The integrated test uses a real PDF provider and real
+controller/service/worker boundaries with injected deterministic sensing,
+transcription, and tutor implementations; it never initializes MediaPipe or
+calls a real API.
 
-Automated tests used fakes or synthetic packets only: no real camera/microphone
-and no real LLM/API call.
+## Formal-path defects found and fixed during acceptance
 
-## Manual browser acceptance
+1. Proxy WebSocket subprotocols were not relayed, preventing Streamlit from
+   maintaining its session. Both proxy directions now preserve the selected
+   protocol; a RED/GREEN test covers it.
+2. A listener preflight falsely rejected a recently closed fixed port. The
+   preflight now uses `SO_REUSEADDR`; a RED/GREEN test covers the TIME_WAIT case.
+3. Periodic AOI rendering used `st.dataframe` and reproducibly segfaulted inside
+   PyArrow after a real PDF upload. The stable slide panel now uses ordinary
+   Streamlit text and an in-memory derived JPEG data URI, keeping the periodic
+   path out of PyArrow and the proxy-owned `/media/*` route.
+4. AutoDL MediaPipe Tasks lacked `face_landmarker.task`, `libGLESv2.so.2`, and
+   `libEGL.so.1`. The accepted environment uses the official 3,758,596-byte
+   bundle plus Ubuntu `libgles2` and `libegl1`; the extractor successfully
+   initialized EGL/OpenGL ES and closed cleanly.
+5. AutoDL could not reach `huggingface.co`. The unchanged
+   Systran faster-whisper-small model was prefetched through `hf-mirror.com` and
+   supplied via `ATTENTIVE_WHISPER_MODEL`; a local 1-second WAV completed STT.
+6. The audio environment lacked the preferred PCM VAD and fell back to a
+   peak-sensitive deterministic backend. `webrtcvad-wheels==2.0.14` is now an
+   audio requirement, and `default_vad_backend()` selects `WebRtcVadBackend`.
+   This package is local VAD only and is unrelated to ICE/STUN/TURN transport.
+7. Empty STT output from ambient noise was incorrectly allowed into reference
+   resolution and confirmation. `AudioWorker` now publishes it as recoverable
+   `invalid/empty_transcript`, so the controller returns to monitoring without
+   creating an interaction. Valid STT behavior is unchanged.
+8. `st.image` generated a Streamlit `/media/<hash>.jpg` URL, conflicting with
+   the formal proxy rule that owns `/media/*` for ingress. The derived overlay
+   now uses a bounded in-memory JPEG data URI; nothing is persisted.
+9. Loading a deck could stop the shared source while the service still believed
+   the runtime was active. Reconciliation now resets that lifecycle and again
+   requires fresh video plus audio before restart.
+10. Manual acceptance showed that raw `pdf_semantic_block_N` choices could not
+    be mapped to visible regions. Slide AOIs now have numbered badges and the
+    selector uses the same number with PDF-derived text/type. OFF and disconnect
+    also clear unfinished-turn UI state.
+11. Launcher output captured an intermittent `dictionary changed size during
+    iteration` while Streamlit and the sensing worker generated neighboring
+    slide AOIs concurrently. `AOIManager` now serializes every in-process
+    manifest mutation/write with one reentrant lock; a deterministic two-thread
+    regression test covers the crash.
 
-Attempted on 2026-07-13:
+## Runtime prerequisites
 
-1. A loopback-only Streamlit live UI ran on AutoDL 8512 and opened at local
-   http://localhost:8503 through ssh -N -L 8503:127.0.0.1:8512 AutoDL. The
-   deterministic selection, master switch, transport/gaze/turn panels, AOI
-   surface, confirmation area, and developer trace rendered.
-2. A valid two-page temporary PDF was generated on AutoDL and copied locally.
-   The controlled browser exposed its file input but could not inject the PDF;
-   the UI stayed without a deck. Starting the live controller, speaking a
-   deictic request, confirmation/correction, and inspecting a live JSONL line
-   are **not verified**. No real provider was selected or called.
-3. The single-origin fallback ran on remote 8513 through local 8504. With
-   camera/microphone permission it reached 4.68 video FPS and 10.92 audio
-   chunks/s, queue depths 3 and 63. After OFF and 1.2 seconds, both depths were
-   zero and cleanup was stopped: browser stopped.
-4. Fallback validates browser transport and stop cleanup only; it does not
-   substitute for the blocked live tutor turn.
+- Python 3.10 in `/root/miniconda3/envs/attentive-app`.
+- `requirements-audio.txt` and `requirements-media.txt`.
+- Ubuntu `libgles2` and `libegl1` for MediaPipe Tasks.
+- Official `data/models/face_landmarker.task` (SHA-256 above).
+- A local faster-whisper-small snapshot supplied in
+  `ATTENTIVE_WHISPER_MODEL` when Hugging Face is unreachable.
+- Deterministic tutor for mandatory acceptance. No external provider/API is
+  required or called by automated tests.
 
-5. After Chrome file-URL access was enabled, the standard file chooser loaded
-   the valid two-page temporary PDF through remote 8514 and local 8503. The
-   button-based master switch rendered `Stop live runtime` across the rerun.
-   Retry commands: `setsid /root/miniconda3/envs/attentive-app/bin/python -m streamlit run apps/streamlit_live.py --server.address 127.0.0.1 --server.port 8514`
-   and `ssh -N -L 8503:127.0.0.1:8514 AutoDL`.
-6. Browser diagnostics received an SDP answer and ICE candidates, then changed
-   from `connecting` to `failed` after about 15 seconds repeatedly. The live
-   view stayed `is_running: false` with zero queues; no provider/API was called.
-7. An initial transient Streamlit connection ended with its parent context. A
-   detached retry was used for the transport diagnosis; final cleanup found no
-   remote live-app process, stopped the SSH tunnel, and finalized the test tab.
+Exact setup, launcher, and single `ssh -L` commands are in
+`docs/live_ui_usage.md` and `docs/browser_media_runtime.md`.
 
-Local 8501 was already an unrelated SSH listener, so temporary 8503/8504 ports
-were used without disturbing it. The temporary AutoDL services and SSH tunnels
-started for acceptance were stopped afterwards.
+## Formal five-turn acceptance evidence
 
-## Interface difference, risk, and remaining manual gate
+Five confirmation/final pairs completed without restarting the formal app:
 
-The AutoDL SSH TCP route is confirmed to fail after SDP/ICE negotiation. No
-controller, packet, queue, snapshot-store, or canonical pipeline contract was
-changed to work around the direct WebRTC peer transport limitation.
+1. right-corner explanation: `pdf_semantic_block_4` ->
+   `pdf_semantic_block_6`, corrected, `step_by_step`;
+2. “Thank you”: `pdf_semantic_block_5` -> `whole_slide`, corrected, `review`;
+3. “Simplify this cost”: `pdf_semantic_block_4` retained, `review`;
+4. “Explain this in Chinese”: `pdf_semantic_block_4` ->
+   `pdf_semantic_block_10`, corrected, `simplify`;
+5. “This confusing”: `pdf_semantic_block_4` retained, `simplify`.
 
-The incomplete live manual flow is a release risk. A WebRTC-reachable browser
-route is required to load a real PDF, enable the master switch, speak a deictic
-request, select a correction, inspect data/logs/live_interactions.jsonl, then
-stop or close the page.
+JSONL grew from one excluded pre-fix diagnostic record to 14 records: five
+pending/final pairs plus two earlier unfinished attempts and one ambient-noise
+pending turn after the five completed turns. Final Master OFF reported
+controller `stopped`, ingress inactive/disarmed, source not running, both queues
+zero, zero drops/overruns, and cleanup state `stopped: master switch off`; the
+removed iframe released browser tracks through pagehide.
 
-## Final state
+Acceptance also exposed real usability limits: room audio/STT produced several
+inaccurate transcripts and one spurious Russian pending transcript, and the
+original internal-only AOI labels were not actionable. Numbered text-backed
+choices address the latter; STT accuracy and dense overlapping AOIs remain
+follow-up UX/model-quality work rather than transport regressions.
 
-The branch remains `codex/live-system-integration-v1` and is not pushed. Final
-`git diff --check` is clean; `?? data/live_decks/` is preserved manual PDF-render
-output. No temporary remote live-app process remains; the acceptance SSH tunnel
-is stopped and the controlled Chrome test tab is finalized.
+## Remaining release work
+
+1. run compileall, full unittest discovery, demo loop, both evaluations, and
+   `git diff --check` after the final AOI/OFF regression fix;
+2. inspect the workspace, excluding `data/live_decks/` and `data/models/`;
+3. create one scoped commit and push only
+   `codex/live-system-integration-v1`.
+
+Do not claim the standalone fallback as the live tutor acceptance, and do not
+resume WebRTC/ICE/STUN/TURN investigation.
