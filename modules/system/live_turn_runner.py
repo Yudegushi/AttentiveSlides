@@ -43,6 +43,9 @@ class LiveTurnOutcome:
     interaction_result: InteractionResult | None
     pending_confirmation: bool
     error: str | None = None
+    transcript: str | None = None
+    turn_started_at: float | None = None
+    turn_ended_at: float | None = None
 
 
 class LiveTurnRunner:
@@ -65,11 +68,17 @@ class LiveTurnRunner:
         self._pending: dict[str, Any] = {}
 
     def run(self, audio_result: AudioTurnResult, context: FrozenTurnContext) -> LiveTurnOutcome:
+        metadata = {
+            "transcript": audio_result.transcript.text if audio_result.transcript is not None else None,
+            "turn_started_at": audio_result.turn.started_at,
+            "turn_ended_at": audio_result.turn.ended_at,
+        }
         if audio_result.status != "completed" or audio_result.transcript is None:
             return LiveTurnOutcome(
                 interaction_result=None,
                 pending_confirmation=False,
                 error=audio_result.error or audio_result.status,
+                **metadata,
             )
         aggregated = self.context_collector.aggregate(context)
         bundle = build_pipeline_input_bundle(
@@ -86,8 +95,12 @@ class LiveTurnRunner:
         )
         pending = interaction.tutor_response.response_mode == "pending_confirmation"
         if pending:
-            self._pending[interaction.resolved_query.query_id] = bundle
-        return LiveTurnOutcome(interaction_result=interaction, pending_confirmation=pending)
+            self._pending[interaction.resolved_query.query_id] = (bundle, metadata)
+        return LiveTurnOutcome(
+            interaction_result=interaction,
+            pending_confirmation=pending,
+            **metadata,
+        )
 
     def resume_confirmation(
         self,
@@ -95,7 +108,7 @@ class LiveTurnRunner:
         confirmed_aoi_id: str,
     ) -> LiveTurnOutcome:
         try:
-            bundle = self._pending.pop(query_id)
+            bundle, metadata = self._pending.pop(query_id)
         except KeyError as exc:
             raise LookupError(f"No pending frozen turn for query {query_id}.") from exc
         interaction = run_interaction_from_bundle(
@@ -105,4 +118,8 @@ class LiveTurnRunner:
             tutor=self.tutor,
             logger=self.logger,
         )
-        return LiveTurnOutcome(interaction_result=interaction, pending_confirmation=False)
+        return LiveTurnOutcome(
+            interaction_result=interaction,
+            pending_confirmation=False,
+            **metadata,
+        )
