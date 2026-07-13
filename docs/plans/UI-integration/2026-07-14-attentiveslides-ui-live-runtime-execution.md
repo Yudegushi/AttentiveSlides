@@ -496,13 +496,13 @@ git commit -m "feat: adapt uploaded deck for live sensing"
 - Produces: `render_slide_viewport(*, deck_id, slide, layout_revision, drawing_enabled, show_aoi_overlay, key) -> dict[str, object] | None`.
 - Component returns: `deck_id`, `slide_id`, `layout_revision`, viewport/slide/AOI rects, DPR, and optional normalized manual bbox.
 
-- [ ] **Step 1: Write pure geometry parser tests**
+- [x] **Step 1: Write pure geometry parser tests**
 
 Test valid CSS-pixel payload parsing, negative viewport coordinates after scroll, invalid rectangle ordering, missing AOI IDs, and deck/slide identity preservation. The parser receives `received_at` from Python and must ignore any browser timestamp for freshness.
 
 Run the new tests. Expected: FAIL because `slide_geometry.py` does not exist.
 
-- [ ] **Step 2: Implement the geometry dataclasses and parser**
+- [x] **Step 2: Implement the geometry dataclasses and parser**
 
 Use plain dataclasses:
 
@@ -533,7 +533,7 @@ class SlideViewportGeometry:
 
 Do not import the normalized AOI `BBox` or Member 2's `BBox`.
 
-- [ ] **Step 3: Implement the dependency-free component wrapper**
+- [x] **Step 3: Implement the dependency-free component wrapper**
 
 Declare the component from the checked-in static directory. Convert the slide image to a data URL in Python and pass normalized AOIs. Preserve the AppTest escape hatch by returning `None` when `ATTENTIVE_DISABLE_CANVAS_FOR_APPTEST=1`.
 
@@ -563,7 +563,7 @@ The plain JavaScript component must:
 
 Do not add React, npm, a build pipeline, or a second visible slide.
 
-- [ ] **Step 4: Run the technical spike before integrating the app**
+- [x] **Step 4: Run the technical spike before integrating the app**
 
 Create a temporary diagnostic call in `apps/streamlit_attentive_slides.py`, launch:
 
@@ -584,7 +584,7 @@ Through the forwarded port, verify and record:
 
 Expected gate: all five pass. If `window.frameElement` is inaccessible or coordinates remain component-local, stop this task and report; do not continue with guessed offsets.
 
-- [ ] **Step 5: Remove the temporary diagnostics and run tests**
+- [x] **Step 5: Remove the temporary diagnostics and run tests**
 
 Run:
 
@@ -598,7 +598,7 @@ git diff --check
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add modules/system/slide_geometry.py \
