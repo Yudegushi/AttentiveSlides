@@ -1,3 +1,4 @@
+import asyncio
 from io import BytesIO
 import unittest
 
@@ -168,7 +169,7 @@ class LiveIngressServiceTest(unittest.TestCase):
         self.assertTrue(self.source.video_queue.empty())
         self.assertTrue(self.source.audio_queue.empty())
 
-    def test_external_shared_source_stop_restarts_runtime_through_fresh_gate(self):
+    def test_external_source_stop_requires_new_video_and_audio(self):
         original_start = self.runtime.start
 
         def start_runtime_and_source():
@@ -180,12 +181,24 @@ class LiveIngressServiceTest(unittest.TestCase):
         self.source.stop(reason="deck reload")
 
         self.service.reconcile_once()
+        self.service.reconcile_once()
+        self.assertEqual(self.runtime.start_count, 1)
 
-        self.assertEqual(self.runtime.stop_count, 1)
-        self.assertFalse(self.runtime.is_running)
+        self.ingress.accept_video_jpeg(
+            "session-a", jpeg_payload(), timestamp=2.0
+        )
+        self.service.reconcile_once()
+        self.assertEqual(self.runtime.start_count, 1)
+
+        self.ingress.accept_audio_pcm(
+            "session-a",
+            pcm_payload(),
+            timestamp=2.1,
+            sample_rate=16_000,
+            channels=1,
+        )
         self.service.reconcile_once()
         self.assertEqual(self.runtime.start_count, 2)
-        self.assertTrue(self.source.is_running)
 
     def test_timeout_and_disconnect_stop_controller_and_source(self):
         self.start_ready_session()
@@ -283,6 +296,63 @@ class LiveIngressServiceTest(unittest.TestCase):
         self.service.shutdown()
         self.service.shutdown()
         self.assertFalse(thread.is_alive())
+
+
+class LiveIngressCoordinatorHealthTest(unittest.IsolatedAsyncioTestCase):
+    def make_service(self):
+        from modules.media.live_ingress_service import LiveIngressService
+
+        clock = FakeClock()
+        source = BrowserMediaSource(clock=clock)
+        ingress = FallbackMediaIngress(
+            source,
+            clock=clock,
+            start_armed=False,
+            coordinated_activation=True,
+        )
+        return LiveIngressService(
+            runtime=FakeRuntime(),
+            source=source,
+            ingress=ingress,
+            clock=clock,
+            port=0,
+        )
+
+    async def test_health_is_available_while_coordinator_is_pending(self):
+        service = self.make_service()
+        task = asyncio.create_task(asyncio.sleep(60))
+        self.addAsyncCleanup(self._cancel_task, task)
+        service._coordinator_task = task
+
+        healthy, payload = service.health_status()
+
+        self.assertTrue(healthy)
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["coordinator_running"])
+        self.assertIsNone(payload["coordinator_last_error"])
+
+    async def test_health_is_unavailable_after_coordinator_failure(self):
+        service = self.make_service()
+
+        async def fail():
+            raise RuntimeError("reconcile exploded")
+
+        task = asyncio.create_task(fail())
+        with self.assertRaisesRegex(RuntimeError, "reconcile exploded"):
+            await task
+        service._coordinator_task = task
+        service._coordinator_last_error = "RuntimeError: reconcile exploded"
+
+        healthy, payload = service.health_status()
+
+        self.assertFalse(healthy)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("reconcile exploded", payload["coordinator_last_error"])
+
+    async def _cancel_task(self, task):
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
 
 
 if __name__ == "__main__":

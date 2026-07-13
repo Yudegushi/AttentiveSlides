@@ -49,6 +49,7 @@ class LiveIngressService:
         self._server_loop: asyncio.AbstractEventLoop | None = None
         self._runner: web.AppRunner | None = None
         self._coordinator_task: asyncio.Task[None] | None = None
+        self._coordinator_last_error: str | None = None
         self._startup_failure: BaseException | None = None
 
     @property
@@ -100,6 +101,9 @@ class LiveIngressService:
                 if not self.source.is_running:
                     self.runtime.stop(reason="shared media source stopped")
                     self._runtime_generation = None
+                    self.ingress.reset_active_readiness(
+                        reason="shared media source stopped"
+                    )
                     return
                 if not snapshot.heartbeat_fresh:
                     self.ingress.stop_active(reason="browser inactive")
@@ -172,13 +176,29 @@ class LiveIngressService:
     def stats_payload(self) -> dict[str, object]:
         return self.ingress.stats_payload()
 
+    def health_status(self) -> tuple[bool, dict[str, object]]:
+        with self._lock:
+            task = self._coordinator_task
+            error = self._coordinator_last_error
+        running = task is not None and not task.done()
+        healthy = running and error is None
+        return healthy, {
+            "status": "ok" if healthy else "error",
+            "coordinator_running": running,
+            "coordinator_last_error": error,
+        }
+
     def _serve(self, ready: Event) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         with self._lock:
             self._server_loop = loop
         runner = web.AppRunner(
-            build_fallback_app(self.ingress, capture_html=self._capture_html)
+            build_fallback_app(
+                self.ingress,
+                capture_html=self._capture_html,
+                health_check=self.health_status,
+            )
         )
 
         async def start() -> None:
@@ -191,6 +211,7 @@ class LiveIngressService:
                     raise RuntimeError("live media ingress has no listening socket")
                 self.bound_port = int(sockets[0].getsockname()[1])
                 self._runner = runner
+                self._coordinator_last_error = None
                 self._coordinator_task = asyncio.create_task(self._coordinate())
             except BaseException as exc:
                 self._startup_failure = exc
@@ -208,6 +229,16 @@ class LiveIngressService:
         loop.close()
 
     async def _coordinate(self) -> None:
-        while True:
-            self.reconcile_once()
-            await asyncio.sleep(self._interval)
+        try:
+            while True:
+                self.reconcile_once()
+                await asyncio.sleep(self._interval)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            with self._lock:
+                self._coordinator_last_error = f"{type(exc).__name__}: {exc}"
+            with suppress(Exception):
+                if self.runtime.is_running:
+                    self.runtime.stop(reason="coordinator failed")
+            raise

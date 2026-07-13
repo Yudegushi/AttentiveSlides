@@ -162,6 +162,18 @@ class FallbackMediaIngress:
             self._clear_sessions(reason=reason)
             return True
 
+    def reset_active_readiness(self, *, reason: str) -> bool:
+        """Require new media packets without replacing the browser session."""
+
+        with self._lock:
+            if self._active_session_id is None:
+                return False
+            self._last_video_received_at = None
+            self._last_audio_received_at = None
+            self._cleanup_reason = reason
+            self.source.start()
+            return True
+
     def heartbeat(self, session_id: str) -> None:
         with self._lock:
             self._require_active_session(session_id)
@@ -581,6 +593,7 @@ def build_fallback_app(
     ingress: FallbackMediaIngress | None = None,
     *,
     capture_html: str | None = None,
+    health_check: Callable[[], tuple[bool, dict[str, object]]] | None = None,
 ) -> web.Application:
     """Build the one-origin fallback application without starting a device."""
 
@@ -594,7 +607,10 @@ def build_fallback_app(
         return web.Response(text=fallback_page_html(), content_type="text/html")
 
     async def health(_request: web.Request) -> web.Response:
-        return web.json_response({"status": "ok"})
+        if health_check is None:
+            return web.json_response({"status": "ok"})
+        healthy, payload = health_check()
+        return web.json_response(payload, status=200 if healthy else 503)
 
     async def capture(_request: web.Request) -> web.Response:
         return web.Response(

@@ -4,6 +4,7 @@ import warnings
 
 import numpy as np
 from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 from PIL import Image
 
 from modules.media import BrowserMediaSource
@@ -134,3 +135,23 @@ class SinglePortTransportTest(unittest.TestCase):
         self.assertIn('fetch("/media/audio"', page)
         self.assertNotIn("http://", page)
         self.assertNotIn("https://", page)
+
+
+class SinglePortHealthRouteTest(unittest.IsolatedAsyncioTestCase):
+    async def test_health_returns_503_for_injected_failure(self):
+        payload = {
+            "status": "error",
+            "coordinator_running": False,
+            "coordinator_last_error": "RuntimeError: reconcile exploded",
+        }
+        app = build_fallback_app(
+            health_check=lambda: (False, payload)
+        )
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        self.addAsyncCleanup(client.close)
+
+        response = await client.get("/health")
+
+        self.assertEqual(response.status, 503)
+        self.assertEqual(await response.json(), payload)
