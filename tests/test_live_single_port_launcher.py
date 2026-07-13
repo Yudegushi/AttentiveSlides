@@ -1,4 +1,5 @@
 import sys
+import gzip
 import io
 import socket
 import unittest
@@ -113,6 +114,13 @@ class LiveSinglePortProxyTest(unittest.IsolatedAsyncioTestCase):
                 return socket_response
             if request.path == "/redirect":
                 raise web.HTTPFound(location=f"{self.streamlit_origin}/target")
+            if request.path == "/component-gzip":
+                payload = gzip.compress(b"<script>componentReady</script>")
+                return web.Response(
+                    body=payload,
+                    content_type="text/html",
+                    headers={"Content-Encoding": "gzip"},
+                )
             body = await request.read()
             response = web.Response(
                 body=body or f"streamlit:{request.path}".encode(),
@@ -186,6 +194,16 @@ class LiveSinglePortProxyTest(unittest.IsolatedAsyncioTestCase):
             message = await websocket.receive(timeout=2)
             self.assertEqual(message.type, WSMsgType.BINARY)
             self.assertEqual(message.data, b"streamlit-frame")
+
+    async def test_compressed_component_body_stays_compressed_through_proxy(self):
+        async with self.client.get(
+            self.proxy_url("/component-gzip")
+        ) as response:
+            self.assertEqual(response.headers["Content-Encoding"], "gzip")
+            self.assertEqual(
+                await response.text(),
+                "<script>componentReady</script>",
+            )
 
     async def test_internal_origin_is_removed_from_redirect(self):
         async with self.client.get(

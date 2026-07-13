@@ -138,7 +138,7 @@ def build_proxy_app(streamlit_origin: str, ingress_origin: str) -> web.Applicati
         try:
             if request.headers.get("Upgrade", "").lower() == "websocket":
                 return await _proxy_websocket(request, target)
-            async with ClientSession() as client:
+            async with ClientSession(auto_decompress=False) as client:
                 async with client.request(
                     request.method,
                     target,
