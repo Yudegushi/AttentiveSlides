@@ -9,8 +9,10 @@ from pathlib import Path
 
 from modules.system.main_ui_state import (
     ManifestDeckBrowser,
+    build_main_conversation_defaults,
     build_main_turn_defaults,
     build_main_ui_view_model,
+    reset_main_conversation_state,
     reset_main_turn_state,
 )
 
@@ -601,6 +603,83 @@ class TestMainUIState(unittest.TestCase):
             state["main_active_slide_id"],
             4,
         )
+
+
+    def test_turn_reset_preserves_conversation(
+        self,
+    ) -> None:
+        state = {
+            **build_main_turn_defaults(),
+            **build_main_conversation_defaults(),
+            "main_typed_command": "explain this",
+            "main_conversation_turns": [
+                {
+                    "turn_id": "turn_001"
+                }
+            ],
+        }
+
+        reset_main_turn_state(state)
+
+        self.assertEqual(
+            state["main_typed_command"],
+            "",
+        )
+
+        self.assertEqual(
+            state["main_conversation_turns"],
+            [
+                {
+                    "turn_id": "turn_001"
+                }
+            ],
+        )
+
+    def test_conversation_reset_preserves_preferences(
+        self,
+    ) -> None:
+        state = {
+            **build_main_turn_defaults(),
+            **build_main_conversation_defaults(),
+            "main_typed_command": "explain this",
+            "main_history_enabled": False,
+            "main_history_max_items": 2,
+            "main_conversation_turns": [
+                {
+                    "turn_id": "turn_001"
+                }
+            ],
+        }
+
+        reset_main_conversation_state(
+            state,
+            deck_id="deck_a",
+        )
+
+        self.assertEqual(
+            state["main_conversation_turns"],
+            [],
+        )
+
+        self.assertEqual(
+            state["main_conversation_deck_id"],
+            "deck_a",
+        )
+
+        self.assertFalse(
+            state["main_history_enabled"]
+        )
+
+        self.assertEqual(
+            state["main_history_max_items"],
+            2,
+        )
+
+        self.assertEqual(
+            state["main_typed_command"],
+            "explain this",
+        )
+
 
 
 if __name__ == "__main__":

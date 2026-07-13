@@ -116,6 +116,7 @@ def build_main_turn_defaults() -> dict[str, Any]:
         "main_confirmation_error": None,
         "main_confirmed": False,
         "main_tutor_result": None,
+        "main_tutor_context": None,
         "main_tutor_error": None,
         "main_xai_result": None,
     }
@@ -124,14 +125,31 @@ def build_main_turn_defaults() -> dict[str, Any]:
 def reset_main_turn_state(
     state: MutableMapping[str, Any],
 ) -> None:
-    """Reset turn-specific state while preserving deck settings."""
-    if not isinstance(state, MutableMapping):
-        raise TypeError(
-            "state must be a mutable mapping."
-        )
-
+    """Reset turn-specific state while preserving session data."""
     for key, value in build_main_turn_defaults().items():
         state[key] = value
+
+
+def build_main_conversation_defaults() -> dict[str, Any]:
+    """Return session-level conversation defaults."""
+    return {
+        "main_conversation_turns": [],
+        "main_conversation_deck_id": None,
+        "main_history_enabled": True,
+        "main_history_max_items": 4,
+        "main_conversation_error": None,
+    }
+
+
+def reset_main_conversation_state(
+    state: MutableMapping[str, Any],
+    *,
+    deck_id: str | None = None,
+) -> None:
+    """Clear turns while preserving history preferences."""
+    state["main_conversation_turns"] = []
+    state["main_conversation_deck_id"] = deck_id
+    state["main_conversation_error"] = None
 
 
 class ManifestDeckBrowser:

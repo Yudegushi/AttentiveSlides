@@ -28,6 +28,11 @@ from streamlit_drawable_canvas import (
     st_canvas,
 )
 
+from modules.system.conversation_history import (
+    build_conversation_turn,
+    export_conversation,
+    upsert_conversation_turn,
+)
 from modules.system.integrated_pipeline_xai import (
     build_integrated_pipeline_xai,
 )
@@ -47,8 +52,10 @@ from modules.system.main_ui_state import (
     MainUISlide,
     MainUIViewModel,
     ManifestDeckBrowser,
+    build_main_conversation_defaults,
     build_main_turn_defaults,
     build_main_ui_view_model,
+    reset_main_conversation_state,
     reset_main_turn_state,
 )
 from modules.system.manual_confirmation import (
@@ -211,6 +218,7 @@ def _initialize_global_state() -> None:
         "main_selection_text": "",
         "main_selection_error": None,
         **build_main_turn_defaults(),
+        **build_main_conversation_defaults(),
     }
 
     for key, value in defaults.items():
@@ -368,6 +376,7 @@ def _resolve_active_browser(
 def _ensure_deck_state(
     browser: Any,
 ) -> None:
+    """Synchronize deck state and isolate conversation history."""
     deck_signature = json.dumps(
         {
             "deck_id": browser.deck_id,
@@ -384,16 +393,34 @@ def _ensure_deck_state(
         )
     )
 
-    if (
-        previous_signature
-        != deck_signature
-    ):
+    if previous_signature != deck_signature:
+        previous_conversation_deck = (
+            st.session_state.get(
+                "main_conversation_deck_id"
+            )
+        )
+
+        if (
+            previous_conversation_deck
+            != browser.deck_id
+        ):
+            reset_main_conversation_state(
+                st.session_state,
+                deck_id=browser.deck_id,
+            )
+        else:
+            st.session_state[
+                "main_conversation_deck_id"
+            ] = browser.deck_id
+
         st.session_state[
             "main_deck_signature"
         ] = deck_signature
+
         st.session_state[
             "main_active_slide_id"
         ] = browser.slide_ids[0]
+
         _reset_turn_state()
 
     if (
@@ -405,6 +432,7 @@ def _ensure_deck_state(
         st.session_state[
             "main_active_slide_id"
         ] = browser.slide_ids[0]
+
         _reset_turn_state()
 
 
@@ -435,6 +463,36 @@ def _render_sidebar_status(
             "No cloud request is made "
             "during this stage."
         ),
+    )
+
+    st.sidebar.markdown(
+        "### Conversation memory"
+    )
+
+    st.sidebar.checkbox(
+        "Use recent conversation history",
+        key="main_history_enabled",
+        help=(
+            "Only sanitized recent turns are "
+            "included. Current slide evidence "
+            "remains the grounding source."
+        ),
+    )
+
+    st.sidebar.slider(
+        "Recent turns sent to tutor",
+        min_value=1,
+        max_value=4,
+        key="main_history_max_items",
+        disabled=not st.session_state[
+            "main_history_enabled"
+        ],
+    )
+
+    st.sidebar.caption(
+        "Stored in this session: "
+        f"{len(st.session_state['main_conversation_turns'])} "
+        "turn(s)."
     )
 
     st.sidebar.markdown(
@@ -601,6 +659,9 @@ def _invalidate_confirmation() -> None:
     ] = None
     st.session_state[
         "main_tutor_result"
+    ] = None
+    st.session_state[
+        "main_tutor_context"
     ] = None
     st.session_state[
         "main_tutor_error"
@@ -1438,10 +1499,320 @@ def _render_confirmation_panel(
             )
 
 
+def _clear_conversation() -> None:
+    """Clear stored turns without changing current settings."""
+    active_deck_id = st.session_state.get(
+        "main_conversation_deck_id"
+    )
+
+    reset_main_conversation_state(
+        st.session_state,
+        deck_id=active_deck_id,
+    )
+
+
+def _start_follow_up() -> None:
+    """Start a new confirmed turn while preserving the target."""
+    st.session_state[
+        "main_typed_command"
+    ] = ""
+
+    st.session_state[
+        "main_intent_source"
+    ] = None
+
+    st.session_state[
+        "main_explicit_intent"
+    ] = None
+
+    st.session_state[
+        "main_intent_result"
+    ] = None
+
+    st.session_state[
+        "main_intent_error"
+    ] = None
+
+    _invalidate_confirmation()
+
+
+def _record_completed_turn(
+    *,
+    tutor_payload: dict[str, Any],
+    llm_xai_payload: dict[str, Any],
+) -> None:
+    """Upsert one successful, sanitized tutoring turn."""
+    confirmed = st.session_state.get(
+        "main_confirmed_interaction"
+    )
+
+    if confirmed is None:
+        raise ValueError(
+            "A confirmed interaction is required "
+            "before recording a conversation turn."
+        )
+
+    integrated = build_integrated_pipeline_xai(
+        target_scope=(
+            st.session_state[
+                "main_target_scope"
+            ]
+        ),
+        manual_bbox=(
+            st.session_state[
+                "main_manual_bbox"
+            ]
+        ),
+        selection_matches=(
+            st.session_state[
+                "main_selection_matches"
+            ]
+        ),
+        intent_result=(
+            st.session_state[
+                "main_intent_result"
+            ]
+        ),
+        confirmed_interaction=confirmed,
+        tutor_result=tutor_payload,
+        llm_xai=llm_xai_payload,
+        cloud_text_allowed=(
+            st.session_state[
+                "main_cloud_text_allowed"
+            ]
+        ),
+    )
+
+    turn = build_conversation_turn(
+        confirmed_interaction=confirmed,
+        tutor_result=tutor_payload,
+        llm_xai=llm_xai_payload,
+        integrated_xai=integrated,
+    )
+
+    st.session_state[
+        "main_conversation_turns"
+    ] = upsert_conversation_turn(
+        st.session_state[
+            "main_conversation_turns"
+        ],
+        turn,
+    )
+
+
+def _render_conversation_history(
+    view: MainUIViewModel,
+) -> None:
+    """Render sanitized session-level tutoring history."""
+    turns = st.session_state[
+        "main_conversation_turns"
+    ]
+
+    metric_columns = st.columns(3)
+
+    metric_columns[0].metric(
+        "Stored turns",
+        len(turns),
+    )
+
+    metric_columns[1].metric(
+        "History enabled",
+        (
+            "Yes"
+            if st.session_state[
+                "main_history_enabled"
+            ]
+            else "No"
+        ),
+    )
+
+    metric_columns[2].metric(
+        "Tutor history limit",
+        st.session_state[
+            "main_history_max_items"
+        ],
+    )
+
+    st.caption(
+        "Conversation data remains in the current "
+        "Streamlit session. Only bounded, sanitized "
+        "history is supplied to the tutor."
+    )
+
+    control_columns = st.columns(2)
+
+    control_columns[0].button(
+        "Clear conversation",
+        width="stretch",
+        disabled=not turns,
+        on_click=_clear_conversation,
+    )
+
+    export_payload = export_conversation(
+        deck_id=view.deck_id,
+        turns=turns,
+    )
+
+    control_columns[1].download_button(
+        "Export conversation JSON",
+        data=json.dumps(
+            export_payload,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        file_name=(
+            f"{view.deck_id}_conversation.json"
+        ),
+        mime="application/json",
+        disabled=not turns,
+        key=(
+            f"conversation_export_"
+            f"{view.deck_id}"
+        ),
+    )
+
+    if st.session_state[
+        "main_conversation_error"
+    ]:
+        st.error(
+            st.session_state[
+                "main_conversation_error"
+            ]
+        )
+
+    if not turns:
+        st.info(
+            "No completed tutoring turns "
+            "have been recorded."
+        )
+        return
+
+    summary_rows = [
+        {
+            "turn": index,
+            "slide": turn["slide_id"],
+            "command": turn[
+                "user_command"
+            ],
+            "intent": turn["intent"],
+            "target": turn.get(
+                "confirmed_aoi_id"
+            ),
+            "reliability": turn[
+                "reliability_level"
+            ],
+            "fallback": turn[
+                "fallback_used"
+            ],
+        }
+        for index, turn in enumerate(
+            turns,
+            start=1,
+        )
+    ]
+
+    st.dataframe(
+        summary_rows,
+        hide_index=True,
+        width="stretch",
+    )
+
+    indexed_turns = list(
+        enumerate(
+            turns,
+            start=1,
+        )
+    )
+
+    for index, turn in reversed(
+        indexed_turns
+    ):
+        with st.expander(
+            (
+                f"Turn {index}: "
+                f"{turn['user_command']}"
+            ),
+            expanded=(
+                index == len(turns)
+            ),
+        ):
+            st.markdown(
+                "**Learner**"
+            )
+            st.write(
+                turn["user_command"]
+            )
+
+            st.markdown(
+                "**Tutor**"
+            )
+            st.write(
+                turn["answer"]
+            )
+
+            if turn.get(
+                "active_recall_question"
+            ):
+                st.info(
+                    turn[
+                        "active_recall_question"
+                    ]
+                )
+
+            st.json(
+                {
+                    "slide_id": (
+                        turn["slide_id"]
+                    ),
+                    "intent": (
+                        turn["intent"]
+                    ),
+                    "intent_source": (
+                        turn[
+                            "intent_source"
+                        ]
+                    ),
+                    "target_source": (
+                        turn[
+                            "target_source"
+                        ]
+                    ),
+                    "confirmed_aoi_id": (
+                        turn[
+                            "confirmed_aoi_id"
+                        ]
+                    ),
+                    "confirmation_source": (
+                        turn[
+                            "confirmation_source"
+                        ]
+                    ),
+                    "source_ids": (
+                        turn["source_ids"]
+                    ),
+                    "reliability_level": (
+                        turn[
+                            "reliability_level"
+                        ]
+                    ),
+                    "validation_is_valid": (
+                        turn[
+                            "validation_is_valid"
+                        ]
+                    ),
+                    "fallback_used": (
+                        turn[
+                            "fallback_used"
+                        ]
+                    ),
+                }
+            )
+
+
 def _render_tutor_generation_panel(
     view: MainUIViewModel,
 ) -> None:
-    """Render the explicit grounded-generation control."""
+    """Render explicit grounded generation with history gates."""
     st.markdown(
         "#### Grounded tutor"
     )
@@ -1499,6 +1870,10 @@ def _render_tutor_generation_panel(
             "main_tutor_error"
         ] = None
 
+        st.session_state[
+            "main_conversation_error"
+        ] = None
+
         try:
             with st.spinner(
                 "Generating and validating "
@@ -1527,6 +1902,20 @@ def _render_tutor_generation_panel(
                             ]
                         ),
                         api_configured=True,
+                        conversation_turns=(
+                            st.session_state[
+                                "main_conversation_turns"
+                            ]
+                            if st.session_state[
+                                "main_history_enabled"
+                            ]
+                            else []
+                        ),
+                        history_max_items=int(
+                            st.session_state[
+                                "main_history_max_items"
+                            ]
+                        ),
                     )
                 )
 
@@ -1542,23 +1931,54 @@ def _render_tutor_generation_panel(
                 f"{type(exc).__name__}: "
                 f"{exc}"
             )
+
+            st.session_state[
+                "main_tutor_context"
+            ] = None
+
             st.session_state[
                 "main_tutor_result"
             ] = None
+
             st.session_state[
                 "main_xai_result"
             ] = None
 
         else:
             st.session_state[
+                "main_tutor_context"
+            ] = payload["context"]
+
+            st.session_state[
                 "main_tutor_result"
             ] = payload["tutor"]
+
             st.session_state[
                 "main_xai_result"
             ] = payload["xai"]
+
             st.session_state[
                 "main_tutor_error"
             ] = None
+
+            try:
+                _record_completed_turn(
+                    tutor_payload=(
+                        payload["tutor"]
+                    ),
+                    llm_xai_payload=(
+                        payload["xai"]
+                    ),
+                )
+
+            except Exception as exc:
+                st.session_state[
+                    "main_conversation_error"
+                ] = (
+                    "Tutor answer succeeded, but "
+                    "conversation recording failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
 
     if st.session_state[
         "main_tutor_error"
@@ -1566,6 +1986,15 @@ def _render_tutor_generation_panel(
         st.error(
             st.session_state[
                 "main_tutor_error"
+            ]
+        )
+
+    if st.session_state[
+        "main_conversation_error"
+    ]:
+        st.warning(
+            st.session_state[
+                "main_conversation_error"
             ]
         )
 
@@ -1579,7 +2008,7 @@ def _render_tutor_generation_panel(
 
 
 def _render_tutor_result() -> None:
-    """Render the learner-facing grounded answer."""
+    """Render the answer and multi-turn follow-up control."""
     result = st.session_state[
         "main_tutor_result"
     ]
@@ -1591,7 +2020,14 @@ def _render_tutor_result() -> None:
         )
         return
 
-    st.markdown("### Tutor answer")
+    context = st.session_state.get(
+        "main_tutor_context"
+    ) or {}
+
+    st.markdown(
+        "### Tutor answer"
+    )
+
     st.markdown(
         result["answer"]
     )
@@ -1616,7 +2052,7 @@ def _render_tutor_result() -> None:
             ]
         )
 
-    columns = st.columns(4)
+    columns = st.columns(5)
 
     columns[0].metric(
         "Status",
@@ -1653,9 +2089,18 @@ def _render_tutor_result() -> None:
         ),
     )
 
+    columns[4].metric(
+        "History turns",
+        context.get(
+            "history_item_count",
+            0,
+        ),
+    )
+
     st.markdown(
         "#### Why this answer"
     )
+
     st.write(
         result[
             "decision_summary"
@@ -1666,7 +2111,26 @@ def _render_tutor_result() -> None:
         "Tutor response metadata",
         expanded=False,
     ):
-        st.json(result)
+        st.json(
+            {
+                "context": context,
+                "response": result,
+            }
+        )
+
+    st.divider()
+
+    st.caption(
+        "Start a follow-up to preserve the "
+        "current target while creating a new "
+        "command, intent, and confirmation."
+    )
+
+    st.button(
+        "Start follow-up",
+        width="stretch",
+        on_click=_start_follow_up,
+    )
 
 
 def _render_main_xai() -> None:
@@ -2383,13 +2847,13 @@ def _render_lower_workspace(
         context_tab,
         tutor_tab,
         xai_tab,
-        session_tab,
+        conversation_tab,
     ) = st.tabs(
         [
             "Context preview",
             "Tutor",
             "Explainability",
-            "Session",
+            "Conversation",
         ]
     )
 
@@ -2412,6 +2876,7 @@ def _render_lower_workspace(
         st.markdown(
             "#### Current slide text"
         )
+
         st.write(
             view.active_slide.slide_text
             or "No slide text."
@@ -2453,86 +2918,106 @@ def _render_lower_workspace(
 
         _render_main_xai()
 
-    with session_tab:
+    with conversation_tab:
         st.subheader(
-            "Session state"
+            "Conversation history"
         )
-        st.json(
-            {
-                "deck_id": view.deck_id,
-                "active_slide_id": (
-                    view.active_slide_id
-                ),
-                "uploaded_deck_id": (
-                    st.session_state[
-                        "main_uploaded_deck_id"
-                    ]
-                ),
-                "target_scope": (
-                    st.session_state[
-                        "main_target_scope"
-                    ]
-                ),
-                "manual_bbox": (
-                    st.session_state[
-                        "main_manual_bbox"
-                    ]
-                ),
-                "selected_aoi_ids": (
-                    st.session_state[
-                        "main_selected_aoi_ids"
-                    ]
-                ),
-                "typed_command": (
-                    st.session_state[
-                        "main_typed_command"
-                    ]
-                ),
-                "intent_source": (
-                    st.session_state[
-                        "main_intent_source"
-                    ]
-                ),
-                "explicit_intent": (
-                    st.session_state[
-                        "main_explicit_intent"
-                    ]
-                ),
-                "intent_result": (
-                    st.session_state[
-                        "main_intent_result"
-                    ]
-                ),
-                "confirmed": (
-                    st.session_state[
-                        "main_confirmed"
-                    ]
-                ),
-                "confirmation_source": (
-                    st.session_state[
-                        "main_confirmation_source"
-                    ]
-                ),
-                "confirmed_aoi_id": (
-                    st.session_state[
-                        "main_confirmed_aoi_id"
-                    ]
-                ),
-                "corrected_from_aoi_id": (
-                    st.session_state[
-                        "main_corrected_from_aoi_id"
-                    ]
-                ),
-                "confirmed_interaction": (
-                    st.session_state[
-                        "main_confirmed_interaction"
-                    ]
-                ),
-                "camera_enabled": False,
-                "microphone_enabled": False,
-                "cloud_llm_called": False,
-            }
+
+        _render_conversation_history(
+            view
         )
+
+        st.divider()
+
+        with st.expander(
+            "Current session debug state",
+            expanded=False,
+        ):
+            st.json(
+                {
+                    "deck_id": view.deck_id,
+                    "active_slide_id": (
+                        view.active_slide_id
+                    ),
+                    "uploaded_deck_id": (
+                        st.session_state[
+                            "main_uploaded_deck_id"
+                        ]
+                    ),
+                    "target_scope": (
+                        st.session_state[
+                            "main_target_scope"
+                        ]
+                    ),
+                    "manual_bbox": (
+                        st.session_state[
+                            "main_manual_bbox"
+                        ]
+                    ),
+                    "selected_aoi_ids": (
+                        st.session_state[
+                            "main_selected_aoi_ids"
+                        ]
+                    ),
+                    "typed_command": (
+                        st.session_state[
+                            "main_typed_command"
+                        ]
+                    ),
+                    "intent_source": (
+                        st.session_state[
+                            "main_intent_source"
+                        ]
+                    ),
+                    "intent_result": (
+                        st.session_state[
+                            "main_intent_result"
+                        ]
+                    ),
+                    "confirmed": (
+                        st.session_state[
+                            "main_confirmed"
+                        ]
+                    ),
+                    "confirmed_interaction": (
+                        st.session_state[
+                            "main_confirmed_interaction"
+                        ]
+                    ),
+                    "tutor_context": (
+                        st.session_state[
+                            "main_tutor_context"
+                        ]
+                    ),
+                    "conversation_deck_id": (
+                        st.session_state[
+                            "main_conversation_deck_id"
+                        ]
+                    ),
+                    "conversation_turn_count": len(
+                        st.session_state[
+                            "main_conversation_turns"
+                        ]
+                    ),
+                    "history_enabled": (
+                        st.session_state[
+                            "main_history_enabled"
+                        ]
+                    ),
+                    "history_max_items": (
+                        st.session_state[
+                            "main_history_max_items"
+                        ]
+                    ),
+                    "camera_enabled": False,
+                    "microphone_enabled": False,
+                    "cloud_llm_called": bool(
+                        st.session_state[
+                            "main_tutor_result"
+                        ]
+                    ),
+                }
+            )
 
 
 def _draw_aoi_overlay(

@@ -38,6 +38,7 @@ class TestStreamlitAttentiveSlides(
                 "Use whole slide",
                 "Cancel confirmation",
                 "Generate grounded answer",
+                "Clear conversation",
                 "Reset current turn",
             ),
             forbidden_buttons=(),

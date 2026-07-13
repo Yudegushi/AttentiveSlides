@@ -18,6 +18,10 @@ from modules.interaction.interaction_contract_adapter import (
     InteractionResolution,
     resolve_interaction_input,
 )
+from modules.system.conversation_history import (
+    MAX_LLM_HISTORY_TURNS,
+    build_llm_interaction_history,
+)
 from modules.system.main_ui_state import (
     MainUISlide,
 )
@@ -84,6 +88,13 @@ class MainTutorContextBuild:
             ),
             "confirmed_context": (
                 self.confirmed_context
+            ),
+            "history_item_count": len(
+                self.context.interaction_history
+            ),
+            "history_item_count": len(
+                self.context
+                .interaction_history
             ),
             "evidence": list(
                 self.context
@@ -242,6 +253,12 @@ def build_main_tutor_context(
     confirmed_interaction: Mapping[str, Any],
     *,
     slide: MainUISlide,
+    conversation_turns: Sequence[
+        Mapping[str, Any]
+    ] = (),
+    history_max_items: int = (
+        MAX_LLM_HISTORY_TURNS
+    ),
 ) -> MainTutorContextBuild:
     """Build TutorContext from one confirmed manual turn."""
     interaction = parse_confirmed_interaction(
@@ -327,6 +344,15 @@ def build_main_tutor_context(
             "usable text context."
         )
 
+    history_items = build_llm_interaction_history(
+        conversation_turns,
+        deck_id=interaction.deck_id,
+        exclude_interaction_id=(
+            interaction.interaction_id
+        ),
+        max_items=history_max_items,
+    )
+
     context = TutorContext(
         deck_id=interaction.deck_id,
         slide_id=interaction.slide_id,
@@ -341,7 +367,7 @@ def build_main_tutor_context(
             slide.neighbor_slide_text
         ),
         resolved_query=resolved_query,
-        interaction_history=[],
+        interaction_history=history_items,
         adaptive_strategy=(
             resolved_query.adaptive_strategy
         ),
@@ -364,6 +390,12 @@ def generate_main_tutor_response(
     agent: GroundedTutorAgent,
     cloud_text_allowed: bool,
     api_configured: bool,
+    conversation_turns: Sequence[
+        Mapping[str, Any]
+    ] = (),
+    history_max_items: int = (
+        MAX_LLM_HISTORY_TURNS
+    ),
 ) -> MainTutorGeneration:
     """Run the grounded agent after all gates pass."""
     assessment = assess_tutor_generation(
@@ -384,6 +416,12 @@ def generate_main_tutor_response(
         build_main_tutor_context(
             confirmed_interaction,
             slide=slide,
+            conversation_turns=(
+                conversation_turns
+            ),
+            history_max_items=(
+                history_max_items
+            ),
         )
     )
 

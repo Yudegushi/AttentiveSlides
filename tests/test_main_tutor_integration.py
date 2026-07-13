@@ -435,5 +435,126 @@ class TestMainTutorIntegration(
         )
 
 
+    def test_context_contains_sanitized_history(
+        self,
+    ) -> None:
+        history = [
+            {
+                "turn_id": "turn_001",
+                "interaction_id": "old_001",
+                "deck_id": "demo_deck",
+                "slide_id": 4,
+                "timestamp_utc": (
+                    "2026-07-13T00:00:00+00:00"
+                ),
+                "user_command": "summarize this",
+                "intent": "summarize",
+                "intent_source": "typed_text",
+                "target_source": "whole_slide",
+                "confirmed_aoi_id": "whole_slide",
+                "confirmation_source": (
+                    "explicit_user_confirmation"
+                ),
+                "corrected_from_aoi_id": None,
+                "answer": "Previous summary.",
+                "response_mode": "summarize",
+                "decision_summary": "",
+                "active_recall_question": None,
+                "source_ids": [
+                    "slide_004_full_text"
+                ],
+                "reliability_level": "supported",
+                "validation_is_valid": True,
+                "fallback_used": False,
+            }
+        ]
+
+        build = build_main_tutor_context(
+            make_confirmed_payload(),
+            slide=make_slide(),
+            conversation_turns=history,
+            history_max_items=4,
+        )
+
+        self.assertEqual(
+            len(
+                build.context
+                .interaction_history
+            ),
+            1,
+        )
+
+        self.assertEqual(
+            build.context
+            .interaction_history[0][
+                "assistant_answer"
+            ],
+            "Previous summary.",
+        )
+
+        self.assertEqual(
+            build.to_public_dict()[
+                "history_item_count"
+            ],
+            1,
+        )
+
+    def test_generation_request_receives_history(
+        self,
+    ) -> None:
+        history = [
+            {
+                "turn_id": "turn_001",
+                "interaction_id": "old_001",
+                "deck_id": "demo_deck",
+                "slide_id": 4,
+                "timestamp_utc": (
+                    "2026-07-13T00:00:00+00:00"
+                ),
+                "user_command": "summarize this",
+                "intent": "summarize",
+                "intent_source": "typed_text",
+                "target_source": "whole_slide",
+                "confirmed_aoi_id": "whole_slide",
+                "confirmation_source": (
+                    "explicit_user_confirmation"
+                ),
+                "corrected_from_aoi_id": None,
+                "answer": "Previous summary.",
+                "response_mode": "summarize",
+                "decision_summary": "",
+                "active_recall_question": None,
+                "source_ids": [
+                    "slide_004_full_text"
+                ],
+                "reliability_level": "supported",
+                "validation_is_valid": True,
+                "fallback_used": False,
+            }
+        ]
+
+        generation = generate_main_tutor_response(
+            make_confirmed_payload(),
+            slide=make_slide(),
+            agent=GroundedTutorAgent(
+                llm_client=StaticClient(
+                    valid_response()
+                ),
+            ),
+            cloud_text_allowed=True,
+            api_configured=True,
+            conversation_turns=history,
+        )
+
+        self.assertEqual(
+            len(
+                generation.result.request
+                .interaction_history
+            ),
+            1,
+        )
+
+
+
 if __name__ == "__main__":
     unittest.main()
