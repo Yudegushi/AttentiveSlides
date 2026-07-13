@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AttentiveSlides live capture</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; }
+    button { font-size: 1rem; padding: .55rem .9rem; }
+    #status { font-weight: 600; }
+    video { background: #111; display: block; margin-top: .75rem; max-width: 320px; width: 100%; }
+  </style>
+</head>
+<body>
+  <p id="status">Preparing camera and microphone…</p>
+  <button id="permission" hidden>Grant camera/mic</button>
+  <video id="preview" autoplay muted playsinline></video>
+<script>
+(() => {
+  const sessionId = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() :
+    String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+  const status = document.getElementById("status");
+  const permissionButton = document.getElementById("permission");
+  const preview = document.getElementById("preview");
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d", { alpha: false });
+  const muteTimers = new Map();
+  let stream = null;
+  let audioContext = null;
+  let mediaNode = null;
+  let processor = null;
+  let silentGain = null;
+  let videoTimer = null;
+  let heartbeatTimer = null;
+  let running = false;
+  let generation = null;
+  let videoInFlight = false;
+  let audioInFlight = false;
+
+  function headers(extra = {}) {
+    return { "X-Attentive-Media-Session": sessionId, ...extra };
+  }
+
+  async function requireOk(response) {
+    if (!response.ok) throw new Error(await response.text() || ("HTTP " + response.status));
+    return response;
+  }
+
+  function setStatus(message) {
+    status.textContent = message;
+  }
+
+  function downsampleToS16(input, sourceRate) {
+    const count = Math.max(1, Math.floor(input.length * 16000 / sourceRate));
+    const output = new Int16Array(count);
+    for (let index = 0; index < count; index += 1) {
+      const sample = input[Math.min(input.length - 1, Math.floor(index * sourceRate / 16000))];
+      output[index] = Math.max(-1, Math.min(1, sample)) * 32767;
+    }
+    return output;
+  }
+
+  function installTrackCleanup(track) {
+    track.addEventListener("ended", () => void stopCapture(true, "Media device ended."));
+    track.addEventListener("mute", () => {
+      window.clearTimeout(muteTimers.get(track));
+      muteTimers.set(track, window.setTimeout(() => {
+        if (track.muted) void stopCapture(true, "Media device stayed muted.");
+      }, 2000));
+    });
+    track.addEventListener("unmute", () => {
+      window.clearTimeout(muteTimers.get(track));
+      muteTimers.delete(track);
+    });
+  }
+
+  async function waitForActivation(expectedGeneration) {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const payload = await (await requireOk(await fetch("/media/stats"))).json();
+      if (!payload.armed) throw new Error("Master switch is off.");
+      if (payload.session_state === "active" && payload.generation === expectedGeneration) return;
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    }
+    throw new Error("Media ingress activation timed out.");
+  }
+
+  function startVideoPump() {
+    videoTimer = window.setInterval(() => {
+      if (!running || videoInFlight || preview.videoWidth === 0) return;
+      canvas.width = 320;
+      canvas.height = Math.max(1, Math.round(preview.videoHeight * 320 / preview.videoWidth));
+      context.drawImage(preview, 0, 0, canvas.width, canvas.height);
+      videoInFlight = true;
+      canvas.toBlob(async (blob) => {
+        if (!blob || !running) {
+          videoInFlight = false;
+          return;
+        }
+        try {
+          await requireOk(await fetch("/media/video", {
+            method: "POST",
+            headers: headers({
+              "Content-Type": "image/jpeg",
+              "X-Media-Timestamp": String(performance.now() / 1000),
+            }),
+            body: await blob.arrayBuffer(),
+          }));
+        } catch (error) {
+          void stopCapture(false, "Video transport stopped: " + error.message);
+        } finally {
+          videoInFlight = false;
+        }
+      }, "image/jpeg", 0.65);
+    }, 200);
+  }
+
+  async function startAudioPump() {
+    audioContext = new AudioContext();
+    mediaNode = audioContext.createMediaStreamSource(stream);
+    processor = audioContext.createScriptProcessor(4096, 1, 1);
+    silentGain = audioContext.createGain();
+    silentGain.gain.value = 0;
+    processor.onaudioprocess = (event) => {
+      if (!running || audioInFlight) return;
+      const pcm = downsampleToS16(event.inputBuffer.getChannelData(0), audioContext.sampleRate);
+      audioInFlight = true;
+      fetch("/media/audio", {
+        method: "POST",
+        headers: headers({
+          "Content-Type": "audio/L16",
+          "X-Media-Timestamp": String(performance.now() / 1000),
+          "X-Media-Sample-Rate": "16000",
+          "X-Media-Channels": "1",
+        }),
+        body: pcm.buffer,
+      }).then(requireOk).catch((error) => {
+        void stopCapture(false, "Audio transport stopped: " + error.message);
+      }).finally(() => { audioInFlight = false; });
+    };
+    mediaNode.connect(processor);
+    processor.connect(silentGain);
+    silentGain.connect(audioContext.destination);
+    await audioContext.resume();
+    if (audioContext.state !== "running") throw new Error("Audio capture needs a user gesture.");
+  }
+
+  function startHeartbeat() {
+    heartbeatTimer = window.setInterval(() => {
+      if (!running) return;
+      fetch("/media/heartbeat", { method: "POST", headers: headers() })
+        .then(requireOk)
+        .catch((error) => void stopCapture(false, "Heartbeat stopped: " + error.message));
+    }, 1000);
+  }
+
+  async function startCapture(fromUserGesture) {
+    if (running) return;
+    permissionButton.hidden = true;
+    try {
+      const before = await (await requireOk(await fetch("/media/stats"))).json();
+      if (!before.armed) {
+        setStatus("Master switch is off.");
+        return;
+      }
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      if (!stream.getVideoTracks().length || !stream.getAudioTracks().length) {
+        throw new Error("Both camera and microphone tracks are required.");
+      }
+      stream.getTracks().forEach(installTrackCleanup);
+      const started = await (
+        await requireOk(await fetch("/media/start", { method: "POST", headers: headers() }))
+      ).json();
+      generation = started.generation;
+      await waitForActivation(generation);
+      preview.srcObject = stream;
+      await preview.play();
+      running = true;
+      await startAudioPump();
+      startVideoPump();
+      startHeartbeat();
+      setStatus("Camera and microphone are feeding the live runtime.");
+    } catch (error) {
+      await stopCapture(true, "Capture did not start: " + error.message);
+      permissionButton.hidden = false;
+      if (!fromUserGesture) permissionButton.focus();
+    }
+  }
+
+  async function stopCapture(notifyServer, message) {
+    const hadCapture = running || stream;
+    running = false;
+    generation = null;
+    window.clearInterval(videoTimer);
+    window.clearInterval(heartbeatTimer);
+    videoTimer = null;
+    heartbeatTimer = null;
+    muteTimers.forEach((timer) => window.clearTimeout(timer));
+    muteTimers.clear();
+    if (processor) processor.disconnect();
+    if (mediaNode) mediaNode.disconnect();
+    if (silentGain) silentGain.disconnect();
+    processor = null;
+    mediaNode = null;
+    silentGain = null;
+    if (audioContext) await audioContext.close().catch(() => {});
+    audioContext = null;
+    if (stream) stream.getTracks().forEach((track) => track.stop());
+    stream = null;
+    preview.srcObject = null;
+    if (notifyServer && hadCapture) {
+      await fetch("/media/stop", { method: "POST", headers: headers() }).catch(() => {});
+    }
+    if (message) setStatus(message);
+  }
+
+  async function refreshServerState() {
+    try {
+      const payload = await (await requireOk(await fetch("/media/stats"))).json();
+      if (running && (
+        !payload.armed || payload.session_state !== "active" || payload.generation !== generation
+      )) {
+        await stopCapture(false, "Server stopped the live media session.");
+      }
+    } catch (error) {
+      if (running) await stopCapture(false, "Media service unavailable: " + error.message);
+    }
+  }
+
+  permissionButton.addEventListener("click", () => void startCapture(true));
+  window.addEventListener("pagehide", () => {
+    running = false;
+    if (stream) stream.getTracks().forEach((track) => track.stop());
+    navigator.sendBeacon("/media/stop?session=" + encodeURIComponent(sessionId), "");
+  });
+  window.setInterval(refreshServerState, 1000);
+  void startCapture(false);
+})();
+</script>
+</body>
+</html>

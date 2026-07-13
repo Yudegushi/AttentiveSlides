@@ -1,4 +1,5 @@
 faster-whisper
+webrtcvad-wheels==2.0.14
 sounddevice
 soundfile
 streamlit

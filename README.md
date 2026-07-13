@@ -79,3 +79,22 @@ evaluation/
 python -m unittest discover -s tests -v
 python scripts/demo_tutor_loop.py
 ```
+
+## Continuous Live Release
+
+The continuous runtime is available through apps/streamlit_live.py. It reuses
+the existing controller, frozen-turn context, confirmation gate, canonical
+tutor pipeline, and JSONL logger. Deterministic tutoring is the default; the
+**Use grounded API tutor** switch lazily enables the existing validated
+grounded pipeline when its environment is configured.
+
+On AutoDL, use the attentive-app interpreter and bind the server to loopback:
+
+    /root/miniconda3/envs/attentive-app/bin/python -m streamlit run \
+      apps/streamlit_live.py --server.address 127.0.0.1 --server.port 8501
+    ssh -N -L 8501:127.0.0.1:8501 AutoDL
+
+For the browser transport fallback and its limitation, see
+[docs/browser_media_runtime.md](docs/browser_media_runtime.md). For live UI
+steps and the current manual-acceptance status, see
+[docs/live_ui_usage.md](docs/live_ui_usage.md).
