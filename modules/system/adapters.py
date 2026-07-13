@@ -43,6 +43,10 @@ class PipelineInputBundle:
 
 
 class SlideProvider(Protocol):
+    @property
+    def deck_id(self) -> str:
+        ...
+
     def get_slide_frame(self, slide_id: int) -> SlideFrame:
         ...
 
@@ -125,7 +129,10 @@ class ProviderBackedDeckStore:
     @property
     def deck_id(self) -> str:
         if self._deck_id is None:
-            self._deck_id = self.get_slide_frame(5).deck_id
+            raise RuntimeError(
+                "SlideProvider must expose an explicit deck_id after loading a deck; "
+                "deck_id lookup never probes a fixed slide."
+            )
         return self._deck_id
 
     def get_slide_frame(self, slide_id: int) -> SlideFrame:
