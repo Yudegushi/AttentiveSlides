@@ -122,3 +122,19 @@ through the SSH tunnel:
    drops/overruns remain visible.
 
 The fallback is live browser transport, not a manual-upload substitute.
+
+## 2026-07-13 browser acceptance result
+
+The same-origin fallback was exercised from the AutoDL worktree on remote port
+8513 through a temporary ssh -N -L 8504:127.0.0.1:8513 AutoDL tunnel. The
+browser granted camera/microphone access and reached is_running: true with 4.68
+video FPS, 10.92 audio chunks/s, and bounded queue depths of 3 video and 63
+audio. Pressing OFF was observed after 1.2 seconds with both queue depths at
+zero and cleanup_state: "stopped: browser stopped".
+
+A separate Streamlit live UI was opened through remote port 8512 and local
+port 8503. Its PDF upload control could not receive the generated temporary
+PDF through the available controlled-browser interface, so no live deictic
+request, confirmation/correction, or live JSONL event is claimed from that
+run. This result does not change the fallback boundary: it validates browser
+transport and cleanup only, not the tutor UI.

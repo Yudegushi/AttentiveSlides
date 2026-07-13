@@ -49,3 +49,25 @@ Continuous/background microphone monitoring, voice activity detection, speech-en
 decisioning, automatic turn submission, and automatic lecture start are intentionally not
 implemented in the file-based audio module. They must be designed as a future system-level
 feature that combines audio events with gaze/AOI confirmation.
+
+## Continuous live release (Checkpoints 6–7)
+
+The AutoDL worktree now includes the continuous controller, a Streamlit live
+surface, and an optional grounded tutor mode without duplicating the canonical
+pipeline. The default is deterministic; the UI enables the existing grounded
+tutor only when the user opts in and configuration is available.
+
+- LiveViewModel keeps Streamlit reruns at the controller-command boundary.
+- LiveTelemetryLogger adds safe grounded provider/model/validation metadata
+  to existing JSONL interaction events; it does not store raw media or raw
+  provider payloads.
+- Automated verification on AutoDL passed 227 tests, compilation, the
+  deterministic demo, and both eight-scenario evaluations.
+- Browser manual status is partial: the live UI opened through an SSH tunnel,
+  and the same-origin fallback captured camera/microphone and cleaned queues;
+  the controlled browser could not inject the required PDF file, so the real
+  live deictic/confirmation/JSONL path remains outstanding.
+
+See [Live UI usage](docs/live_ui_usage.md),
+[continuous interaction design](docs/continuous_interaction_design.md), and
+the [live release handoff](docs/plans/live-system/handoffs/04_live_release/handoff.md).

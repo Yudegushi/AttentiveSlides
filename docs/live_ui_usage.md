@@ -71,3 +71,26 @@ camera/microphone and do not call a real STT or LLM provider.
 ```bash
 /root/miniconda3/envs/attentive-app/bin/python -m unittest   tests.test_live_view_model tests.test_streamlit_live   tests.test_system_controller tests.test_live_turn_runner -v
 ```
+
+## Grounded tutor and logging
+
+The **Use grounded API tutor** switch starts in deterministic mode. Enabling it
+lazily constructs the existing GroundedTutorAgent; unavailable configuration
+or recoverable provider failure retains deterministic behavior. The interface
+shows only the sanitized grounded XAI view. Each completed canonical event is
+written through LiveTelemetryLogger to data/logs/live_interactions.jsonl with
+safe provider/model/usage, AOI, context-source, validation, and fallback
+metadata. It never writes raw media, prompts, request identifiers, or provider
+payloads.
+
+## 2026-07-13 manual status
+
+The live page was opened over a temporary AutoDL SSH tunnel and showed the
+deterministic tutor selection, master switch, transport state, gaze/turn
+panels, AOI surface, confirmation section, and developer trace. The
+controlled browser did not support injecting the required generated PDF into
+the upload input, so loading a deck, running a real spoken deictic turn,
+performing a confirmation/correction, and observing its live JSONL event
+remain **not verified**. The separate same-origin fallback did capture real
+camera/microphone packets and cleared its queues on OFF; it must not be treated
+as completion of the tutor interaction.
