@@ -94,3 +94,14 @@ performing a confirmation/correction, and observing its live JSONL event
 remain **not verified**. The separate same-origin fallback did capture real
 camera/microphone packets and cleared its queues on OFF; it must not be treated
 as completion of the tutor interaction.
+
+## Chrome upload prerequisite
+
+A second manual retry used Chrome's standard file chooser and reached the
+upload action, but setting the temporary PDF failed with `Not allowed` because
+the ChatGPT Chrome Extension does not have permission to access file URLs.
+Before retrying, open `chrome://extensions`, choose **Details** for the
+ChatGPT Chrome Extension, and enable **Allow access to file URLs**. Then
+restart the documented loopback-only Streamlit server/tunnel and repeat the
+full live acceptance; do not treat this prerequisite as a tutor or transport
+failure.

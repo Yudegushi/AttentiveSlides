@@ -108,3 +108,15 @@ then stop or close the page.
 After the documentation commit: branch remains
 codex/live-system-integration-v1; git diff --check is clean; no temporary
 acceptance process remains; push status is **not pushed**.
+
+## Chrome retry prerequisite
+
+A second Chrome retry reached the standard file chooser for the generated
+temporary PDF, but fileChooser.setFiles failed with `Not allowed`. Chrome
+requires the ChatGPT Chrome Extension setting **Allow access to file URLs**
+before controlled upload can continue. This is an external local permission,
+not a live UI, media, controller, or pipeline failure. No code was changed.
+
+After enabling it at chrome://extensions -> ChatGPT Chrome Extension ->
+Details, rerun the complete live acceptance from PDF upload through five turns,
+confirmation/correction, JSONL/XAI inspection, and OFF/disconnect cleanup.
