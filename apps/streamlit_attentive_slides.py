@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 import os
 import sys
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 REPOSITORY_ROOT = Path(
@@ -24,10 +26,10 @@ from PIL import (
     Image,
     ImageDraw,
 )
-from streamlit_drawable_canvas import (
-    st_canvas,
-)
 
+from modules.system.safe_table import (
+    records_to_html,
+)
 from modules.system.conversation_history import (
     build_conversation_turn,
     export_conversation,
@@ -73,7 +75,7 @@ from modules.system.manual_intent import (
 )
 from modules.system.manual_targeting import (
     ManualSelectionResult,
-    extract_latest_rectangle,
+    map_bbox_to_aois,
 )
 from modules.system.uploaded_deck_service import (
     UploadedDeckWorkspace,
@@ -93,7 +95,6 @@ RUNTIME_DATA_DIR = Path(
     "attentive_slides"
 )
 
-CANVAS_WIDTH = 720
 
 
 def main() -> None:
@@ -117,6 +118,7 @@ def main() -> None:
     )
 
     _initialize_global_state()
+    _normalize_widget_state()
 
     _render_upload_controls(
         workspace
@@ -226,6 +228,229 @@ def _initialize_global_state() -> None:
             st.session_state[key] = value
 
 
+def _render_records_table(
+    data: Any,
+    *args: Any,
+    **kwargs: Any,
+) -> None:
+    """Render a small table without Pandas or PyArrow."""
+    del args
+    del kwargs
+
+    st.markdown(
+        records_to_html(data),
+        unsafe_allow_html=True,
+    )
+
+
+def _normalized_range(
+    value: Any,
+    *,
+    default: tuple[float, float],
+) -> tuple[float, float]:
+    """Return a valid normalized range for a range slider."""
+    if (
+        not isinstance(
+            value,
+            (list, tuple),
+        )
+        or len(value) != 2
+    ):
+        return default
+
+    try:
+        lower = max(
+            0.0,
+            min(
+                1.0,
+                float(value[0]),
+            ),
+        )
+        upper = max(
+            0.0,
+            min(
+                1.0,
+                float(value[1]),
+            ),
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return default
+
+    if lower >= upper:
+        return default
+
+    return (
+        round(lower, 4),
+        round(upper, 4),
+    )
+
+
+def _normalize_widget_state() -> None:
+    """Normalize persisted state before widgets are instantiated."""
+    boolean_defaults = {
+        "main_cloud_text_allowed": True,
+        "main_history_enabled": True,
+        "main_show_aoi_overlay": True,
+        "main_manual_region_active": False,
+    }
+
+    for key, default in boolean_defaults.items():
+        value = st.session_state.get(
+            key,
+            default,
+        )
+
+        st.session_state[key] = (
+            value
+            if isinstance(value, bool)
+            else default
+        )
+
+    try:
+        history_limit = int(
+            st.session_state.get(
+                "main_history_max_items",
+                4,
+            )
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        history_limit = 4
+
+    st.session_state[
+        "main_history_max_items"
+    ] = max(
+        1,
+        min(
+            4,
+            history_limit,
+        ),
+    )
+
+    st.session_state[
+        "main_region_x_range"
+    ] = _normalized_range(
+        st.session_state.get(
+            "main_region_x_range"
+        ),
+        default=(0.10, 0.90),
+    )
+
+    st.session_state[
+        "main_region_y_range"
+    ] = _normalized_range(
+        st.session_state.get(
+            "main_region_y_range"
+        ),
+        default=(0.10, 0.90),
+    )
+
+    if not isinstance(
+        st.session_state.get(
+            "main_conversation_turns"
+        ),
+        list,
+    ):
+        st.session_state[
+            "main_conversation_turns"
+        ] = []
+
+    st.session_state[
+        "main_widget_error"
+    ] = None
+
+
+@st.cache_data(show_spinner=False)
+def _read_slide_image_bytes(
+    image_path: str,
+    modified_time_ns: int,
+) -> bytes:
+    """Read immutable image bytes without keeping a file open."""
+    del modified_time_ns
+
+    return Path(
+        image_path
+    ).read_bytes()
+
+
+def _load_slide_image(
+    image_path: str,
+) -> Image.Image:
+    """Load an RGB image from cached bytes."""
+    path = Path(image_path)
+
+    payload = _read_slide_image_bytes(
+        str(path),
+        path.stat().st_mtime_ns,
+    )
+
+    with Image.open(
+        BytesIO(payload)
+    ) as source:
+        return source.convert("RGB")
+
+
+def _on_cloud_permission_change() -> None:
+    """Handle cloud-permission changes after Streamlit updates the key."""
+    st.session_state[
+        "main_widget_error"
+    ] = None
+
+
+def _on_history_enabled_change() -> None:
+    """Handle history enablement without rewriting its widget key."""
+    st.session_state[
+        "main_widget_error"
+    ] = None
+
+
+def _on_history_limit_change() -> None:
+    """Handle a valid history-limit change."""
+    st.session_state[
+        "main_widget_error"
+    ] = None
+
+
+def _on_overlay_change() -> None:
+    """Handle overlay visibility changes."""
+    st.session_state[
+        "main_widget_error"
+    ] = None
+
+
+def _on_manual_region_change() -> None:
+    """Activate a changed normalized region and invalidate old output."""
+    st.session_state[
+        "main_manual_region_active"
+    ] = True
+
+    st.session_state[
+        "main_widget_error"
+    ] = None
+
+    _invalidate_confirmation()
+
+
+def _activate_manual_region() -> None:
+    """Apply the current normalized region."""
+    st.session_state[
+        "main_manual_region_active"
+    ] = True
+
+    st.session_state[
+        "main_widget_error"
+    ] = None
+
+    _invalidate_confirmation()
+
+
 def _render_upload_controls(
     workspace: UploadedDeckWorkspace,
 ) -> None:
@@ -252,6 +477,7 @@ def _render_upload_controls(
         "Load PDF",
         disabled=uploaded_file is None,
         width="stretch",
+        key="main_load_pdf_button",
     )
 
     if load_clicked:
@@ -306,6 +532,7 @@ def _render_upload_controls(
         if st.sidebar.button(
             "Use built-in demo deck",
             width="stretch",
+            key="main_use_demo_button",
         ):
             st.session_state[
                 "main_uploaded_deck_id"
@@ -460,9 +687,10 @@ def _render_sidebar_status(
         ),
         key="main_cloud_text_allowed",
         help=(
-            "No cloud request is made "
-            "during this stage."
+            "When enabled, only confirmed slide context "
+            "and sanitized conversation history may be sent."
         ),
+        on_change=_on_cloud_permission_change,
     )
 
     st.sidebar.markdown(
@@ -477,16 +705,19 @@ def _render_sidebar_status(
             "included. Current slide evidence "
             "remains the grounding source."
         ),
+        on_change=_on_history_enabled_change,
     )
 
     st.sidebar.slider(
         "Recent turns sent to tutor",
         min_value=1,
         max_value=4,
+        step=1,
         key="main_history_max_items",
         disabled=not st.session_state[
             "main_history_enabled"
         ],
+        on_change=_on_history_limit_change,
     )
 
     st.sidebar.caption(
@@ -570,6 +801,7 @@ def _render_navigation(
         "← Previous",
         disabled=previous_id is None,
         width="stretch",
+        key="main_previous_slide_button",
         on_click=_navigate_to_slide,
         args=(previous_id,),
     )
@@ -590,6 +822,7 @@ def _render_navigation(
         "Next →",
         disabled=next_id is None,
         width="stretch",
+        key="main_next_slide_button",
         on_click=_navigate_to_slide,
         args=(next_id,),
     )
@@ -663,6 +896,10 @@ def _invalidate_confirmation() -> None:
     st.session_state[
         "main_tutor_context"
     ] = None
+
+    st.session_state[
+        "main_last_generated_interaction_id"
+    ] = None
     st.session_state[
         "main_tutor_error"
     ] = None
@@ -673,22 +910,39 @@ def _invalidate_confirmation() -> None:
 
 
 def _clear_manual_region() -> None:
-    """Clear the current rectangle and mapped AOIs."""
+    """Clear the current region and mapped AOIs."""
+    st.session_state[
+        "main_region_x_range"
+    ] = (0.10, 0.90)
+
+    st.session_state[
+        "main_region_y_range"
+    ] = (0.10, 0.90)
+
+    st.session_state[
+        "main_manual_region_active"
+    ] = False
+
     st.session_state[
         "main_manual_bbox"
     ] = None
+
     st.session_state[
         "main_selected_aoi_ids"
     ] = []
+
     st.session_state[
         "main_selection_matches"
     ] = []
+
     st.session_state[
         "main_selection_text"
     ] = ""
+
     st.session_state[
         "main_selection_error"
     ] = None
+
     st.session_state[
         "main_confirmation_target_choice"
     ] = None
@@ -727,10 +981,12 @@ def _render_slide_workspace(
             f" / {view.total_slides}"
         ),
     )
+
     columns[1].metric(
         "AOIs",
         len(slide.aois),
     )
+
     columns[2].metric(
         "Image",
         (
@@ -738,6 +994,12 @@ def _render_slide_workspace(
             if slide.image_available
             else "Fallback"
         ),
+    )
+
+    st.checkbox(
+        "Show AOI overlay",
+        key="main_show_aoi_overlay",
+        on_change=_on_overlay_change,
     )
 
     if (
@@ -749,10 +1011,12 @@ def _render_slide_workspace(
         _render_manual_canvas(
             view
         )
+
     else:
         _set_whole_slide_target(
             view
         )
+
         _render_static_slide(
             slide
         )
@@ -761,31 +1025,36 @@ def _render_slide_workspace(
 def _render_static_slide(
     slide: MainUISlide,
 ) -> None:
-    st.checkbox(
-        "Show AOI overlay",
-        key="main_show_aoi_overlay",
-    )
-
     if (
         slide.image_available
         and slide.image_path
     ):
-        image = Image.open(
+        base_image = _load_slide_image(
             slide.image_path
-        ).convert("RGB")
+        )
 
-        if st.session_state[
-            "main_show_aoi_overlay"
-        ]:
-            image = _draw_aoi_overlay(
-                image,
-                slide,
+        display_image = base_image
+
+        try:
+            if st.session_state[
+                "main_show_aoi_overlay"
+            ]:
+                display_image = _draw_aoi_overlay(
+                    base_image,
+                    slide,
+                )
+
+            st.image(
+                display_image,
+                width="stretch",
             )
 
-        st.image(
-            image,
-            width="stretch",
-        )
+        finally:
+            if display_image is not base_image:
+                display_image.close()
+
+            base_image.close()
+
     else:
         with st.container(
             border=True
@@ -794,6 +1063,7 @@ def _render_static_slide(
                 f"### Slide "
                 f"{slide.slide_id}"
             )
+
             st.write(
                 slide.slide_text
                 or "Slide image unavailable."
@@ -803,132 +1073,303 @@ def _render_static_slide(
 def _render_manual_canvas(
     view: MainUIViewModel,
 ) -> None:
+    """Render a normalized-region editor with an optional image preview."""
     slide = view.active_slide
 
-    if (
-        not slide.image_available
-        or not slide.image_path
-    ):
-        st.warning(
-            "Manual rectangle drawing "
-            "requires a rendered slide image."
-        )
-        return
-
-    background_image = Image.open(
-        slide.image_path
-    ).convert("RGB")
-
-    image_width, image_height = (
-        background_image.size
+    image_path = (
+        Path(slide.image_path)
+        if slide.image_path
+        else None
     )
 
-    canvas_height = round(
-        CANVAS_WIDTH
-        * image_height
-        / max(image_width, 1)
-    )
-
-    canvas_height = max(
-        220,
-        min(canvas_height, 720),
+    has_image = bool(
+        slide.image_available
+        and image_path is not None
+        and image_path.is_file()
     )
 
     st.caption(
-        "Drag one rectangle around the "
-        "region you want to discuss."
+        "Adjust the horizontal and vertical ranges. "
+        "Coordinates are normalized to the slide."
     )
 
-    canvas_result = st_canvas(
-        fill_color=(
-            "rgba(30, 110, 210, 0.20)"
-        ),
-        stroke_width=3,
-        stroke_color="#1E6ED2",
-        background_color="#FFFFFF",
-        background_image=(
-            background_image
-        ),
-        update_streamlit=True,
-        height=canvas_height,
-        width=CANVAS_WIDTH,
-        drawing_mode="rect",
-        display_toolbar=True,
-        key=(
-            f"manual_canvas_"
-            f"{view.deck_id}_"
-            f"{view.active_slide_id}_"
-            f"{st.session_state['main_canvas_revision']}"
-        ),
+    st.slider(
+        "Horizontal region",
+        min_value=0.0,
+        max_value=1.0,
+        step=0.01,
+        key="main_region_x_range",
+        on_change=_on_manual_region_change,
     )
 
-    try:
-        selection = (
-            extract_latest_rectangle(
-                canvas_result.json_data,
-                canvas_width=CANVAS_WIDTH,
-                canvas_height=canvas_height,
-                aois=slide.aois,
+    st.slider(
+        "Vertical region",
+        min_value=0.0,
+        max_value=1.0,
+        step=0.01,
+        key="main_region_y_range",
+        on_change=_on_manual_region_change,
+    )
+
+    apply_column, clear_column = st.columns(
+        2
+    )
+
+    apply_column.button(
+        "Apply current region",
+        key="main_apply_region_button",
+        width="stretch",
+        on_click=_activate_manual_region,
+    )
+
+    clear_column.button(
+        "Clear selected region",
+        key="main_clear_region_button",
+        width="stretch",
+        on_click=_clear_manual_region,
+    )
+
+    active = bool(
+        st.session_state.get(
+            "main_manual_region_active",
+            False,
+        )
+    )
+
+    if active:
+        x_min, x_max = (
+            st.session_state[
+                "main_region_x_range"
+            ]
+        )
+
+        y_min, y_max = (
+            st.session_state[
+                "main_region_y_range"
+            ]
+        )
+
+        bbox = (
+            float(x_min),
+            float(y_min),
+            float(x_max),
+            float(y_max),
+        )
+
+        try:
+            matches = tuple(
+                map_bbox_to_aois(
+                    bbox,
+                    slide.aois,
+                )
             )
-        )
 
-    except Exception as exc:
-        st.session_state[
-            "main_selection_error"
-        ] = (
-            f"{type(exc).__name__}: "
-            f"{exc}"
-        )
+            matched_aoi_ids = {
+                str(
+                    getattr(
+                        match,
+                        "aoi_id",
+                        "",
+                    )
+                ).strip()
+                for match in matches
+                if str(
+                    getattr(
+                        match,
+                        "aoi_id",
+                        "",
+                    )
+                ).strip()
+            }
 
-    else:
-        st.session_state[
-            "main_selection_error"
-        ] = None
+            selected_text_parts = [
+                str(aoi.text).strip()
+                for aoi in slide.aois
+                if (
+                    aoi.aoi_id
+                    in matched_aoi_ids
+                    and str(
+                        aoi.text
+                    ).strip()
+                )
+            ]
 
-        if selection is None:
-            st.session_state[
-                "main_manual_bbox"
-            ] = None
-            st.session_state[
-                "main_selected_aoi_ids"
-            ] = []
-            st.session_state[
-                "main_selection_matches"
-            ] = []
-            st.session_state[
-                "main_selection_text"
-            ] = ""
-        else:
+            selection = SimpleNamespace(
+                bbox=bbox,
+                matches=matches,
+                selected_text=(
+                    "\n\n".join(
+                        selected_text_parts
+                    )
+                ),
+            )
+
             _store_manual_selection(
                 selection
             )
 
-    if st.session_state[
+            st.session_state[
+                "main_selection_error"
+            ] = None
+
+        except Exception as exc:
+            st.session_state[
+                "main_selection_error"
+            ] = (
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
+    else:
+        st.session_state[
+            "main_manual_bbox"
+        ] = None
+
+        st.session_state[
+            "main_selected_aoi_ids"
+        ] = []
+
+        st.session_state[
+            "main_selection_matches"
+        ] = []
+
+        st.session_state[
+            "main_selection_text"
+        ] = ""
+
+    if st.session_state.get(
         "main_selection_error"
-    ]:
+    ):
         st.error(
             st.session_state[
                 "main_selection_error"
             ]
         )
 
-    if st.session_state[
-        "main_manual_bbox"
-    ]:
+    if has_image:
+        base_image = _load_slide_image(
+            str(image_path)
+        )
+
+        display_image = base_image
+
+        try:
+            if st.session_state[
+                "main_show_aoi_overlay"
+            ]:
+                display_image = (
+                    _draw_aoi_overlay(
+                        base_image,
+                        slide,
+                    )
+                )
+
+            if active:
+                bbox = st.session_state.get(
+                    "main_manual_bbox"
+                )
+
+                if bbox:
+                    draw = ImageDraw.Draw(
+                        display_image
+                    )
+
+                    width, height = (
+                        display_image.size
+                    )
+
+                    rectangle = (
+                        round(
+                            float(bbox[0])
+                            * width
+                        ),
+                        round(
+                            float(bbox[1])
+                            * height
+                        ),
+                        round(
+                            float(bbox[2])
+                            * width
+                        ),
+                        round(
+                            float(bbox[3])
+                            * height
+                        ),
+                    )
+
+                    draw.rectangle(
+                        rectangle,
+                        outline=(
+                            220,
+                            70,
+                            40,
+                        ),
+                        width=max(
+                            3,
+                            round(
+                                width / 360
+                            ),
+                        ),
+                    )
+
+            st.image(
+                display_image,
+                width="stretch",
+            )
+
+        finally:
+            if (
+                display_image
+                is not base_image
+            ):
+                display_image.close()
+
+            base_image.close()
+
+    else:
+        st.info(
+            "Slide image preview is unavailable. "
+            "Normalized region controls remain active "
+            "and AOI overlap is computed from the manifest."
+        )
+
+        if active:
+            st.code(
+                json.dumps(
+                    {
+                        "normalized_bbox": (
+                            st.session_state.get(
+                                "main_manual_bbox"
+                            )
+                        ),
+                        "matched_aoi_ids": (
+                            st.session_state.get(
+                                "main_selected_aoi_ids",
+                                [],
+                            )
+                        ),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                language="json",
+            )
+
+    if (
+        active
+        and st.session_state.get(
+            "main_manual_bbox"
+        )
+    ):
         st.success(
             "Manual region captured."
         )
+
     else:
         st.info(
-            "No manual region has been "
-            "captured yet."
+            "Adjust a range or click "
+            "Apply current region."
         )
-
-    st.button(
-        "Clear selected region",
-        width="stretch",
-        on_click=_clear_manual_region,
-    )
 
 
 def _store_manual_selection(
@@ -1051,19 +1492,39 @@ def _apply_quick_intent(
     intent_name: str,
     command: str,
 ) -> None:
-    """Apply an explicit intent selected by the learner."""
+    """Apply an explicit learner-selected intent."""
+    if (
+        st.session_state.get(
+            "main_typed_command"
+        )
+        == command
+        and st.session_state.get(
+            "main_intent_source"
+        )
+        == "ui_action"
+        and st.session_state.get(
+            "main_explicit_intent"
+        )
+        == intent_name
+    ):
+        return
+
     st.session_state[
         "main_typed_command"
     ] = command
+
     st.session_state[
         "main_intent_source"
     ] = "ui_action"
+
     st.session_state[
         "main_explicit_intent"
     ] = intent_name
+
     st.session_state[
         "main_intent_result"
     ] = None
+
     st.session_state[
         "main_intent_error"
     ] = None
@@ -1390,8 +1851,20 @@ def _render_confirmation_panel(
     confirm_clicked = confirm_column.button(
         "Confirm target and intent",
         type="primary",
-        disabled=not assessment.ready,
+        disabled=(
+            not assessment.ready
+            or (
+                st.session_state[
+                    "main_confirmed"
+                ]
+                and st.session_state.get(
+                    "main_confirmed_aoi_id"
+                )
+                == selected_target_id
+            )
+        ),
         width="stretch",
+        key="main_confirm_button",
     )
 
     whole_column.button(
@@ -1401,6 +1874,7 @@ def _render_confirmation_panel(
             == "whole_slide"
         ),
         width="stretch",
+        key="main_use_whole_slide_button",
         on_click=_switch_to_whole_slide,
     )
 
@@ -1410,6 +1884,7 @@ def _render_confirmation_panel(
             "main_confirmed"
         ],
         width="stretch",
+        key="main_cancel_confirmation_button",
         on_click=_invalidate_confirmation,
     )
 
@@ -1484,8 +1959,8 @@ def _render_confirmation_panel(
     ]:
         st.success(
             "The interaction has been explicitly "
-            "confirmed. Tutor generation remains "
-            "disabled until the next stage."
+            "confirmed. Grounded tutor generation "
+            "is available below."
         )
 
         with st.expander(
@@ -1645,6 +2120,7 @@ def _render_conversation_history(
         "Clear conversation",
         width="stretch",
         disabled=not turns,
+        key="main_clear_conversation_button",
         on_click=_clear_conversation,
     )
 
@@ -1711,7 +2187,7 @@ def _render_conversation_history(
         )
     ]
 
-    st.dataframe(
+    _render_records_table(
         summary_rows,
         hide_index=True,
         width="stretch",
@@ -1858,11 +2334,53 @@ def _render_tutor_generation_panel(
             assessment.message
         )
 
+    confirmed_wrapper = (
+        st.session_state.get(
+            "main_confirmed_interaction"
+        )
+        or {}
+    )
+
+    confirmed_interaction = (
+        confirmed_wrapper.get(
+            "interaction",
+            {},
+        )
+    )
+
+    current_interaction_id = str(
+        confirmed_interaction.get(
+            "interaction_id",
+            "",
+        )
+    )
+
+    already_generated = bool(
+        current_interaction_id
+        and st.session_state.get(
+            "main_last_generated_interaction_id"
+        )
+        == current_interaction_id
+        and st.session_state.get(
+            "main_tutor_result"
+        )
+    )
+
     generate_clicked = st.button(
         "Generate grounded answer",
         type="primary",
-        disabled=not assessment.ready,
+        disabled=(
+            not assessment.ready
+            or already_generated
+        ),
         width="stretch",
+        key="main_generate_answer_button",
+        help=(
+            "Change the target or command "
+            "to create a new turn."
+            if already_generated
+            else None
+        ),
     )
 
     if generate_clicked:
@@ -2129,6 +2647,7 @@ def _render_tutor_result() -> None:
     st.button(
         "Start follow-up",
         width="stretch",
+        key="main_start_follow_up_button",
         on_click=_start_follow_up,
     )
 
@@ -2233,7 +2752,7 @@ def _render_main_xai() -> None:
         reliability["level"],
     )
 
-    st.dataframe(
+    _render_records_table(
         integrated["pipeline"],
         hide_index=True,
         width="stretch",
@@ -2299,7 +2818,7 @@ def _render_main_xai() -> None:
                 "##### AOI overlap candidates"
             )
 
-            st.dataframe(
+            _render_records_table(
                 target["candidates"],
                 hide_index=True,
                 width="stretch",
@@ -2415,7 +2934,7 @@ def _render_main_xai() -> None:
                 "##### Claim–source mapping"
             )
 
-            st.dataframe(
+            _render_records_table(
                 answer["claims"],
                 hide_index=True,
                 width="stretch",
@@ -2426,7 +2945,7 @@ def _render_main_xai() -> None:
                 "##### Available sources"
             )
 
-            st.dataframe(
+            _render_records_table(
                 answer["sources"],
                 hide_index=True,
                 width="stretch",
@@ -2468,7 +2987,7 @@ def _render_main_xai() -> None:
                 reliability["summary"]
             )
 
-        st.dataframe(
+        _render_records_table(
             reliability["checks"],
             hide_index=True,
             width="stretch",
@@ -2729,7 +3248,7 @@ def _render_manual_interaction(
             "#### AOI matches"
         )
 
-        st.dataframe(
+        _render_records_table(
             matches,
             hide_index=True,
             width="stretch",
@@ -2763,6 +3282,7 @@ def _render_manual_interaction(
             value=selected_text,
             height=180,
             disabled=True,
+            key="main_manual_interaction_text_preview",
         )
     else:
         st.caption(
@@ -2818,7 +3338,7 @@ def _render_manual_interaction(
         },
     ]
 
-    st.dataframe(
+    _render_records_table(
         readiness,
         hide_index=True,
         width="stretch",
@@ -2836,6 +3356,7 @@ def _render_manual_interaction(
     st.button(
         "Reset current turn",
         width="stretch",
+        key="main_reset_turn_button",
         on_click=_reset_turn_state,
     )
 
@@ -2886,7 +3407,7 @@ def _render_lower_workspace(
             "#### AOI manifest"
         )
 
-        st.dataframe(
+        _render_records_table(
             [
                 {
                     "aoi_id": aoi.aoi_id,

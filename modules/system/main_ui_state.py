@@ -100,6 +100,10 @@ def build_main_turn_defaults() -> dict[str, Any]:
         "main_target_scope": "Whole slide",
         "main_typed_command": "",
         "main_manual_bbox": None,
+        "main_region_x_range": (0.10, 0.90),
+        "main_region_y_range": (0.10, 0.90),
+        "main_manual_region_active": False,
+        "main_widget_error": None,
         "main_selected_aoi_ids": [],
         "main_selection_matches": [],
         "main_selection_text": "",
@@ -117,6 +121,7 @@ def build_main_turn_defaults() -> dict[str, Any]:
         "main_confirmed": False,
         "main_tutor_result": None,
         "main_tutor_context": None,
+        "main_last_generated_interaction_id": None,
         "main_tutor_error": None,
         "main_xai_result": None,
     }
