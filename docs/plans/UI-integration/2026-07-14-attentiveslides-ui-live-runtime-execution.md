@@ -407,7 +407,7 @@ git commit -m "fix: harden live ingress lifecycle readiness"
 - Consumes: `UploadedDeckBrowser.get_slide(slide_id) -> MainUISlide`.
 - Produces: `ActiveDeckSlideProvider.set_browser(browser)`, `clear()`, and `get_slide_frame(slide_id) -> SlideFrame`.
 
-- [ ] **Step 1: Write provider tests**
+- [x] **Step 1: Write provider tests**
 
 Use a fake browser whose `get_slide` returns a `MainUISlide`; assert deck ID, slide ID, AOI IDs, text, neighbor text, and image path are copied exactly. Add tests that `get_slide_frame` before `set_browser` raises `RuntimeError`, and replacing the browser changes the deck atomically.
 
@@ -425,7 +425,7 @@ self.assertEqual(
 
 Run the new test. Expected: FAIL because the module does not exist.
 
-- [ ] **Step 2: Implement the adapter**
+- [x] **Step 2: Implement the adapter**
 
 Implement exactly one lock and no caching:
 
@@ -459,7 +459,7 @@ class ActiveDeckSlideProvider:
         )
 ```
 
-- [ ] **Step 3: Verify provider and AOI concurrency behavior**
+- [x] **Step 3: Verify provider and AOI concurrency behavior**
 
 Run:
 
@@ -472,7 +472,7 @@ Run:
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add modules/system/active_deck_slide_provider.py \

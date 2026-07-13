@@ -15,7 +15,7 @@ Pinned inputs:
 |---|---|---|---|---|
 | 0 Merge baseline | complete | 34 frontend tests + 37 live tests passed | `649b2b35` | `origin/feature/api-llm-pipeline` advanced to `287fca5`; the user-approved pinned SHA remains its ancestor and was used. `ort` merged AOI changes without a text conflict. Semantic inspection confirmed `allow_ocr`, one `RLock`, and atomic temp-file replacement. The plan's sample `process_slide(image_path=...)` signature did not match the pinned frontend API; the actual `process_slide(..., dpi=250, *, allow_ocr=True)` API was preserved. |
 | 1 Ingress fixes | complete | 4 focused tests failed for the expected missing behavior, then 37 ingress/transport/launcher tests passed | `3116265` | Reload now resets only active media readiness and waits for new video plus audio. `/health` returns 503 when the coordinator task is absent/done/failed; unexpected coordinator errors record the cause and stop a running runtime safely. |
-| 2 Canonical deck | pending | — | — | — |
+| 2 Canonical deck | complete | Provider module first failed to import; then 8 provider/upload/AOI concurrency tests passed | `44d9821` | One lock, no cache, and no duplicate deck store. |
 | 3 Slide component | pending | — | — | Coordinate gate blocks later tasks. |
 | 4 Live proposal bridge | pending | — | — | — |
 | 5 Official UI integration | pending | — | — | — |
@@ -38,3 +38,10 @@ Pinned inputs:
 - GREEN command: `/root/miniconda3/bin/conda run -n attentive-app python -m unittest tests.test_live_ingress_service tests.test_single_port_transport tests.test_live_single_port_launcher -v`
 - GREEN result: 37 tests, 0 failures.
 - Commit: `3116265f548260614bf6f4fe690d05b8a648687f`.
+
+## Checkpoint 2 — canonical uploaded deck
+
+- RED: all four provider tests failed with `ModuleNotFoundError` before implementation.
+- GREEN command: `/root/miniconda3/bin/conda run -n attentive-app python -m unittest tests.test_active_deck_slide_provider tests.test_uploaded_deck_service tests.test_aoi_manager_concurrency -v`
+- GREEN result: 8 tests, 0 failures.
+- Commit: `44d9821bc22478edc9bf34b0bdafc83785c7bcf3`.
