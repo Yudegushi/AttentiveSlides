@@ -158,6 +158,30 @@ class ConfirmedManualInteraction:
         }
 
 
+def normalize_manual_target_scope(
+    value: str,
+) -> str:
+    """Map user-facing target labels to the canonical domain values."""
+    aliases = {
+        "whole slide": "Whole slide",
+        "use whole slide": "Whole slide",
+        "whole_slide": "Whole slide",
+        "manual region": "Manual region",
+        "select region": "Manual region",
+        "manual_rectangle": "Manual region",
+    }
+
+    normalized = aliases.get(
+        str(value).strip().casefold()
+    )
+
+    if normalized is None:
+        raise ValueError(
+            f"Unsupported target scope: {value!r}."
+        )
+
+    return normalized
+
 def build_manual_confirmation_preview(
     *,
     deck_id: str,
@@ -175,6 +199,10 @@ def build_manual_confirmation_preview(
     ),
 ) -> ManualConfirmationPreview:
     """Build the target and intent preview shown to the learner."""
+    target_scope = normalize_manual_target_scope(
+        target_scope
+    )
+
     if target_scope not in {
         "Whole slide",
         "Manual region",

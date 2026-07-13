@@ -100,7 +100,7 @@ class SlideParser:
         if not pdf_path.exists():
             raise FileNotFoundError(f"Stored PDF is missing: {pdf_path}")
 
-        image_path = self.images_dir / f"{deck_id}_slide_{slide_id:03d}.png"
+        image_path = self.images_dir / f"{deck_id}_slide_{slide_id:03d}_{dpi}dpi.png"
         document = fitz.open(str(pdf_path))
         try:
             page = document.load_page(slide_id - 1)

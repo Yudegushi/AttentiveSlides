@@ -178,7 +178,7 @@ def main() -> None:
 
     prepare_parser.add_argument(
         "--dpi",
-        default=160,
+        default=220,
         type=int,
     )
 

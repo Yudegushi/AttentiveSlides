@@ -24,6 +24,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     )
 
 import streamlit as st
+from streamlit_drawable_canvas import st_canvas
 from PIL import (
     Image,
     ImageDraw,
@@ -78,6 +79,7 @@ from modules.system.manual_intent import (
 from modules.system.manual_targeting import (
     ManualSelectionResult,
     map_bbox_to_aois,
+    extract_latest_rectangle,
 )
 from modules.system.uploaded_deck_service import (
     UploadedDeckWorkspace,
@@ -222,6 +224,11 @@ def _initialize_global_state() -> None:
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+    # Thumbnail strip state.
+    st.session_state.setdefault(
+        "main_thumbnail_window_start",
+        0,
+    )
 
 
 def _render_records_table(
@@ -361,6 +368,29 @@ def _normalize_widget_state() -> None:
     st.session_state[
         "main_widget_error"
     ] = None
+    # Canonical target scope is stored independently from the user-facing label.
+    raw_target_scope = str(
+        st.session_state.get(
+            "main_target_scope",
+            "Whole slide",
+        )
+    ).strip()
+
+    target_scope_aliases = {
+        "whole slide": "Whole slide",
+        "use whole slide": "Whole slide",
+        "whole_slide": "Whole slide",
+        "manual region": "Manual region",
+        "select region": "Manual region",
+        "manual_rectangle": "Manual region",
+    }
+
+    st.session_state[
+        "main_target_scope"
+    ] = target_scope_aliases.get(
+        raw_target_scope.casefold(),
+        "Whole slide",
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -828,6 +858,11 @@ def _inject_compact_ui_css() -> None:
             object-fit: contain;
         }
 
+        div[data-testid="stCustomComponentV1"] iframe {
+            width: 100% !important;
+            max-width: 100% !important;
+        }
+
         div[data-testid="stExpander"] details {
             border-radius: 0.7rem;
         }
@@ -836,32 +871,239 @@ def _inject_compact_ui_css() -> None:
         unsafe_allow_html=True,
     )
 
+@st.cache_data(show_spinner=False)
+def _thumbnail_png_bytes(
+    image_path: str,
+    modified_time_ns: int,
+    max_width: int = 220,
+    max_height: int = 124,
+) -> bytes:
+    """Create a small cached PNG thumbnail without retaining open files."""
+    del modified_time_ns
+
+    path = Path(image_path)
+
+    with Image.open(path) as source:
+        thumbnail = source.convert("RGB")
+
+    try:
+        resampling = getattr(
+            Image,
+            "Resampling",
+            Image,
+        ).LANCZOS
+
+        thumbnail.thumbnail(
+            (max_width, max_height),
+            resampling,
+        )
+
+        buffer = BytesIO()
+        thumbnail.save(
+            buffer,
+            format="PNG",
+            optimize=True,
+        )
+        return buffer.getvalue()
+
+    finally:
+        thumbnail.close()
+
+
+def _shift_thumbnail_window(
+    delta: int,
+    maximum_start: int,
+) -> None:
+    current = int(
+        st.session_state.get(
+            "main_thumbnail_window_start",
+            0,
+        )
+    )
+
+    st.session_state[
+        "main_thumbnail_window_start"
+    ] = max(
+        0,
+        min(
+            maximum_start,
+            current + int(delta),
+        ),
+    )
+
+
+def _target_scope_label(
+    value: str,
+) -> str:
+    if value == "Whole slide":
+        return "Use whole slide"
+
+    return "Select region"
+
+
 
 def _render_slide_selector(
     browser: Any,
 ) -> None:
-    """Render the current-slide selector directly below the title."""
-    selector_column, spacer_column = (
-        st.columns(
-            [0.28, 0.72],
-            gap="small",
-        )
+    """Render a horizontal, clickable slide-preview strip."""
+    slide_ids = list(
+        browser.slide_ids
     )
 
-    del spacer_column
+    if not slide_ids:
+        return
 
-    with selector_column:
-        st.selectbox(
-            "Current slide",
-            options=list(
-                browser.slide_ids
-            ),
-            key="main_active_slide_id",
-            format_func=lambda slide_id: (
-                f"Slide {slide_id}"
-            ),
-            on_change=_reset_turn_state,
+    active_slide_id = st.session_state[
+        "main_active_slide_id"
+    ]
+
+    try:
+        active_index = slide_ids.index(
+            active_slide_id
         )
+    except ValueError:
+        active_index = 0
+        active_slide_id = slide_ids[0]
+        st.session_state[
+            "main_active_slide_id"
+        ] = active_slide_id
+
+    window_size = min(
+        7,
+        len(slide_ids),
+    )
+    maximum_start = max(
+        0,
+        len(slide_ids) - window_size,
+    )
+
+    start = int(
+        st.session_state.get(
+            "main_thumbnail_window_start",
+            0,
+        )
+    )
+    start = max(
+        0,
+        min(maximum_start, start),
+    )
+
+    if not (
+        start
+        <= active_index
+        < start + window_size
+    ):
+        start = max(
+            0,
+            min(
+                maximum_start,
+                active_index
+                - window_size // 2,
+            ),
+        )
+
+    st.session_state[
+        "main_thumbnail_window_start"
+    ] = start
+
+    visible_slide_ids = slide_ids[
+        start : start + window_size
+    ]
+
+    widths = [0.08] + [1.0] * len(
+        visible_slide_ids
+    ) + [0.08]
+
+    columns = st.columns(
+        widths,
+        gap="small",
+        vertical_alignment="center",
+    )
+
+    columns[0].button(
+        "‹",
+        key="main_thumbnail_window_previous",
+        disabled=start == 0,
+        help="Show earlier slide previews",
+        on_click=_shift_thumbnail_window,
+        args=(-window_size, maximum_start),
+        width="stretch",
+    )
+
+    for offset, slide_id in enumerate(
+        visible_slide_ids,
+        start=1,
+    ):
+        with columns[offset]:
+            with st.container(
+                border=True
+            ):
+                try:
+                    preview_slide = (
+                        browser.get_slide(
+                            slide_id
+                        )
+                    )
+                except Exception:
+                    preview_slide = None
+
+                if (
+                    preview_slide is not None
+                    and preview_slide.image_available
+                    and preview_slide.image_path
+                ):
+                    preview_path = Path(
+                        preview_slide.image_path
+                    )
+
+                    st.image(
+                        _thumbnail_png_bytes(
+                            str(preview_path),
+                            preview_path.stat().st_mtime_ns,
+                        ),
+                        width="stretch",
+                    )
+
+                else:
+                    st.markdown(
+                        "<div style='height:4.8rem;display:flex;"
+                        "align-items:center;justify-content:center;"
+                        "border:1px dashed rgba(128,128,128,.35);"
+                        "border-radius:.35rem;'>Preview</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                st.button(
+                    str(slide_id),
+                    key=(
+                        "main_slide_preview_"
+                        f"{slide_id}"
+                    ),
+                    type=(
+                        "primary"
+                        if slide_id
+                        == active_slide_id
+                        else "secondary"
+                    ),
+                    width="stretch",
+                    on_click=_navigate_to_slide,
+                    args=(slide_id,),
+                    help=(
+                        "Open slide "
+                        f"{slide_id}"
+                    ),
+                )
+
+    columns[-1].button(
+        "›",
+        key="main_thumbnail_window_next",
+        disabled=start >= maximum_start,
+        help="Show later slide previews",
+        on_click=_shift_thumbnail_window,
+        args=(window_size, maximum_start),
+        width="stretch",
+    )
+
 
 
 def _render_compact_target_summary(
@@ -909,9 +1151,10 @@ def _render_target_column(
     st.radio(
         "Target scope",
         options=[
-            "Use whole slide",
+            "Whole slide",
             "Manual region",
         ],
+        format_func=_target_scope_label,
         horizontal=True,
         key="main_target_scope",
         on_change=_on_target_scope_change,
@@ -929,13 +1172,22 @@ def _render_target_column(
         ]
         == "Manual region"
     ):
-        _render_manual_canvas(
-            view
+        st.caption(
+            "Drag directly on the slide to draw one rectangular target."
         )
+
+        st.button(
+            "Clear selected region",
+            key="main_clear_region_button",
+            width="stretch",
+            on_click=_clear_manual_region,
+        )
+
     else:
         _set_whole_slide_target(
             view
         )
+
         st.caption(
             "The complete slide is selected."
         )
@@ -943,6 +1195,7 @@ def _render_target_column(
     _render_compact_target_summary(
         view
     )
+
 
 
 def _render_intent_column(
@@ -1279,15 +1532,21 @@ def _render_slide_workspace(
         st.session_state[
             "main_target_scope"
         ]
-        == "Whole slide"
+        == "Manual region"
     ):
-        _set_whole_slide_target(
+        _render_manual_canvas(
             view
         )
+        return
+
+    _set_whole_slide_target(
+        view
+    )
 
     _render_static_slide(
         view.active_slide
     )
+
 
 
 
@@ -1380,136 +1639,134 @@ def _render_static_slide(
 def _render_manual_canvas(
     view: MainUIViewModel,
 ) -> None:
-    """Render normalized region controls without duplicating the slide."""
+    """Render direct rectangle selection over the current slide."""
     slide = view.active_slide
 
-    st.slider(
-        "Horizontal region",
-        min_value=0.0,
-        max_value=1.0,
-        step=0.01,
-        key="main_region_x_range",
-        on_change=_on_manual_region_change,
-    )
-
-    st.slider(
-        "Vertical region",
-        min_value=0.0,
-        max_value=1.0,
-        step=0.01,
-        key="main_region_y_range",
-        on_change=_on_manual_region_change,
-    )
-
-    apply_column, clear_column = st.columns(
-        2
-    )
-
-    apply_column.button(
-        "Apply region",
-        key="main_apply_region_button",
-        width="stretch",
-        on_click=_activate_manual_region,
-    )
-
-    clear_column.button(
-        "Clear",
-        key="main_clear_region_button",
-        width="stretch",
-        on_click=_clear_manual_region,
-    )
-
-    active = bool(
-        st.session_state.get(
-            "main_manual_region_active",
-            False,
+    if (
+        os.environ.get(
+            "ATTENTIVE_DISABLE_CANVAS_FOR_APPTEST",
+            "0",
         )
-    )
-
-    if not active:
-        st.session_state[
-            "main_manual_bbox"
-        ] = None
-        st.session_state[
-            "main_selected_aoi_ids"
-        ] = []
-        st.session_state[
-            "main_selection_matches"
-        ] = []
-        st.session_state[
-            "main_selection_text"
-        ] = ""
+        == "1"
+    ):
+        _render_static_slide(
+            slide
+        )
+        st.caption(
+            "Direct canvas interaction is disabled only in AppTest workers."
+        )
         return
 
-    x_min, x_max = (
-        st.session_state[
-            "main_region_x_range"
-        ]
-    )
-    y_min, y_max = (
-        st.session_state[
-            "main_region_y_range"
-        ]
-    )
+    if not (
+        slide.image_available
+        and slide.image_path
+    ):
+        _render_static_slide(
+            slide
+        )
+        st.warning(
+            "Direct region selection requires a rendered slide image."
+        )
+        return
 
-    bbox = (
-        float(x_min),
-        float(y_min),
-        float(x_max),
-        float(y_max),
+    base_image = _load_slide_image(
+        slide.image_path
     )
+    display_image = base_image
+    canvas_background = None
 
     try:
-        matches = tuple(
-            map_bbox_to_aois(
-                bbox,
-                slide.aois,
+        if st.session_state[
+            "main_show_aoi_overlay"
+        ]:
+            display_image = _draw_aoi_overlay(
+                base_image,
+                slide,
             )
+
+        canvas_width = min(
+            1400,
+            max(
+                720,
+                display_image.width,
+            ),
+        )
+        canvas_height = max(
+            420,
+            round(
+                canvas_width
+                * display_image.height
+                / display_image.width
+            ),
         )
 
-        matched_aoi_ids = {
-            str(
-                getattr(
-                    match,
-                    "aoi_id",
-                    "",
-                )
-            ).strip()
-            for match in matches
-            if str(
-                getattr(
-                    match,
-                    "aoi_id",
-                    "",
-                )
-            ).strip()
-        }
+        resampling = getattr(
+            Image,
+            "Resampling",
+            Image,
+        ).LANCZOS
 
-        selected_text_parts = [
-            str(aoi.text).strip()
-            for aoi in slide.aois
-            if (
-                aoi.aoi_id
-                in matched_aoi_ids
-                and str(aoi.text).strip()
-            )
-        ]
-
-        _store_manual_selection(
-            SimpleNamespace(
-                bbox=bbox,
-                matches=matches,
-                selected_text=(
-                    "\n\n".join(
-                        selected_text_parts
-                    )
+        canvas_background = (
+            display_image.resize(
+                (
+                    canvas_width,
+                    canvas_height,
                 ),
+                resampling,
             )
         )
 
-        st.session_state[
-            "main_selection_error"
-        ] = None
+        canvas_result = st_canvas(
+            fill_color="rgba(255, 75, 75, 0.14)",
+            stroke_width=3,
+            stroke_color="#ff4b4b",
+            background_image=canvas_background,
+            update_streamlit=True,
+            height=canvas_height,
+            width=canvas_width,
+            drawing_mode="rect",
+            display_toolbar=True,
+            key=(
+                "main_manual_canvas_"
+                f"{view.deck_id}_"
+                f"{slide.slide_id}_"
+                f"{st.session_state.get('main_canvas_revision', 0)}"
+            ),
+        )
+
+        selection = extract_latest_rectangle(
+            canvas_result.json_data,
+            canvas_width=canvas_width,
+            canvas_height=canvas_height,
+            aois=slide.aois,
+        )
+
+        if selection is not None:
+            st.session_state[
+                "main_manual_region_active"
+            ] = True
+            _store_manual_selection(
+                selection
+            )
+            st.session_state[
+                "main_selection_error"
+            ] = None
+
+            st.success(
+                "Region selected. You can now choose an action or type a question."
+            )
+
+        elif st.session_state.get(
+            "main_manual_bbox"
+        ):
+            st.caption(
+                "A previously selected region remains active."
+            )
+
+        else:
+            st.caption(
+                "Drag on the slide to create a rectangle."
+            )
 
     except Exception as exc:
         st.session_state[
@@ -1517,15 +1774,22 @@ def _render_manual_canvas(
         ] = (
             f"{type(exc).__name__}: {exc}"
         )
-
-    if st.session_state.get(
-        "main_selection_error"
-    ):
         st.error(
-            st.session_state[
+            "Unable to read the selected region: "
+            + st.session_state[
                 "main_selection_error"
             ]
         )
+
+    finally:
+        if canvas_background is not None:
+            canvas_background.close()
+
+        if display_image is not base_image:
+            display_image.close()
+
+        base_image.close()
+
 
 
 

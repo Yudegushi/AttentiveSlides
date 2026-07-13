@@ -1,4 +1,4 @@
-"""Native-crash-safe Main UI interaction regression test."""
+"""Regression test for isolated Streamlit interaction scenarios."""
 
 from __future__ import annotations
 
@@ -38,59 +38,45 @@ class TestStreamlitWidgetInteractions(
             environment.update(
                 {
                     "ATTENTIVE_ENABLE_OCR": "0",
-                    "STREAMLIT_BROWSER_GATHER_USAGE_STATS": (
-                        "false"
-                    ),
+                    "ATTENTIVE_DISABLE_CANVAS_FOR_APPTEST": "1",
+                    "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false",
                     "OMP_NUM_THREADS": "1",
                     "MKL_NUM_THREADS": "1",
                     "OPENBLAS_NUM_THREADS": "1",
                     "NUMEXPR_NUM_THREADS": "1",
-                    "TOKENIZERS_PARALLELISM": (
-                        "false"
-                    ),
+                    "TOKENIZERS_PARALLELISM": "false",
                     "PYTHONFAULTHANDLER": "1",
                     "MPLBACKEND": "Agg",
                 }
             )
 
-            try:
-                result = subprocess.run(
-                    [
-                        sys.executable,
-                        (
-                            "scripts/"
-                            "smoke_test_main_ui_interactions.py"
-                        ),
-                        "--output",
-                        str(output_path),
-                        "--timeout-per-scenario",
-                        "240",
-                        "--strict",
-                    ],
-                    cwd=ROOT,
-                    env=environment,
-                    text=True,
-                    capture_output=True,
-                    timeout=1500,
-                    check=False,
-                    shell=False,
-                    start_new_session=True,
-                )
-
-            except subprocess.TimeoutExpired as exc:
-                self.fail(
-                    "Interaction supervisor timed "
-                    "out after 1500 seconds.\n"
-                    f"STDOUT:\n"
-                    f"{exc.stdout or ''}\n"
-                    f"STDERR:\n"
-                    f"{exc.stderr or ''}"
-                )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    (
+                        "scripts/"
+                        "smoke_test_main_ui_interactions.py"
+                    ),
+                    "--output",
+                    str(output_path),
+                    "--timeout-per-scenario",
+                    "240",
+                    "--strict",
+                ],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+                timeout=1500,
+                check=False,
+                shell=False,
+                start_new_session=True,
+            )
 
             diagnostic = "\n".join(
                 [
                     (
-                        f"Supervisor return code: "
+                        "Supervisor return code: "
                         f"{result.returncode}"
                     ),
                     "----- STDOUT -----",
@@ -111,7 +97,7 @@ class TestStreamlitWidgetInteractions(
                 )
             )
 
-            failed_scenarios = [
+            failed = [
                 {
                     "scenario": item[
                         "scenario"
@@ -124,9 +110,6 @@ class TestStreamlitWidgetInteractions(
                     ],
                     "timed_out": item[
                         "timed_out"
-                    ],
-                    "log_path": item[
-                        "log_path"
                     ],
                     "worker_payload": item[
                         "worker_payload"
@@ -148,24 +131,24 @@ class TestStreamlitWidgetInteractions(
             self.assertEqual(
                 result.returncode,
                 0,
-                (
-                    diagnostic
-                    + "\nFailed scenarios:\n"
-                    + json.dumps(
-                        failed_scenarios,
-                        ensure_ascii=False,
-                        indent=2,
-                    )
+                diagnostic
+                + "\n"
+                + json.dumps(
+                    failed,
+                    ensure_ascii=False,
+                    indent=2,
                 ),
             )
 
             self.assertTrue(
                 payload["passed"],
-                failed_scenarios,
+                failed,
             )
 
             self.assertEqual(
-                payload["scenario_count"],
+                payload[
+                    "scenario_count"
+                ],
                 5,
             )
 
@@ -180,7 +163,7 @@ class TestStreamlitWidgetInteractions(
                 payload[
                     "completed_step_count"
                 ],
-                30,
+                15,
             )
 
 

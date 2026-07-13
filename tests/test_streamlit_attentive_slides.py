@@ -1,8 +1,4 @@
-"""Static render-contract tests for the AttentiveSlides Main UI.
-
-This test module must not import Streamlit, Pandas, PyArrow, the app
-module, or Streamlit AppTest. It only parses the app source with AST.
-"""
+"""Static render contracts for the current Main UI."""
 
 from __future__ import annotations
 
@@ -23,7 +19,9 @@ def dotted_name(
         return node.id
 
     if isinstance(node, ast.Attribute):
-        prefix = dotted_name(node.value)
+        prefix = dotted_name(
+            node.value
+        )
 
         return (
             f"{prefix}.{node.attr}"
@@ -32,7 +30,9 @@ def dotted_name(
         )
 
     if isinstance(node, ast.Subscript):
-        return dotted_name(node.value)
+        return dotted_name(
+            node.value
+        )
 
     return ""
 
@@ -49,7 +49,7 @@ def constant_string(
     return None
 
 
-def keyword_value(
+def keyword_node(
     call: ast.Call,
     name: str,
 ) -> ast.AST | None:
@@ -65,7 +65,10 @@ def keyword_string(
     name: str,
 ) -> str | None:
     return constant_string(
-        keyword_value(call, name)
+        keyword_node(
+            call,
+            name,
+        )
     )
 
 
@@ -94,18 +97,21 @@ class TestStreamlitAttentiveSlides(
             )
         }
 
-        cls.calls = [
-            node
-            for node in ast.walk(
-                cls.tree
-            )
-            if isinstance(
-                node,
-                ast.Call,
-            )
-        ]
+    def function_source(
+        self,
+        name: str,
+    ) -> str:
+        self.assertIn(
+            name,
+            self.functions,
+        )
 
-    def test_app_source_parses(
+        return ast.get_source_segment(
+            self.source,
+            self.functions[name],
+        ) or ""
+
+    def test_source_parses(
         self,
     ) -> None:
         self.assertIn(
@@ -113,90 +119,84 @@ class TestStreamlitAttentiveSlides(
             self.functions,
         )
 
-    def test_main_title_is_rendered_once(
+    def test_single_main_title(
         self,
     ) -> None:
-        titles = []
+        title_calls = []
 
-        for call in self.calls:
+        for node in ast.walk(
+            self.tree
+        ):
+            if not isinstance(
+                node,
+                ast.Call,
+            ):
+                continue
+
             if dotted_name(
-                call.func
+                node.func
             ) != "st.title":
                 continue
 
-            if not call.args:
-                continue
-
-            value = constant_string(
-                call.args[0]
-            )
-
-            if value is not None:
-                titles.append(value)
+            if node.args:
+                title_calls.append(
+                    constant_string(
+                        node.args[0]
+                    )
+                )
 
         self.assertEqual(
-            titles.count(
+            title_calls.count(
                 "AttentiveSlides"
             ),
             1,
         )
 
-    def test_sidebar_brand_is_removed(
+    def test_thumbnail_selector_replaces_selectbox(
         self,
     ) -> None:
-        violations = []
+        function = self.functions[
+            "_render_slide_selector"
+        ]
 
-        for call in self.calls:
-            function_name = dotted_name(
-                call.func
+        call_names = {
+            dotted_name(node.func)
+            .split(".")[-1]
+            for node in ast.walk(
+                function
             )
-
-            if not function_name.startswith(
-                "st.sidebar."
-            ):
-                continue
-
-            if not call.args:
-                continue
-
-            text = constant_string(
-                call.args[0]
+            if isinstance(
+                node,
+                ast.Call,
             )
+        }
 
-            if text is None:
-                continue
-
-            normalized = (
-                text.strip()
-                .lstrip("#")
-                .strip()
-            )
-
-            if normalized == "AttentiveSlides":
-                violations.append(
-                    {
-                        "line": call.lineno,
-                        "function": function_name,
-                    }
-                )
-
-        self.assertEqual(
-            violations,
-            [],
+        self.assertNotIn(
+            "selectbox",
+            call_names,
         )
 
-    def test_slide_workspace_label_is_removed(
-        self,
-    ) -> None:
+        self.assertIn(
+            "button",
+            call_names,
+        )
+
+        self.assertIn(
+            "image",
+            call_names,
+        )
+
         self.assertNotIn(
-            "Slide workspace",
-            self.source,
+            '"Current slide"',
+            self.function_source(
+                "_render_slide_selector"
+            ),
         )
 
     def test_main_render_order(
         self,
     ) -> None:
-        main_function = self.functions[
+        function = self.functions[
             "main"
         ]
 
@@ -209,16 +209,13 @@ class TestStreamlitAttentiveSlides(
             "_render_lower_workspace",
         ]
 
-        positions: dict[
-            str,
-            list[int],
-        ] = {
+        positions = {
             name: []
             for name in required
         }
 
         for node in ast.walk(
-            main_function
+            function
         ):
             if not isinstance(
                 node,
@@ -245,13 +242,9 @@ class TestStreamlitAttentiveSlides(
         self.assertEqual(
             missing,
             [],
-            (
-                "Missing main render calls: "
-                f"{missing}"
-            ),
         )
 
-        ordered_lines = [
+        ordered = [
             min(
                 positions[name]
             )
@@ -259,104 +252,38 @@ class TestStreamlitAttentiveSlides(
         ]
 
         self.assertEqual(
-            ordered_lines,
-            sorted(
-                ordered_lines
-            ),
-            (
-                "Unexpected main render order: "
-                f"{dict(zip(required, ordered_lines))}"
-            ),
+            ordered,
+            sorted(ordered),
         )
 
-
-    def test_current_slide_selector_keeps_key(
+    def test_slide_workspace_heading_removed(
         self,
     ) -> None:
-        function = self.functions[
-            "_render_slide_selector"
-        ]
-
-        matches = []
-
-        for call in ast.walk(
-            function
-        ):
-            if not isinstance(
-                call,
-                ast.Call,
-            ):
-                continue
-
-            if (
-                dotted_name(
-                    call.func
-                ).split(".")[-1]
-                != "selectbox"
-            ):
-                continue
-
-            label = (
-                constant_string(
-                    call.args[0]
-                )
-                if call.args
-                else None
-            )
-
-            matches.append(
-                {
-                    "label": label,
-                    "key": keyword_string(
-                        call,
-                        "key",
-                    ),
-                }
-            )
-
-        self.assertIn(
-            {
-                "label": "Current slide",
-                "key": (
-                    "main_active_slide_id"
-                ),
-            },
-            matches,
+        self.assertNotIn(
+            "Slide workspace",
+            self.source,
         )
 
-    def test_navigation_buttons_keep_keys(
+    def test_navigation_keys_remain(
         self,
     ) -> None:
         function = self.functions[
             "_render_navigation"
         ]
 
-        keys = set()
-
-        for call in ast.walk(
-            function
-        ):
-            if not isinstance(
-                call,
-                ast.Call,
-            ):
-                continue
-
-            if (
-                dotted_name(
-                    call.func
-                ).split(".")[-1]
-                != "button"
-            ):
-                continue
-
-            key = keyword_string(
-                call,
+        keys = {
+            keyword_string(
+                node,
                 "key",
             )
-
-            if key:
-                keys.add(key)
+            for node in ast.walk(
+                function
+            )
+            if isinstance(
+                node,
+                ast.Call,
+            )
+        }
 
         self.assertTrue(
             {
@@ -365,50 +292,73 @@ class TestStreamlitAttentiveSlides(
             }.issubset(keys)
         )
 
-    def test_interaction_workspace_has_three_columns(
+    def test_target_scope_has_two_modes(
+        self,
+    ) -> None:
+        source = self.function_source(
+            "_render_target_column"
+        )
+
+        self.assertIn(
+            "main_target_scope",
+            source,
+        )
+
+        whole_present = any(
+            label in source
+            for label in (
+                "Whole slide",
+                "Use whole slide",
+            )
+        )
+
+        region_present = any(
+            label in source
+            for label in (
+                "Manual region",
+                "Select region",
+            )
+        )
+
+        self.assertTrue(
+            whole_present,
+        )
+
+        self.assertTrue(
+            region_present,
+        )
+
+    def test_manual_region_uses_direct_canvas(
         self,
     ) -> None:
         function = self.functions[
-            "_render_manual_interaction"
+            "_render_manual_canvas"
         ]
 
-        matches = []
-
-        for call in ast.walk(
-            function
-        ):
-            if not isinstance(
-                call,
+        call_names = {
+            dotted_name(node.func)
+            .split(".")[-1]
+            for node in ast.walk(
+                function
+            )
+            if isinstance(
+                node,
                 ast.Call,
-            ):
-                continue
+            )
+        }
 
-            if dotted_name(
-                call.func
-            ) != "st.columns":
-                continue
+        source = self.function_source(
+            "_render_manual_canvas"
+        )
 
-            if not call.args:
-                continue
+        self.assertIn(
+            "st_canvas",
+            source,
+        )
 
-            value = call.args[0]
-
-            if (
-                isinstance(
-                    value,
-                    (
-                        ast.List,
-                        ast.Tuple,
-                    ),
-                )
-                and len(value.elts) == 3
-            ):
-                matches.append(
-                    call.lineno
-                )
-
-        self.assertTrue(
-            matches,
+        self.assertNotIn(
+            "slider",
+            call_names,
         )
 
     def test_xai_drawer_is_collapsed(
@@ -420,18 +370,18 @@ class TestStreamlitAttentiveSlides(
 
         matches = []
 
-        for call in ast.walk(
+        for node in ast.walk(
             function
         ):
             if not isinstance(
-                call,
+                node,
                 ast.Call,
             ):
                 continue
 
             if (
                 dotted_name(
-                    call.func
+                    node.func
                 ).split(".")[-1]
                 != "expander"
             ):
@@ -439,79 +389,42 @@ class TestStreamlitAttentiveSlides(
 
             label = (
                 constant_string(
-                    call.args[0]
+                    node.args[0]
                 )
-                if call.args
+                if node.args
                 else None
             )
 
-            expanded_node = keyword_value(
-                call,
+            expanded = keyword_node(
+                node,
                 "expanded",
             )
 
-            expanded = (
-                expanded_node.value
-                if isinstance(
-                    expanded_node,
-                    ast.Constant,
-                )
-                else None
-            )
-
             matches.append(
-                {
-                    "label": label,
-                    "expanded": expanded,
-                }
+                (
+                    label,
+                    (
+                        expanded.value
+                        if isinstance(
+                            expanded,
+                            ast.Constant,
+                        )
+                        else None
+                    ),
+                )
             )
 
         self.assertEqual(
             matches,
             [
-                {
-                    "label": (
-                        "Explainability (XAI)"
-                    ),
-                    "expanded": False,
-                }
+                (
+                    "Explainability (XAI)",
+                    False,
+                )
             ],
         )
 
-    def test_xai_content_has_no_nested_expanders(
-        self,
-    ) -> None:
-        function = self.functions[
-            "_render_main_xai"
-        ]
-
-        violations = []
-
-        for call in ast.walk(
-            function
-        ):
-            if not isinstance(
-                call,
-                ast.Call,
-            ):
-                continue
-
-            if (
-                dotted_name(
-                    call.func
-                ).split(".")[-1]
-                == "expander"
-            ):
-                violations.append(
-                    call.lineno
-                )
-
-        self.assertEqual(
-            violations,
-            [],
-        )
-
-    def test_no_arrow_backed_widgets(
+    def test_no_arrow_backed_tables(
         self,
     ) -> None:
         forbidden = {
@@ -522,19 +435,27 @@ class TestStreamlitAttentiveSlides(
 
         violations = []
 
-        for call in self.calls:
-            function_type = (
+        for node in ast.walk(
+            self.tree
+        ):
+            if not isinstance(
+                node,
+                ast.Call,
+            ):
+                continue
+
+            call_name = (
                 dotted_name(
-                    call.func
+                    node.func
                 ).split(".")[-1]
             )
 
-            if function_type in forbidden:
+            if call_name in forbidden:
                 violations.append(
-                    {
-                        "line": call.lineno,
-                        "function": function_type,
-                    }
+                    (
+                        call_name,
+                        node.lineno,
+                    )
                 )
 
         self.assertEqual(

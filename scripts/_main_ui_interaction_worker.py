@@ -24,6 +24,7 @@ os.environ.pop(
 os.environ.update(
     {
         "ATTENTIVE_ENABLE_OCR": "0",
+        "ATTENTIVE_DISABLE_CANVAS_FOR_APPTEST": "1",
         "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false",
         "OMP_NUM_THREADS": "1",
         "MKL_NUM_THREADS": "1",
@@ -34,6 +35,8 @@ os.environ.update(
         "MPLBACKEND": "Agg",
     }
 )
+
+os.environ["ATTENTIVE_DISABLE_CANVAS_FOR_APPTEST"] = "1"
 
 try:
     import resource
@@ -434,14 +437,66 @@ def run_overlay_scenario() -> dict[str, Any]:
     }
 
 
+
+def session_state_value(
+    app,
+    key: str,
+    default=None,
+):
+    """Read AppTest session state without dict.get()."""
+
+    try:
+        return app.session_state[
+            key
+        ]
+
+    except (
+        KeyError,
+        AttributeError,
+    ):
+        return default
+
+
 def run_manual_region_scenario() -> dict[str, Any]:
     app, completed = create_app()
 
-    skipped: list[str] = []
-
-    scope_option_snapshots: list[
+    option_snapshots: list[
         list[str]
     ] = []
+
+    selection_records: list[
+        dict[str, Any]
+    ] = []
+
+    def normalize_scope(
+        value: Any,
+    ) -> str:
+        normalized = (
+            str(value)
+            .strip()
+            .casefold()
+        )
+
+        if normalized in {
+            "whole slide",
+            "use whole slide",
+            "full slide",
+            "entire slide",
+        }:
+            return "Whole slide"
+
+        if normalized in {
+            "manual region",
+            "select region",
+            "selected region",
+            "region",
+        }:
+            return "Manual region"
+
+        raise AssertionError(
+            "Unsupported target-scope value: "
+            f"{value!r}"
+        )
 
     def read_scope_radio() -> tuple[
         Any,
@@ -461,186 +516,153 @@ def run_manual_region_scenario() -> dict[str, Any]:
             )
         )
 
-        normalized_snapshot = [
-            str(option)
-            for option in options
-        ]
-
-        scope_option_snapshots.append(
-            normalized_snapshot
+        option_snapshots.append(
+            [
+                str(option)
+                for option in options
+            ]
         )
 
         if not options:
             raise AssertionError(
-                "main_target_scope has no "
-                "available options."
+                "Target-scope radio has "
+                "no display options."
             )
 
-        return (
-            radio,
-            options,
-        )
+        return radio, options
 
-    def normalized_option(
-        option: Any,
-    ) -> str:
-        return (
-            str(option)
-            .strip()
-            .casefold()
-        )
-
-    def find_manual_option(
-        options: list[Any],
+    def resolve_set_value(
+        radio: Any,
+        display_options: list[Any],
+        canonical_value: str,
     ) -> Any:
-        exact_matches = [
-            option
-            for option in options
-            if normalized_option(option)
-            == "manual region"
-        ]
+        # With format_func, AppTest.options contains formatted labels,
+        # while set_value normally requires the underlying canonical
+        # option value.
+        formatter = getattr(
+            radio,
+            "format_func",
+            None,
+        )
 
-        if exact_matches:
-            return exact_matches[0]
-
-        semantic_matches = [
-            option
-            for option in options
-            if (
-                "manual"
-                in normalized_option(option)
-                and (
-                    "region"
-                    in normalized_option(option)
-                    or "area"
-                    in normalized_option(option)
+        if callable(formatter):
+            try:
+                formatted = formatter(
+                    canonical_value
                 )
-            )
-        ]
+            except Exception:
+                formatted = None
 
-        if semantic_matches:
-            return semantic_matches[0]
+            if formatted in display_options:
+                return canonical_value
+
+        if canonical_value in display_options:
+            return canonical_value
+
+        expected_scope = normalize_scope(
+            canonical_value
+        )
+
+        for option in display_options:
+            try:
+                option_scope = (
+                    normalize_scope(
+                        option
+                    )
+                )
+            except AssertionError:
+                continue
+
+            if option_scope == expected_scope:
+                return option
 
         raise AssertionError(
-            "Manual-region option is missing. "
-            f"Available options: "
-            f"{[str(option) for option in options]}"
+            "Unable to resolve radio value for "
+            f"{canonical_value!r}. "
+            "Display options: "
+            f"{[str(item) for item in display_options]}"
         )
 
-    def find_alternative_option(
-        options: list[Any],
-        manual_option: Any,
-    ) -> Any | None:
-        alternatives = [
-            option
-            for option in options
-            if option != manual_option
-        ]
-
-        if not alternatives:
-            return None
-
-        preferred_terms = (
-            "whole",
-            "full",
-            "entire",
-            "current slide",
-            "slide",
+    def select_scope(
+        canonical_value: str,
+        step_name: str,
+    ) -> None:
+        radio, options = (
+            read_scope_radio()
         )
 
-        for term in preferred_terms:
-            for option in alternatives:
-                if term in normalized_option(
-                    option
-                ):
-                    return option
+        value_to_set = resolve_set_value(
+            radio,
+            options,
+            canonical_value,
+        )
 
-        return alternatives[0]
+        selection_records.append(
+            {
+                "requested_canonical": (
+                    canonical_value
+                ),
+                "set_value": str(
+                    value_to_set
+                ),
+                "display_options": [
+                    str(option)
+                    for option in options
+                ],
+            }
+        )
 
-    scope_radio, scope_options = (
-        read_scope_radio()
-    )
-
-    manual_option = find_manual_option(
-        scope_options
-    )
-
-    scope_radio.set_value(
-        manual_option
-    )
-
-    run_step(
-        app,
-        completed,
-        "manual_region_mode",
-    )
-
-    ranges = (
-        (
-            (0.10, 0.90),
-            (0.10, 0.90),
-        ),
-        (
-            (0.20, 0.75),
-            (0.15, 0.80),
-        ),
-        (
-            (0.30, 0.65),
-            (0.25, 0.70),
-        ),
-    )
-
-    for index, (
-        x_range,
-        y_range,
-    ) in enumerate(ranges):
-        require_widget(
-            app,
-            "slider",
-            "main_region_x_range",
-        ).set_range(
-            *x_range
+        radio.set_value(
+            value_to_set
         )
 
         run_step(
             app,
             completed,
-            f"horizontal_range_{index}",
+            step_name,
         )
 
-        require_widget(
-            app,
-            "slider",
-            "main_region_y_range",
-        ).set_range(
-            *y_range
+        session_value = (
+            app.session_state[
+                "main_target_scope"
+            ]
         )
 
-        run_step(
-            app,
-            completed,
-            f"vertical_range_{index}",
+        actual_canonical = (
+            normalize_scope(
+                session_value
+            )
         )
 
+        if (
+            actual_canonical
+            != canonical_value
+        ):
+            raise AssertionError(
+                "Target-scope selection did not "
+                "produce the expected canonical "
+                "session value. "
+                f"requested={canonical_value!r}, "
+                f"session={session_value!r}, "
+                f"normalized={actual_canonical!r}"
+            )
+
+    select_scope(
+        "Manual region",
+        "select_manual_region",
+    )
+
+    # The browser-only drawing component is replaced with a
+    # deterministic placeholder during AppTest. Repeated clear
+    # operations still verify callback and rerun stability.
     for index in range(2):
-        require_widget(
-            app,
-            "button",
-            "main_apply_region_button",
-        ).click()
-
-        run_step(
-            app,
-            completed,
-            f"apply_region_{index}",
-        )
-
-    for index in range(2):
-        require_widget(
+        clear_button = require_widget(
             app,
             "button",
             "main_clear_region_button",
-        ).click()
+        )
+
+        clear_button.click()
 
         run_step(
             app,
@@ -648,89 +670,47 @@ def run_manual_region_scenario() -> dict[str, Any]:
             f"clear_region_{index}",
         )
 
-    # Read the current options again. They may change after
-    # reruns or after the target-selection state changes.
-    scope_radio, scope_options = (
-        read_scope_radio()
-    )
-
-    current_manual_option = (
-        find_manual_option(
-            scope_options
-        )
-    )
-
-    alternative_option = (
-        find_alternative_option(
-            scope_options,
-            current_manual_option,
-        )
-    )
-
-    if alternative_option is None:
-        skipped.append(
-            "alternative_target_scope"
+        current_scope = normalize_scope(
+            app.session_state[
+                "main_target_scope"
+            ]
         )
 
-    else:
-        scope_radio.set_value(
-            alternative_option
-        )
-
-        run_step(
-            app,
-            completed,
-            "alternative_scope_mode",
-        )
-
-        # Re-read the widget after rerun instead of assuming
-        # that its options remain identical.
-        scope_radio, scope_options = (
-            read_scope_radio()
-        )
-
-        current_manual_option = (
-            find_manual_option(
-                scope_options
+        if current_scope != "Manual region":
+            raise AssertionError(
+                "Clearing a region unexpectedly "
+                "changed the target scope."
             )
-        )
 
-        scope_radio.set_value(
-            current_manual_option
-        )
-
-        run_step(
-            app,
-            completed,
-            "manual_region_mode_again",
-        )
-
-    final_scope_radio, final_options = (
-        read_scope_radio()
+    select_scope(
+        "Whole slide",
+        "select_whole_slide",
     )
 
-    final_value = getattr(
-        final_scope_radio,
-        "value",
+    select_scope(
+        "Manual region",
+        "select_manual_region_again",
+    )
+
+    final_scope = normalize_scope(
         app.session_state[
             "main_target_scope"
-        ],
+        ]
     )
 
-    if final_value not in final_options:
+    if final_scope != "Manual region":
         raise AssertionError(
-            "Final target-scope value is not "
-            "contained in the current options. "
-            f"value={final_value!r}, "
-            f"options="
-            f"{[str(option) for option in final_options]}"
+            "Unexpected final target scope: "
+            f"{final_scope!r}"
         )
 
     return {
         "completed_steps": completed,
-        "skipped": skipped,
-        "scope_option_snapshots": (
-            scope_option_snapshots
+        "option_snapshots": (
+            option_snapshots
+        ),
+        "selection_records": (
+            selection_records
         ),
         "final_state": {
             "target_scope": (
@@ -738,10 +718,11 @@ def run_manual_region_scenario() -> dict[str, Any]:
                     "main_target_scope"
                 ]
             ),
+            "canonical_target_scope": (
+                final_scope
+            ),
             "manual_region_active": (
-                app.session_state[
-                    "main_manual_region_active"
-                ]
+                session_state_value(app, "main_manual_region_active", False)
             ),
         },
     }

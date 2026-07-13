@@ -128,6 +128,23 @@ class UploadedDeckBrowser:
         ]
 
 
+def configured_pdf_render_dpi() -> int:
+    """Return a bounded PDF rasterization DPI for uploaded decks."""
+    raw_value = os.environ.get(
+        "ATTENTIVE_PDF_RENDER_DPI",
+        "220",
+    )
+
+    try:
+        dpi = int(raw_value)
+    except (TypeError, ValueError):
+        dpi = 220
+
+    return max(
+        144,
+        min(300, dpi),
+    )
+
 class UploadedDeckWorkspace:
     """Persistent runtime workspace outside the Git repository."""
 
@@ -467,6 +484,8 @@ class UploadedDeckWorkspace:
         deck_id: str,
         slide_id: int,
     ) -> dict[str, Any]:
+        render_dpi = configured_pdf_render_dpi()
+
         key = self._slide_key(
             deck_id,
             slide_id,
@@ -488,7 +507,16 @@ class UploadedDeckWorkspace:
                 )
             )
 
-            if image_path.is_file():
+            expected_suffix = (
+                f"_{render_dpi}dpi.png"
+            )
+
+            if (
+                image_path.is_file()
+                and image_path.name.endswith(
+                    expected_suffix
+                )
+            ):
                 return existing
 
         worker_arguments = [
@@ -500,7 +528,7 @@ class UploadedDeckWorkspace:
             "--slide-id",
             str(slide_id),
             "--dpi",
-            "160",
+            str(render_dpi),
         ]
 
         if (
