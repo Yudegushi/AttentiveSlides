@@ -1,6 +1,6 @@
 # Live UI and Release Handoff
 
-Status: partial - automated Checkpoints 6-7 complete; live tutor browser flow blocked at controlled PDF upload.
+Status: partial - automated Checkpoints 6-7 complete; PDF upload and master control verified, but live tutor turns remain blocked by AutoDL SSH-WebRTC peer transport.
 Branch: `codex/live-system-integration-v1`
 Scope: Checkpoints 6–7
 
@@ -25,6 +25,7 @@ Scope: Checkpoints 6–7
 - Start HEAD: 4f19b6b; baseline: feature/api-llm-pipeline@705f1a2.
 - Checkpoint 6: a01d8e7 feat: add live Streamlit interface.
 - Checkpoint 7: af29b1a feat: connect live runtime to grounded tutor.
+- Follow-up UI fix: 383f393 fix: make live master switch automation-safe.
 - This handoff and its release documentation are committed after final checks.
   No branch was pushed, merged, reset, cleaned, or switched.
 
@@ -63,6 +64,12 @@ python alias.
   confirmation/correction scenarios and wrote its existing demo JSONL.
 - Both evaluations passed: reference-resolution had all four metrics 1.0 over
   eight scenarios; scenario-output accuracy was 1.0.
+- Follow-up Master-switch RED -> GREEN:
+  `/root/miniconda3/envs/attentive-app/bin/python -m unittest tests.test_streamlit_live.StreamlitLiveSurfaceTest.test_master_switch_uses_a_button_state_transition -v`
+  passed.
+- Related regression:
+  `/root/miniconda3/envs/attentive-app/bin/python -m unittest tests.test_streamlit_live tests.test_live_view_model tests.test_live_turn_runner tests.test_system_controller tests.test_system_pipeline -v`
+  passed 22 tests.
 
 Automated tests used fakes or synthetic packets only: no real camera/microphone
 and no real LLM/API call.
@@ -87,36 +94,36 @@ Attempted on 2026-07-13:
 4. Fallback validates browser transport and stop cleanup only; it does not
    substitute for the blocked live tutor turn.
 
+5. After Chrome file-URL access was enabled, the standard file chooser loaded
+   the valid two-page temporary PDF through remote 8514 and local 8503. The
+   button-based master switch rendered `Stop live runtime` across the rerun.
+   Retry commands: `setsid /root/miniconda3/envs/attentive-app/bin/python -m streamlit run apps/streamlit_live.py --server.address 127.0.0.1 --server.port 8514`
+   and `ssh -N -L 8503:127.0.0.1:8514 AutoDL`.
+6. Browser diagnostics received an SDP answer and ICE candidates, then changed
+   from `connecting` to `failed` after about 15 seconds repeatedly. The live
+   view stayed `is_running: false` with zero queues; no provider/API was called.
+7. An initial transient Streamlit connection ended with its parent context. A
+   detached retry was used for the transport diagnosis; final cleanup found no
+   remote live-app process, stopped the SSH tunnel, and finalized the test tab.
+
 Local 8501 was already an unrelated SSH listener, so temporary 8503/8504 ports
 were used without disturbing it. The temporary AutoDL services and SSH tunnels
 started for acceptance were stopped afterwards.
 
 ## Interface difference, risk, and remaining manual gate
 
-The existing AutoDL SSH TCP limitation can prevent Streamlit WebRTC from
-playing even though same-origin fallback transports packets. Both paths remain
-documented with distinct scope; no controller, packet, queue, snapshot-store,
-or canonical pipeline contract was changed to work around it.
+The AutoDL SSH TCP route is confirmed to fail after SDP/ICE negotiation. No
+controller, packet, queue, snapshot-store, or canonical pipeline contract was
+changed to work around the direct WebRTC peer transport limitation.
 
-The incomplete live manual flow is a release risk. In an interactive browser
-with file upload support, load a real PDF, enable the master switch, speak a
-deictic request, select a correction, check data/logs/live_interactions.jsonl,
-then stop or close the page.
+The incomplete live manual flow is a release risk. A WebRTC-reachable browser
+route is required to load a real PDF, enable the master switch, speak a deictic
+request, select a correction, inspect data/logs/live_interactions.jsonl, then
+stop or close the page.
 
 ## Final state
 
-After the documentation commit: branch remains
-codex/live-system-integration-v1; git diff --check is clean; no temporary
-acceptance process remains; push status is **not pushed**.
-
-## Chrome retry prerequisite
-
-A second Chrome retry reached the standard file chooser for the generated
-temporary PDF, but fileChooser.setFiles failed with `Not allowed`. Chrome
-requires the ChatGPT Chrome Extension setting **Allow access to file URLs**
-before controlled upload can continue. This is an external local permission,
-not a live UI, media, controller, or pipeline failure. No code was changed.
-
-After enabling it at chrome://extensions -> ChatGPT Chrome Extension ->
-Details, rerun the complete live acceptance from PDF upload through five turns,
-confirmation/correction, JSONL/XAI inspection, and OFF/disconnect cleanup.
+The branch remains `codex/live-system-integration-v1` and is not pushed. Final
+`git diff --check` is clean; `?? data/live_decks/` is preserved manual PDF-render
+output. No temporary remote live-app process remains; the acceptance SSH tunnel
+is stopped and the controlled Chrome test tab is finalized.

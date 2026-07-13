@@ -85,23 +85,13 @@ payloads.
 
 ## 2026-07-13 manual status
 
-The live page was opened over a temporary AutoDL SSH tunnel and showed the
-deterministic tutor selection, master switch, transport state, gaze/turn
-panels, AOI surface, confirmation section, and developer trace. The
-controlled browser did not support injecting the required generated PDF into
-the upload input, so loading a deck, running a real spoken deictic turn,
-performing a confirmation/correction, and observing its live JSONL event
-remain **not verified**. The separate same-origin fallback did capture real
-camera/microphone packets and cleared its queues on OFF; it must not be treated
-as completion of the tutor interaction.
+On the retry, Chrome file-URL access was enabled and the standard file chooser
+loaded the valid two-page `attentiveslides-manual-acceptance.pdf` into the live
+page.
 
-## Chrome upload prerequisite
+Commit `383f393` replaces the React-Aria `st.toggle` Master switch with a
+standard Streamlit button backed by session state. The controlled page rendered
+the `Stop live runtime` state across the deck-upload rerun.
 
-A second manual retry used Chrome's standard file chooser and reached the
-upload action, but setting the temporary PDF failed with `Not allowed` because
-the ChatGPT Chrome Extension does not have permission to access file URLs.
-Before retrying, open `chrome://extensions`, choose **Details** for the
-ChatGPT Chrome Extension, and enable **Allow access to file URLs**. Then
-restart the documented loopback-only Streamlit server/tunnel and repeat the
-full live acceptance; do not treat this prerequisite as a tutor or transport
-failure.
+Over the loopback SSH forwarding route, `streamlit-webrtc` received an SDP
+answer and emitted ICE candidates, then repeatedly changed from `connecting`
