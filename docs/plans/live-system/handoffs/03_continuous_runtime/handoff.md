@@ -5,7 +5,7 @@ Branch: codex/live-system-integration-v1
 Scope: Checkpoints 4–5
 Start commit: 9ccd5f3
 Checkpoint 4 commit: e4fc28e (feat: add continuous speech turn detection)
-End commit: 4d628e2 (feat: orchestrate live runtime lifecycle)
+End feature commit: 8fc4caa (feat: orchestrate live runtime lifecycle)
 
 ## Delivered
 
