@@ -1,8 +1,9 @@
 # Continuous Runtime Handoff
 
-Status: not_started
+Status: in_progress
 Branch: `codex/live-system-integration-v1`
 Scope: Checkpoints 4–5
+Start commit: 9ccd5f3 (docs: finalize slide sensing handoff)
 
 ## Purpose
 
@@ -19,3 +20,20 @@ Scope: Checkpoints 4–5
 ## Dependency on previous conversation
 
 在对话 2 handoff 未完成前不得实现。audio/media timestamp 与 sensing snapshot clock 必须先有统一、可验证的解释，才能做 speech-window aggregation。
+
+## Pre-implementation decisions and deviations
+
+- BrowserMediaSource audio packets expose source-relative timestamps
+  (`media_time_seconds` or `browser_performance_seconds`), while
+  SensingSnapshotStore windows use server-monotonic `processed_at`. AudioWorker
+  will explicitly anchor each contiguous source clock to the worker monotonic
+  clock at dequeue time, then VoiceTurnDetector will emit only that normalized
+  timeline. Context aggregation will not compare raw browser timestamps.
+- AutoDL does not have `webrtcvad` installed. The implementation uses an
+  injectable WebRTC-compatible protocol and optional WebRTC adapter, with a
+  deterministic local energy fallback. Unit tests inject deterministic VADs and
+  never download a model or open a microphone.
+- BrowserMediaSource's immutable AudioPacket and bounded queue interface is
+  unchanged. AudioWorker consumes the queue outside callbacks; raw PCM is kept
+  only in bounded pre-roll/maximum-turn memory and a temporary WAV is deleted
+  immediately after transcription.
