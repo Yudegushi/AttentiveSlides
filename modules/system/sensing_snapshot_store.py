@@ -20,6 +20,7 @@ class SensingSnapshot:
     frame: SensingFrame
     is_valid: bool
     invalid_reason: str | None
+    manifest_identity: str | None = None
 
 
 class SensingSnapshotStore:
@@ -50,6 +51,7 @@ class SensingSnapshotStore:
         frame: SensingFrame,
         is_valid: bool,
         invalid_reason: str | None,
+        manifest_identity: str | None = None,
     ) -> SensingSnapshot:
         return SensingSnapshot(
             slide_id=int(slide_id),
@@ -59,6 +61,7 @@ class SensingSnapshotStore:
             frame=frame,
             is_valid=bool(is_valid),
             invalid_reason=invalid_reason,
+            manifest_identity=manifest_identity,
         )
 
     def put(self, snapshot: SensingSnapshot) -> None:

@@ -22,6 +22,7 @@ from modules.media.browser_media_source import BrowserMediaSource
 from modules.system.adapters import SlideProvider
 from modules.system.human_sensing_adapter import HumanSensingAdapter
 from modules.system.sensing_snapshot_store import SensingSnapshotStore
+from modules.system.turn_context import manifest_identity_for_frame
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,7 @@ class SensingWorker:
                 frame=adapted.frame,
                 is_valid=adapted.is_valid,
                 invalid_reason=adapted.invalid_reason,
+                manifest_identity=manifest_identity_for_frame(slide_frame),
             )
         )
         self._last_processed_at = processed_at

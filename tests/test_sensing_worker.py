@@ -181,6 +181,7 @@ class SensingWorkerTest(unittest.TestCase):
         self.assertEqual(extractor.values, [2])
         self.assertEqual(snapshot.source_timestamp, 2.0)
         self.assertEqual(snapshot.frame.gaze_prediction.predicted_aoi_id, "target")
+        self.assertTrue(snapshot.manifest_identity)
         worker.set_slide(2)
         self.assertIsNone(self.store.latest_valid_for_slide(1))
         self.assertIsNone(self.store.latest_valid_for_slide(2))

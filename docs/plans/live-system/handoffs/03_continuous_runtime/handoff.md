@@ -1,39 +1,46 @@
 # Continuous Runtime Handoff
 
-Status: in_progress
-Branch: `codex/live-system-integration-v1`
+Status: complete
+Branch: codex/live-system-integration-v1
 Scope: Checkpoints 4–5
-Start commit: 9ccd5f3 (docs: finalize slide sensing handoff)
+Start commit: 9ccd5f3
+Checkpoint 4 commit: e4fc28e (feat: add continuous speech turn detection)
+End commit: 4d628e2 (feat: orchestrate live runtime lifecycle)
 
-## Purpose
+## Delivered
 
-对话 3 必须先读取 `../02_slide_sensing/handoff.md`，并在结束前用真实结果重写本文件。完整字段和证据要求见 `../../00_global_contract.md` 第 7 节。
+- Checkpoint 4: bounded AudioRingBuffer; injectable WebRTC-compatible VAD protocol with optional WebRTC adapter and local energy fallback; fixed 16k PCM VoiceTurnDetector with 300ms pre-roll, 150ms start, 800ms end silence, 300ms minimum, 20s cap, cancel and explicit overrun degradation; AudioWorker normalizes browser PCM, anchors source clocks to worker monotonic time, writes temporary WAV only for STT, deletes it, and exposes recoverable STT errors.
+- Checkpoint 5: SystemController owns media/sensing/audio lifecycle and RuntimeState transitions. It freezes deck/slide/AOI-manifest identity at speech start, uses start-time slide on navigation, applies busy-ignore policy during processing/confirmation, and resumes the existing confirmation gate without recomputing context.
+- TurnContextCollector aggregates only valid, matching-manifest snapshots by confidence × bounded dwell; ties are AOI-ID deterministic; stale/invalid/legacy snapshots downgrade to no target. SensingWorker writes optional manifest_identity while existing stale/window APIs remain compatible.
+- LiveTurnRunner reuses build_pipeline_input_bundle() and run_interaction_from_bundle() (which invokes run_interaction()) plus existing tutor/logging logic. No Member dataclass enters canonical pipeline.
 
-## Required completion record
+## State and lifecycle
 
-- Start/end commit 与 audio turn、orchestration checkpoint commits。
-- normalized audio/VAD backend、turn thresholds、event/cancel/overrun semantics。
-- controller public API、state transitions、thread ownership 与 busy policy。
-- frozen turn/context types、sensing aggregation、confirmation resume/correction contract。
-- deterministic E2E、failure recovery、multi-turn lifecycle 与 workspace evidence。
+STOPPED → STARTING → MONITORING → SPEECH_ACTIVE → FINALIZING_AUDIO → PROCESSING_TURN → WAITING_CONFIRMATION or MONITORING. start()/stop() and disconnect cleanup are idempotent. One active turn only; later speech while busy is discarded with busy_turn_count. STT failure returns MONITORING; disconnect follows ERROR → STOPPED.
 
-## Dependency on previous conversation
+## Verification evidence
 
-在对话 2 handoff 未完成前不得实现。audio/media timestamp 与 sensing snapshot clock 必须先有统一、可验证的解释，才能做 speech-window aggregation。
+All commands ran via AutoDL in /root/autodl-tmp/workspace/AttentiveSlides-live-system.
 
-## Pre-implementation decisions and deviations
+- C4 baseline: unittest media/audio targeted suite — PASS, 27 tests.
+- C4 targeted: unittest media/audio/new tests — PASS, 45 tests.
+- C4 full: unittest discover -s tests -v — PASS, 206 tests.
+- C5 targeted: unittest browser/media/audio/sensing/context/runner/controller/E2E/system suites — PASS, 56 tests.
+- C5 full: unittest discover -s tests -v — PASS, 216 tests.
+- Deterministic E2E: dynamic real PDF + synthetic snapshot + synthetic PCM + mock transcriber/template tutor → pending confirmation → correction → JSONL → MONITORING — PASS.
+- git diff --check before both feature commits: no output.
 
-- BrowserMediaSource audio packets expose source-relative timestamps
-  (`media_time_seconds` or `browser_performance_seconds`), while
-  SensingSnapshotStore windows use server-monotonic `processed_at`. AudioWorker
-  will explicitly anchor each contiguous source clock to the worker monotonic
-  clock at dequeue time, then VoiceTurnDetector will emit only that normalized
-  timeline. Context aggregation will not compare raw browser timestamps.
-- AutoDL does not have `webrtcvad` installed. The implementation uses an
-  injectable WebRTC-compatible protocol and optional WebRTC adapter, with a
-  deterministic local energy fallback. Unit tests inject deterministic VADs and
-  never download a model or open a microphone.
-- BrowserMediaSource's immutable AudioPacket and bounded queue interface is
-  unchanged. AudioWorker consumes the queue outside callbacks; raw PCM is kept
-  only in bounded pre-roll/maximum-turn memory and a temporary WAV is deleted
-  immediately after transcription.
+## Risks and manual acceptance
+
+- webrtcvad is not installed on AutoDL; the deterministic energy fallback is used unless the optional backend is installed. Real faster-whisper/model performance is not verified.
+- Browser live/camera/microphone acceptance: not verified; no permission was requested.
+
+Shortest manual smoke (not run): start the existing same-origin fallback, instantiate loaded RealSlideProvider, SensingWorker, AudioWorker and SystemController, call set_slide()/start(), grant browser media, speak one short deictic request, confirm the target, then switch OFF and verify STOPPED with empty queues.
+
+## Next conversation must read
+
+e4fc28e and this end commit; modules/system/controller.py, live_turn_runner.py, turn_context.py, runtime_state.py, audio_worker.py; modules/audio/voice_turn_detector.py; modules/system/sensing_snapshot_store.py and sensing_worker.py; tests/test_live_integrated_turn.py, test_system_controller.py, test_live_turn_runner.py, test_turn_context.py.
+
+## Workspace state
+
+Final status, processes, and push state are recorded after the end commit. Push: not pushed. No merge, PR, reset, clean, or main change.

@@ -104,6 +104,8 @@ class AudioWorker:
         self.start_count = 0
         self.stop_count = 0
         self.result_drops = 0
+        self._on_turn_started: Callable[[float], None] | None = None
+        self._on_turn_discarded: Callable[[float, str], None] | None = None
 
     @property
     def is_running(self) -> bool:
@@ -134,6 +136,15 @@ class AudioWorker:
         if was_running:
             self.stop_count += 1
 
+    def set_turn_callbacks(
+        self,
+        *,
+        on_started: Callable[[float], None],
+        on_discarded: Callable[[float, str], None],
+    ) -> None:
+        self._on_turn_started = on_started
+        self._on_turn_discarded = on_discarded
+
     def get_result_nowait(self) -> AudioTurnResult:
         return self._results.get_nowait()
 
@@ -153,7 +164,14 @@ class AudioWorker:
                 samples=pcm.size,
                 sample_rate=self.detector.config.sample_rate,
             )
-            for turn in self.detector.feed(pcm, start_at=start_at):
+            turns = self.detector.feed(pcm, start_at=start_at)
+            for started_at in self.detector.drain_started_turns():
+                if self._on_turn_started is not None:
+                    self._on_turn_started(started_at)
+            for discarded_at, reason in self.detector.drain_discarded_turns():
+                if self._on_turn_discarded is not None:
+                    self._on_turn_discarded(discarded_at, reason)
+            for turn in turns:
                 result = self._result_for_turn(turn)
                 self._publish(result)
                 results.append(result)

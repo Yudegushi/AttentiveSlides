@@ -79,11 +79,23 @@ class VoiceTurnDetector:
         self._last_speech_end_at: float | None = None
         self._silence_frames = 0
         self._degradation_reason: str | None = None
+        self._started_events: deque[float] = deque()
+        self._discarded_events: deque[tuple[float, str]] = deque()
         self.dropped_utterance_count = 0
 
     @property
     def has_active_turn(self) -> bool:
         return self._active_chunks is not None
+
+    def drain_started_turns(self) -> list[float]:
+        events = list(self._started_events)
+        self._started_events.clear()
+        return events
+
+    def drain_discarded_turns(self) -> list[tuple[float, str]]:
+        events = list(self._discarded_events)
+        self._discarded_events.clear()
+        return events
 
     def feed(self, samples: np.ndarray, *, start_at: float) -> list[SpeechTurn]:
         incoming = np.asarray(samples, dtype=np.int16).reshape(-1)
@@ -127,6 +139,7 @@ class VoiceTurnDetector:
                 self._started_at = frame_start - (self._start_frames - 1) * self._frame_seconds
                 self._last_speech_end_at = frame_end
                 self._silence_frames = 0
+                self._started_events.append(self._started_at)
             return None
 
         assert self._active_chunks is not None
@@ -155,6 +168,7 @@ class VoiceTurnDetector:
         self._reset_turn_state()
         if speech_duration + 1e-9 < self.config.minimum_utterance_ms / 1_000:
             self.dropped_utterance_count += 1
+            self._discarded_events.append((started_at, "short_utterance"))
             return None
         return SpeechTurn(
             samples=samples,

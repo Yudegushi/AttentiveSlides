@@ -177,5 +177,32 @@ class AudioWorkerTest(unittest.TestCase):
         self.assertTrue(self.source.audio_queue.empty())
 
 
+    def test_notifies_turn_start_before_completed_result(self):
+        starts = []
+        discarded = []
+        worker = AudioWorker(
+            media_source=self.source,
+            detector=make_detector(),
+            transcribe=lambda path: Transcript("hello"),
+            clock=self.clock,
+        )
+        worker.set_turn_callbacks(
+            on_started=starts.append,
+            on_discarded=lambda timestamp, reason: discarded.append((timestamp, reason)),
+        )
+        self.source.accept_audio_samples(
+            pcm([1_000, 0, 0]),
+            timestamp=3.0,
+            sample_rate=16_000,
+            channels=1,
+            timestamp_clock="browser_performance_seconds",
+        )
+
+        worker.process_available_audio()
+
+        self.assertEqual(starts, [10.0])
+        self.assertEqual(discarded, [])
+
+
 if __name__ == "__main__":
     unittest.main()
