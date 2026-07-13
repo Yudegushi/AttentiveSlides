@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+
+os.environ.setdefault(
+    "ATTENTIVE_DISABLE_MICROPHONE_FOR_APPTEST",
+    "1",
+)
 import subprocess
 import sys
 import tempfile

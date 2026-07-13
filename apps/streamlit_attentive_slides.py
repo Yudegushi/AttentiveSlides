@@ -84,6 +84,7 @@ from modules.system.manual_targeting import (
 from modules.system.uploaded_deck_service import (
     UploadedDeckWorkspace,
 )
+from modules.system.voice_input_ui import render_voice_input_panel, voice_sidebar_status
 
 
 BUILT_IN_MANIFEST_PATH = (
@@ -792,7 +793,9 @@ def _render_sidebar_status(
             border=True
         ):
             st.caption("MICROPHONE")
-            st.markdown("**Off**")
+            st.markdown(
+            f"**{voice_sidebar_status()}**"
+        )
 
     cloud_api_configured = bool(
         os.environ.get(
@@ -1207,6 +1210,10 @@ def _render_intent_column(
 
     _render_quick_intent_actions()
 
+    render_voice_input_panel(
+        command_key="main_typed_command",
+    )
+    
     st.text_area(
         "Typed command",
         key="main_typed_command",

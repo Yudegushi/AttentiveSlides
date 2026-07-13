@@ -208,6 +208,39 @@ class TestBailianTTSClient(
                 ),
             )
 
+    def test_explicit_empty_key_does_not_fall_back_to_environment(
+        self,
+    ) -> None:
+        from unittest.mock import patch
+
+        with patch.dict(
+            "os.environ",
+            {
+                "DASHSCOPE_API_KEY": (
+                    "environment-key"
+                ),
+            },
+            clear=False,
+        ):
+            client = BailianTTSClient(
+                api_key="",
+            )
+
+            with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(
+                    SpeechSynthesisError
+                ):
+                    client.synthesize(
+                        SpeechSynthesisRequest(
+                            text="测试。",
+                        ),
+                        output_path=(
+                            Path(directory)
+                            / "answer.wav"
+                        ),
+                    )
+
+
     def test_missing_key_is_rejected(
         self,
     ) -> None:

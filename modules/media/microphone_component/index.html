@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+  >
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 0.55rem;
+      background: transparent;
+    }
+
+    button {
+      padding: 0.45rem 0.75rem;
+      margin-right: 0.4rem;
+      cursor: pointer;
+    }
+
+    #status {
+      margin: 0.5rem 0 0;
+      font-size: 0.88rem;
+    }
+
+    #stats {
+      margin-top: 0.3rem;
+      font-size: 0.75rem;
+      opacity: 0.75;
+    }
+  </style>
+</head>
+<body>
+  <button id="start">
+    Start microphone
+  </button>
+
+  <button
+    id="stop"
+    disabled
+  >
+    Stop
+  </button>
+
+  <div id="status">
+    Microphone is off.
+  </div>
+
+  <div id="stats"></div>
+
+<script>
+(() => {
+  const sessionId =
+    globalThis.crypto?.randomUUID?.()
+    ?? `${Date.now()}-${Math.random()}`;
+
+  const startButton =
+    document.getElementById("start");
+
+  const stopButton =
+    document.getElementById("stop");
+
+  const status =
+    document.getElementById("status");
+
+  const stats =
+    document.getElementById("stats");
+
+  let stream = null;
+  let audioContext = null;
+  let sourceNode = null;
+  let processor = null;
+  let silentGain = null;
+  let heartbeatTimer = null;
+  let statsTimer = null;
+  let running = false;
+  let chunkInFlight = false;
+  let clientDrops = 0;
+
+  function headers(extra = {}) {
+    return {
+      "X-Attentive-Audio-Session":
+        sessionId,
+      ...extra,
+    };
+  }
+
+  async function requireOk(response) {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(
+        text || `HTTP ${response.status}`
+      );
+    }
+
+    return response;
+  }
+
+  function downsampleToS16(
+    input,
+    sourceRate,
+  ) {
+    const targetRate = 16000;
+
+    const count = Math.max(
+      1,
+      Math.floor(
+        input.length
+        * targetRate
+        / sourceRate
+      ),
+    );
+
+    const output =
+      new Int16Array(count);
+
+    for (
+      let index = 0;
+      index < count;
+      index += 1
+    ) {
+      const sourceIndex = Math.min(
+        input.length - 1,
+        Math.floor(
+          index
+          * sourceRate
+          / targetRate
+        ),
+      );
+
+      const sample = Math.max(
+        -1,
+        Math.min(
+          1,
+          input[sourceIndex],
+        ),
+      );
+
+      output[index] =
+        Math.round(sample * 32767);
+    }
+
+    return output;
+  }
+
+  function beginAudioPump() {
+    audioContext =
+      new AudioContext();
+
+    sourceNode =
+      audioContext
+      .createMediaStreamSource(stream);
+
+    processor =
+      audioContext
+      .createScriptProcessor(
+        4096,
+        1,
+        1,
+      );
+
+    silentGain =
+      audioContext.createGain();
+
+    silentGain.gain.value = 0;
+
+    processor.onaudioprocess =
+      (event) => {
+        if (!running) {
+          return;
+        }
+
+        if (chunkInFlight) {
+          clientDrops += 1;
+          return;
+        }
+
+        const pcm = downsampleToS16(
+          event.inputBuffer
+            .getChannelData(0),
+          audioContext.sampleRate,
+        );
+
+        chunkInFlight = true;
+
+        fetch(
+          "/audio/chunk",
+          {
+            method: "POST",
+            headers: headers({
+              "Content-Type":
+                "audio/L16",
+              "X-Audio-Timestamp":
+                String(
+                  performance.now()
+                  / 1000
+                ),
+              "X-Audio-Sample-Rate":
+                "16000",
+              "X-Audio-Channels":
+                "1",
+            }),
+            body: pcm.buffer,
+          },
+        )
+          .then(requireOk)
+          .catch((error) => {
+            status.textContent =
+              `Audio transport error: `
+              + error.message;
+          })
+          .finally(() => {
+            chunkInFlight = false;
+          });
+      };
+
+    sourceNode.connect(
+      processor
+    );
+
+    processor.connect(
+      silentGain
+    );
+
+    silentGain.connect(
+      audioContext.destination
+    );
+  }
+
+  function beginHeartbeat() {
+    heartbeatTimer =
+      window.setInterval(
+        () => {
+          if (!running) {
+            return;
+          }
+
+          fetch(
+            "/audio/heartbeat",
+            {
+              method: "POST",
+              headers: headers(),
+            },
+          )
+            .then(requireOk)
+            .catch(() => {
+              stopCapture(false);
+            });
+        },
+        1000,
+      );
+  }
+
+  async function refreshStats() {
+    try {
+      const response =
+        await fetch("/audio/stats");
+
+      const payload =
+        await response.json();
+
+      stats.textContent =
+        `server chunks: `
+        + `${payload.accepted_chunks}; `
+        + `queue: `
+        + `${payload.queue_depth}; `
+        + `client drops: `
+        + `${clientDrops}`;
+
+      if (
+        running
+        && !payload.source_running
+      ) {
+        await stopCapture(false);
+
+        status.textContent =
+          "Server released the microphone "
+          + "session.";
+      }
+    } catch (error) {
+      stats.textContent =
+        `Stats unavailable: `
+        + error.message;
+    }
+  }
+
+  async function startCapture() {
+    if (running) {
+      return;
+    }
+
+    try {
+      stream =
+        await navigator.mediaDevices
+        .getUserMedia({
+          video: false,
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+
+      if (
+        !stream.getAudioTracks().length
+      ) {
+        throw new Error(
+          "No microphone track returned."
+        );
+      }
+
+      await requireOk(
+        await fetch(
+          "/audio/start",
+          {
+            method: "POST",
+            headers: headers(),
+          },
+        ),
+      );
+
+      running = true;
+
+      beginAudioPump();
+
+      await audioContext.resume();
+
+      beginHeartbeat();
+
+      startButton.disabled = true;
+      stopButton.disabled = false;
+
+      status.textContent =
+        "Listening. Audio remains local "
+        + "to the application runtime.";
+    } catch (error) {
+      status.textContent =
+        `Microphone did not start: `
+        + error.message;
+
+      await stopCapture(true);
+    }
+  }
+
+  async function stopCapture(
+    notifyServer,
+  ) {
+    const wasRunning =
+      Boolean(running || stream);
+
+    running = false;
+
+    window.clearInterval(
+      heartbeatTimer
+    );
+
+    heartbeatTimer = null;
+
+    if (processor) {
+      processor.disconnect();
+    }
+
+    if (sourceNode) {
+      sourceNode.disconnect();
+    }
+
+    if (silentGain) {
+      silentGain.disconnect();
+    }
+
+    processor = null;
+    sourceNode = null;
+    silentGain = null;
+
+    if (audioContext) {
+      await audioContext
+        .close()
+        .catch(() => {});
+    }
+
+    audioContext = null;
+
+    if (stream) {
+      stream
+        .getTracks()
+        .forEach(
+          (track) => track.stop()
+        );
+    }
+
+    stream = null;
+
+    startButton.disabled = false;
+    stopButton.disabled = true;
+
+    if (
+      notifyServer
+      && wasRunning
+    ) {
+      await fetch(
+        "/audio/stop",
+        {
+          method: "POST",
+          headers: headers(),
+        },
+      ).catch(() => {});
+    }
+
+    status.textContent =
+      "Microphone is off.";
+  }
+
+  startButton.addEventListener(
+    "click",
+    startCapture,
+  );
+
+  stopButton.addEventListener(
+    "click",
+    () => stopCapture(true),
+  );
+
+  window.addEventListener(
+    "pagehide",
+    () => {
+      if (stream) {
+        stream
+          .getTracks()
+          .forEach(
+            (track) => track.stop()
+          );
+      }
+
+      fetch(
+        `/audio/stop?session=${
+          encodeURIComponent(
+            sessionId
+          )
+        }`,
+        {
+          method: "POST",
+          keepalive: true,
+        },
+      ).catch(() => {});
+    },
+  );
+
+  statsTimer =
+    window.setInterval(
+      refreshStats,
+      1000,
+    );
+
+  refreshStats();
+})();
+</script>
+</body>
+</html>
