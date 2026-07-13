@@ -28,6 +28,10 @@ from streamlit_drawable_canvas import (
     st_canvas,
 )
 
+from modules.system.integrated_pipeline_xai import (
+    build_integrated_pipeline_xai,
+)
+
 from modules.system.main_tutor_integration import (
     assess_tutor_generation,
     generate_main_tutor_response,
@@ -1666,188 +1670,427 @@ def _render_tutor_result() -> None:
 
 
 def _render_main_xai() -> None:
-    """Render sanitized interaction and LLM evidence."""
-    confirmed = st.session_state[
-        "main_confirmed_interaction"
-    ]
-
-    xai = st.session_state[
-        "main_xai_result"
-    ]
+    """Render integrated, observable pipeline explanations."""
+    integrated = build_integrated_pipeline_xai(
+        target_scope=(
+            st.session_state.get(
+                "main_target_scope",
+                "Whole slide",
+            )
+        ),
+        manual_bbox=(
+            st.session_state.get(
+                "main_manual_bbox"
+            )
+        ),
+        selection_matches=(
+            st.session_state.get(
+                "main_selection_matches",
+                [],
+            )
+        ),
+        intent_result=(
+            st.session_state.get(
+                "main_intent_result"
+            )
+        ),
+        confirmed_interaction=(
+            st.session_state.get(
+                "main_confirmed_interaction"
+            )
+        ),
+        tutor_result=(
+            st.session_state.get(
+                "main_tutor_result"
+            )
+        ),
+        llm_xai=(
+            st.session_state.get(
+                "main_xai_result"
+            )
+        ),
+        cloud_text_allowed=bool(
+            st.session_state.get(
+                "main_cloud_text_allowed",
+                False,
+            )
+        ),
+    )
 
     st.markdown(
-        "#### Interaction provenance"
+        "### Integrated pipeline explanation"
     )
 
-    if confirmed is None:
-        st.info(
-            "No interaction has been confirmed."
-        )
-    else:
-        interaction = confirmed[
-            "interaction"
-        ]
-
-        st.json(
-            {
-                "interaction_mode": (
-                    interaction["mode"]
-                ),
-                "target_source": (
-                    interaction[
-                        "target"
-                    ][
-                        "source"
-                    ]
-                ),
-                "selected_bbox": (
-                    interaction[
-                        "target"
-                    ].get(
-                        "bbox"
-                    )
-                ),
-                "intent_source": (
-                    interaction[
-                        "intent"
-                    ][
-                        "source"
-                    ]
-                ),
-                "typed_command": (
-                    interaction[
-                        "intent"
-                    ][
-                        "text"
-                    ]
-                ),
-                "confirmation_source": (
-                    interaction[
-                        "confirmation"
-                    ][
-                        "source"
-                    ]
-                ),
-                "confirmed_aoi_id": (
-                    interaction[
-                        "confirmation"
-                    ][
-                        "confirmed_aoi_id"
-                    ]
-                ),
-                "corrected_from_aoi_id": (
-                    interaction[
-                        "confirmation"
-                    ].get(
-                        "corrected_from_aoi_id"
-                    )
-                ),
-            }
-        )
-
-    st.markdown(
-        "#### Answer grounding"
-    )
-
-    if xai is None:
-        st.info(
-            "Generate an answer to view "
-            "claim–source grounding."
-        )
-        return
-
-    st.write(
-        xai[
-            "decision_summary"
-        ]
-    )
-
-    validation = xai[
-        "validation"
+    questions = integrated[
+        "questions"
     ]
 
-    columns = st.columns(3)
+    target = questions["target"]
+    intent = questions["intent"]
+    answer = questions["answer"]
+    reliability = questions[
+        "reliability"
+    ]
 
-    columns[0].metric(
-        "Validation",
+    metrics = st.columns(4)
+
+    metrics[0].metric(
+        "Pipeline",
+        integrated[
+            "pipeline_status"
+        ],
+    )
+
+    metrics[1].metric(
+        "Target",
         (
-            "PASS"
-            if validation[
-                "is_valid"
+            target[
+                "confirmed_aoi_id"
             ]
-            else "FAIL"
-        ),
-    )
-
-    coverage = validation[
-        "citation_coverage"
-    ]
-
-    columns[1].metric(
-        "Citation coverage",
-        (
-            f"{coverage:.0%}"
-            if coverage is not None
-            else "N/A"
-        ),
-    )
-
-    columns[2].metric(
-        "Confirmed AOI cited",
-        (
-            "Yes"
-            if validation[
-                "confirmed_aoi_cited"
+            or target[
+                "selected_aoi_id"
             ]
-            else "No"
+            or "pending"
         ),
     )
 
-    st.markdown(
-        "##### Claim–source mapping"
+    metrics[2].metric(
+        "Intent",
+        (
+            intent[
+                "resolved_intent"
+            ]
+            or "pending"
+        ),
     )
 
-    if xai["claims"]:
-        st.dataframe(
-            xai["claims"],
-            hide_index=True,
-            width="stretch",
-        )
-    else:
-        st.caption(
-            "No educational claims were produced."
-        )
-
-    st.markdown(
-        "##### Sources"
+    metrics[3].metric(
+        "Reliability",
+        reliability["level"],
     )
 
     st.dataframe(
-        xai["sources"],
+        integrated["pipeline"],
         hide_index=True,
         width="stretch",
     )
 
+    with st.container(
+        border=True
+    ):
+        st.markdown(
+            "#### Why this target?"
+        )
+
+        st.write(
+            target["explanation"]
+        )
+
+        target_columns = st.columns(3)
+
+        target_columns[0].metric(
+            "Source",
+            (
+                target["target_source"]
+                or "pending"
+            ),
+        )
+
+        target_columns[1].metric(
+            "Confirmed AOI",
+            (
+                target[
+                    "confirmed_aoi_id"
+                ]
+                or "pending"
+            ),
+        )
+
+        target_columns[2].metric(
+            "Corrected",
+            (
+                "Yes"
+                if target[
+                    "corrected_by_learner"
+                ]
+                else "No"
+            ),
+        )
+
+        if target["bbox"] is not None:
+            st.code(
+                json.dumps(
+                    {
+                        "normalized_bbox": (
+                            target["bbox"]
+                        )
+                    },
+                    indent=2,
+                ),
+                language="json",
+            )
+
+        if target["candidates"]:
+            st.markdown(
+                "##### AOI overlap candidates"
+            )
+
+            st.dataframe(
+                target["candidates"],
+                hide_index=True,
+                width="stretch",
+            )
+
+    with st.container(
+        border=True
+    ):
+        st.markdown(
+            "#### Why this intent?"
+        )
+
+        st.write(
+            intent["explanation"]
+        )
+
+        intent_columns = st.columns(3)
+
+        intent_columns[0].metric(
+            "Source",
+            intent["source"]
+            or "pending",
+        )
+
+        intent_columns[1].metric(
+            "Resolved intent",
+            (
+                intent[
+                    "resolved_intent"
+                ]
+                or "pending"
+            ),
+        )
+
+        intent_columns[2].metric(
+            "Confidence",
+            (
+                f"{intent['confidence']:.2f}"
+                if intent[
+                    "confidence"
+                ]
+                is not None
+                else "N/A"
+            ),
+        )
+
+        if intent["command"]:
+            st.code(
+                intent["command"],
+                language="text",
+            )
+
+        if intent["provenance"]:
+            with st.expander(
+                "Intent provenance",
+                expanded=False,
+            ):
+                for item in intent[
+                    "provenance"
+                ]:
+                    st.write(
+                        f"- {item}"
+                    )
+
+    with st.container(
+        border=True
+    ):
+        st.markdown(
+            "#### Why this answer?"
+        )
+
+        st.write(
+            answer["explanation"]
+        )
+
+        answer_columns = st.columns(3)
+
+        answer_columns[0].metric(
+            "Response mode",
+            (
+                answer[
+                    "response_mode"
+                ]
+                or "pending"
+            ),
+        )
+
+        answer_columns[1].metric(
+            "Claims",
+            answer[
+                "claim_count"
+            ],
+        )
+
+        answer_columns[2].metric(
+            "Sources",
+            answer[
+                "source_count"
+            ],
+        )
+
+        if answer[
+            "uncertainty_note"
+        ]:
+            st.warning(
+                answer[
+                    "uncertainty_note"
+                ]
+            )
+
+        if answer["claims"]:
+            st.markdown(
+                "##### Claim–source mapping"
+            )
+
+            st.dataframe(
+                answer["claims"],
+                hide_index=True,
+                width="stretch",
+            )
+
+        if answer["sources"]:
+            st.markdown(
+                "##### Available sources"
+            )
+
+            st.dataframe(
+                answer["sources"],
+                hide_index=True,
+                width="stretch",
+            )
+
+    with st.container(
+        border=True
+    ):
+        st.markdown(
+            "#### How reliable is the pipeline?"
+        )
+
+        if (
+            reliability["level"]
+            == "supported"
+        ):
+            st.success(
+                reliability["summary"]
+            )
+
+        elif (
+            reliability["level"]
+            == "caution"
+        ):
+            st.warning(
+                reliability["summary"]
+            )
+
+        elif (
+            reliability["level"]
+            == "unsupported"
+        ):
+            st.error(
+                reliability["summary"]
+            )
+
+        else:
+            st.info(
+                reliability["summary"]
+            )
+
+        st.dataframe(
+            reliability["checks"],
+            hide_index=True,
+            width="stretch",
+        )
+
+        if reliability["warnings"]:
+            st.markdown(
+                "##### Reliability warnings"
+            )
+
+            for warning in reliability[
+                "warnings"
+            ]:
+                st.write(
+                    f"- {warning}"
+                )
+
+        with st.expander(
+            "Reliability telemetry",
+            expanded=False,
+        ):
+            st.json(
+                {
+                    "citation_coverage": (
+                        reliability[
+                            "citation_coverage"
+                        ]
+                    ),
+                    "confirmed_aoi_cited": (
+                        reliability[
+                            "confirmed_aoi_cited"
+                        ]
+                    ),
+                    "validation_is_valid": (
+                        reliability[
+                            "validation_is_valid"
+                        ]
+                    ),
+                    "fallback_used": (
+                        reliability[
+                            "fallback_used"
+                        ]
+                    ),
+                    "retry_count": (
+                        reliability[
+                            "retry_count"
+                        ]
+                    ),
+                    "provider": (
+                        reliability[
+                            "provider"
+                        ]
+                    ),
+                    "model": (
+                        reliability[
+                            "model"
+                        ]
+                    ),
+                    "latency_ms": (
+                        reliability[
+                            "latency_ms"
+                        ]
+                    ),
+                }
+            )
+
+    st.markdown(
+        "#### Corrective control"
+    )
+
+    for action in integrated[
+        "corrective_actions"
+    ]:
+        st.write(
+            f"- {action}"
+        )
+
     with st.expander(
-        "Validation and telemetry",
+        "Privacy and public-XAI guarantees",
         expanded=False,
     ):
         st.json(
-            {
-                "validation": (
-                    xai["validation"]
-                ),
-                "telemetry": (
-                    xai["telemetry"]
-                ),
-                "attempts": (
-                    xai["attempts"]
-                ),
-                "safety": (
-                    xai["safety"]
-                ),
-            }
+            integrated["privacy"]
         )
+
+
 
 def _render_manual_interaction(
     view: MainUIViewModel,
