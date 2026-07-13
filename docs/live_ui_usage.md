@@ -95,3 +95,11 @@ the `Stop live runtime` state across the deck-upload rerun.
 
 Over the loopback SSH forwarding route, `streamlit-webrtc` received an SDP
 answer and emitted ICE candidates, then repeatedly changed from `connecting`
+to `failed` after about 15 seconds. The view-model transport stayed
+`is_running: false` with zero queue depth; no controller startup, real
+provider call, live turn, or live JSONL record occurred.
+
+Therefore the five-turn spoken interaction, confirmation/correction, live
+JSONL/XAI inspection, and UI OFF cleanup remain blocked by remote WebRTC peer
+transport. The single-port fallback still validates packets and cleanup only;
+it is not a substitute for the live tutor interaction.
