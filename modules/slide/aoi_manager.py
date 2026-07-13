@@ -79,7 +79,14 @@ class AOIManager:
     def _slide_key(deck_id: str, slide_id: int) -> str:
         return f"{deck_id}:{slide_id}"
 
-    def process_slide(self, deck_id: str, slide_id: int, dpi: int = 250) -> dict[str, Any]:
+    def process_slide(
+        self,
+        deck_id: str,
+        slide_id: int,
+        dpi: int = 250,
+        *,
+        allow_ocr: bool = True,
+    ) -> dict[str, Any]:
         parser = SlideParser(str(self.data_dir))
         image_path = parser.render_slide(deck_id, slide_id, dpi=dpi)
         pdf_text_boxes = parser.extract_pdf_text_boxes(deck_id, slide_id)
@@ -88,13 +95,41 @@ class AOIManager:
         if len(pdf_text) >= 30:
             text_boxes = pdf_text_boxes
             text_source = "pdf_text"
-            auto_aois = self.build_pdf_semantic_aois(text_boxes)
+            auto_aois = self.build_pdf_semantic_aois(
+                text_boxes
+            )
             auto_aoi_method = "pdf_text_semantic"
-        else:
-            text_boxes = OCREngine().extract_boxes(image_path)
+
+        elif allow_ocr:
+            text_boxes = OCREngine().extract_boxes(
+                image_path
+            )
             text_source = "ocr"
-            auto_aois = self.build_text_block_aois(text_boxes)
+            auto_aois = self.build_text_block_aois(
+                text_boxes
+            )
             auto_aoi_method = "ocr_text_block"
+
+        else:
+            text_boxes = pdf_text_boxes
+
+            text_source = (
+                "pdf_text_insufficient"
+                if pdf_text_boxes
+                else "no_embedded_text"
+            )
+
+            auto_aois = (
+                self.build_pdf_semantic_aois(
+                    text_boxes
+                )
+                if text_boxes
+                else []
+            )
+
+            auto_aoi_method = (
+                "pdf_text_only_no_ocr"
+            )
 
         slide_text = "\n".join(box.text for box in text_boxes).strip()
         rule_aois = self.generate_rule_aois(slide_text)

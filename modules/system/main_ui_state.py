@@ -108,8 +108,15 @@ def build_main_turn_defaults() -> dict[str, Any]:
         "main_explicit_intent": None,
         "main_intent_result": None,
         "main_intent_error": None,
+        "main_confirmation_target_choice": None,
+        "main_confirmation_source": None,
+        "main_confirmed_aoi_id": None,
+        "main_corrected_from_aoi_id": None,
+        "main_confirmed_interaction": None,
+        "main_confirmation_error": None,
         "main_confirmed": False,
         "main_tutor_result": None,
+        "main_tutor_error": None,
         "main_xai_result": None,
     }
 

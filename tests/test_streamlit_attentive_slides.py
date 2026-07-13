@@ -34,11 +34,13 @@ class TestStreamlitAttentiveSlides(
                 "Step by step",
                 "Compare",
                 "Quiz",
+                "Confirm target and intent",
+                "Use whole slide",
+                "Cancel confirmation",
+                "Generate grounded answer",
                 "Reset current turn",
             ),
-            forbidden_buttons=(
-                "Generate grounded API answer",
-            ),
+            forbidden_buttons=(),
             required_selectboxes=(
                 "Current slide",
             ),

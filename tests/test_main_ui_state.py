@@ -495,5 +495,113 @@ class TestMainUIState(unittest.TestCase):
         )
 
 
+    def test_reset_clears_confirmation_state(
+        self,
+    ) -> None:
+        state = {
+            **build_main_turn_defaults(),
+            "main_confirmed": True,
+            "main_confirmation_target_choice": (
+                "aoi_1"
+            ),
+            "main_confirmation_source": (
+                "manual_correction"
+            ),
+            "main_confirmed_aoi_id": "aoi_1",
+            "main_corrected_from_aoi_id": (
+                "aoi_2"
+            ),
+            "main_confirmed_interaction": {
+                "interaction": {
+                    "interaction_id": "temporary"
+                }
+            },
+            "main_confirmation_error": (
+                "temporary"
+            ),
+            "main_active_slide_id": 7,
+        }
+
+        reset_main_turn_state(state)
+
+        self.assertFalse(
+            state["main_confirmed"]
+        )
+
+        self.assertIsNone(
+            state[
+                "main_confirmation_target_choice"
+            ]
+        )
+
+        self.assertIsNone(
+            state["main_confirmation_source"]
+        )
+
+        self.assertIsNone(
+            state["main_confirmed_aoi_id"]
+        )
+
+        self.assertIsNone(
+            state[
+                "main_corrected_from_aoi_id"
+            ]
+        )
+
+        self.assertIsNone(
+            state[
+                "main_confirmed_interaction"
+            ]
+        )
+
+        self.assertIsNone(
+            state["main_confirmation_error"]
+        )
+
+        self.assertEqual(
+            state["main_active_slide_id"],
+            7,
+        )
+
+
+    def test_reset_clears_tutor_state(
+        self,
+    ) -> None:
+        state = {
+            **build_main_turn_defaults(),
+            "main_tutor_result": {
+                "answer": "temporary"
+            },
+            "main_tutor_error": (
+                "temporary error"
+            ),
+            "main_xai_result": {
+                "validation": {
+                    "is_valid": True
+                }
+            },
+            "main_active_slide_id": 4,
+        }
+
+        reset_main_turn_state(state)
+
+        self.assertIsNone(
+            state["main_tutor_result"]
+        )
+
+        self.assertIsNone(
+            state["main_tutor_error"]
+        )
+
+        self.assertIsNone(
+            state["main_xai_result"]
+        )
+
+        self.assertEqual(
+            state["main_active_slide_id"],
+            4,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

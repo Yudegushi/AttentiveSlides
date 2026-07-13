@@ -12,9 +12,12 @@ from pathlib import Path
 from typing import Any
 
 try:
-    import fitz  # PyMuPDF
+    import pymupdf as fitz
 except ImportError as exc:
-    raise ImportError("PyMuPDF is required: pip install PyMuPDF") from exc
+    raise ImportError(
+        "PyMuPDF is required: "
+        "python -m pip install pymupdf"
+    ) from exc
 
 from .ocr import TextBox, clamp
 

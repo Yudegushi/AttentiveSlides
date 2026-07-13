@@ -4,6 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import uuid
+from datetime import datetime, timezone
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -18,6 +25,11 @@ from modules.slide.slide_parser import (
 from modules.system.main_ui_state import (
     MainUISlide,
 )
+
+
+REPOSITORY_ROOT = Path(
+    __file__
+).resolve().parents[2]
 
 
 @dataclass(frozen=True)
@@ -164,10 +176,8 @@ class UploadedDeckWorkspace:
         filename: str,
         content: bytes,
     ) -> UploadedDeckSummary:
-        """Save and register one uploaded PDF."""
-        safe_name = Path(
-            filename
-        ).name
+        """Register a PDF without loading PyMuPDF in Streamlit."""
+        safe_name = Path(filename).name
 
         if (
             not safe_name
@@ -188,65 +198,92 @@ class UploadedDeckWorkspace:
         ).hexdigest()
 
         existing_deck_id = (
-            self.upload_index.get(
-                digest
-            )
+            self.upload_index.get(digest)
         )
 
         if existing_deck_id:
             deck_info = (
-                self.slide_parser
-                .get_deck_info(
+                self.slide_parser.get_deck_info(
                     existing_deck_id
                 )
             )
 
             if deck_info is not None:
-                return self._summary_from_info(
-                    existing_deck_id,
-                    deck_info,
-                    digest,
+                stored_path = Path(
+                    str(
+                        deck_info.get(
+                            "pdf_path",
+                            "",
+                        )
+                    )
                 )
+
+                if stored_path.is_file():
+                    return self._summary_from_info(
+                        existing_deck_id,
+                        deck_info,
+                        digest,
+                    )
 
         source_path = (
             self.incoming_dir
             / f"{digest[:16]}.pdf"
         )
 
-        if not source_path.exists():
-            source_path.write_bytes(
-                content
-            )
+        source_path.write_bytes(content)
 
-        deck_id = (
-            self.slide_parser.load_deck(
-                str(source_path)
-            )
+        probe = self._run_native_worker(
+            [
+                "probe",
+                "--input-path",
+                str(source_path),
+            ],
+            timeout_seconds=90,
         )
 
-        self.upload_index[digest] = (
-            deck_id
-        )
-        self._save_index()
-
-        deck_info = (
-            self.slide_parser
-            .get_deck_info(deck_id)
+        page_count = int(
+            probe["page_count"]
         )
 
-        if deck_info is None:
-            raise RuntimeError(
-                "Uploaded deck metadata "
-                "was not created."
-            )
+        deck_id = uuid.uuid4().hex[:12]
 
-        deck_info["original_name"] = (
-            safe_name
+        stored_pdf_path = (
+            self.slide_parser.uploaded_dir
+            / f"{deck_id}.pdf"
         )
+
+        shutil.copy2(
+            source_path,
+            stored_pdf_path,
+        )
+
+        deck_info = {
+            "deck_id": deck_id,
+            "original_name": safe_name,
+            "pdf_path": str(
+                stored_pdf_path
+            ),
+            "page_count": page_count,
+            "created_at": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "first_page_embedded_text_length": (
+                int(
+                    probe[
+                        "first_page_embedded_text_length"
+                    ]
+                )
+            ),
+        }
+
         self.slide_parser.metadata[
             deck_id
         ] = deck_info
+
         self.slide_parser._save_metadata()
+
+        self.upload_index[digest] = deck_id
+        self._save_index()
 
         return self._summary_from_info(
             deck_id,
@@ -454,11 +491,189 @@ class UploadedDeckWorkspace:
             if image_path.is_file():
                 return existing
 
-        return self.aoi_manager.process_slide(
+        worker_arguments = [
+            "prepare-slide",
+            "--data-dir",
+            str(self.data_dir),
+            "--deck-id",
             deck_id,
-            slide_id,
-            dpi=160,
+            "--slide-id",
+            str(slide_id),
+            "--dpi",
+            "160",
+        ]
+
+        if (
+            os.environ.get(
+                "ATTENTIVE_ENABLE_OCR",
+                "0",
+            )
+            == "1"
+        ):
+            worker_arguments.append(
+                "--enable-ocr"
+            )
+
+        self._run_native_worker(
+            worker_arguments,
+            timeout_seconds=300,
         )
+
+        self.aoi_manager = AOIManager(
+            str(self.data_dir)
+        )
+
+        processed = (
+            self.aoi_manager
+            .manifest
+            .get(key)
+        )
+
+        if processed is None:
+            raise RuntimeError(
+                "PDF worker completed without "
+                "creating slide data."
+            )
+
+        return processed
+
+    def _run_native_worker(
+        self,
+        worker_arguments: list[str],
+        *,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        worker_path = (
+            REPOSITORY_ROOT
+            / "scripts"
+            / "pdf_native_worker.py"
+        )
+
+        if not worker_path.is_file():
+            raise FileNotFoundError(
+                f"PDF worker not found: "
+                f"{worker_path}"
+            )
+
+        result_directory = (
+            self.data_dir
+            / "worker_results"
+        )
+
+        result_directory.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        descriptor, result_name = (
+            tempfile.mkstemp(
+                prefix="pdf_worker_",
+                suffix=".json",
+                dir=result_directory,
+            )
+        )
+
+        os.close(descriptor)
+
+        result_path = Path(
+            result_name
+        )
+
+        command = [
+            sys.executable,
+            str(worker_path),
+            "--output",
+            str(result_path),
+            *worker_arguments,
+        ]
+
+        environment = os.environ.copy()
+
+        environment.update(
+            {
+                "OMP_NUM_THREADS": "1",
+                "MKL_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+                "NUMEXPR_NUM_THREADS": "1",
+                "TOKENIZERS_PARALLELISM": (
+                    "false"
+                ),
+                "PYTHONFAULTHANDLER": "1",
+            }
+        )
+
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=REPOSITORY_ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+
+            if completed.returncode != 0:
+                signal_note = (
+                    f" native signal "
+                    f"{-completed.returncode}"
+                    if completed.returncode < 0
+                    else ""
+                )
+
+                stderr_tail = (
+                    completed.stderr[-4000:]
+                    if completed.stderr
+                    else "<empty>"
+                )
+
+                raise RuntimeError(
+                    "PDF worker failed with "
+                    f"return code "
+                    f"{completed.returncode}"
+                    f"{signal_note}.\n"
+                    f"Worker stderr:\n"
+                    f"{stderr_tail}"
+                )
+
+            if not result_path.is_file():
+                raise RuntimeError(
+                    "PDF worker produced no "
+                    "result file."
+                )
+
+            payload = json.loads(
+                result_path.read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            if not payload.get("ok"):
+                raise RuntimeError(
+                    "PDF worker error: "
+                    f"{payload.get('error_type')}: "
+                    f"{payload.get('error')}"
+                )
+
+            result = payload.get(
+                "result"
+            )
+
+            if not isinstance(
+                result,
+                dict,
+            ):
+                raise RuntimeError(
+                    "PDF worker returned an "
+                    "invalid result."
+                )
+
+            return result
+
+        finally:
+            result_path.unlink(
+                missing_ok=True
+            )
 
     def _summary_from_info(
         self,

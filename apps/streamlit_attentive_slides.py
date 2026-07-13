@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,17 @@ from streamlit_drawable_canvas import (
     st_canvas,
 )
 
+from modules.system.main_tutor_integration import (
+    assess_tutor_generation,
+    generate_main_tutor_response,
+)
+from modules.tutor.api_llm_client import (
+    OpenAICompatibleLLMClient,
+)
+from modules.tutor.grounded_tutor_agent import (
+    GroundedTutorAgent,
+)
+
 from modules.system.main_ui_state import (
     MainUISlide,
     MainUIViewModel,
@@ -33,6 +46,11 @@ from modules.system.main_ui_state import (
     build_main_turn_defaults,
     build_main_ui_view_model,
     reset_main_turn_state,
+)
+from modules.system.manual_confirmation import (
+    assess_manual_confirmation,
+    build_manual_confirmation_preview,
+    confirm_manual_interaction,
 )
 from modules.system.manual_intent import (
     QUICK_INTENT_ACTIONS,
@@ -100,22 +118,33 @@ def main() -> None:
 
     _ensure_deck_state(browser)
 
-    with st.spinner(
-        "Preparing the current slide..."
-    ):
-        view = build_main_ui_view_model(
-            browser,
-            active_slide_id=(
-                st.session_state[
-                    "main_active_slide_id"
-                ]
-            ),
-            cloud_text_allowed=(
-                st.session_state[
-                    "main_cloud_text_allowed"
-                ]
-            ),
+    try:
+        with st.spinner(
+            "Preparing the current slide..."
+        ):
+            view = build_main_ui_view_model(
+                browser,
+                active_slide_id=(
+                    st.session_state[
+                        "main_active_slide_id"
+                    ]
+                ),
+                cloud_text_allowed=(
+                    st.session_state[
+                        "main_cloud_text_allowed"
+                    ]
+                ),
+            )
+
+    except Exception as exc:
+        st.error(
+            "Unable to prepare the uploaded PDF. "
+            "The native PDF worker failed, but "
+            "the Streamlit server remains active."
         )
+
+        st.exception(exc)
+        st.stop()
 
     _render_sidebar_status(
         browser,
@@ -157,10 +186,10 @@ def _load_manifest_browser(
     )
 
 
-@st.cache_resource
 def _load_uploaded_workspace(
     data_dir: str,
 ) -> UploadedDeckWorkspace:
+    """Create a lightweight disk-backed workspace per rerun."""
     return UploadedDeckWorkspace(
         data_dir
     )
@@ -258,7 +287,6 @@ def _render_upload_controls(
                 "main_deck_signature"
             ] = None
             _reset_turn_state()
-            st.rerun()
 
     if st.session_state[
         "main_uploaded_deck_id"
@@ -283,7 +311,6 @@ def _render_upload_controls(
                 "main_upload_error"
             ] = None
             _reset_turn_state()
-            st.rerun()
 
     if st.session_state[
         "main_upload_message"
@@ -548,7 +575,40 @@ def _reset_turn_state() -> None:
     ] = None
 
 
+def _invalidate_confirmation() -> None:
+    """Invalidate confirmation and any generated answer."""
+    st.session_state[
+        "main_confirmed"
+    ] = False
+    st.session_state[
+        "main_confirmation_source"
+    ] = None
+    st.session_state[
+        "main_confirmed_aoi_id"
+    ] = None
+    st.session_state[
+        "main_corrected_from_aoi_id"
+    ] = None
+    st.session_state[
+        "main_confirmed_interaction"
+    ] = None
+    st.session_state[
+        "main_confirmation_error"
+    ] = None
+    st.session_state[
+        "main_tutor_result"
+    ] = None
+    st.session_state[
+        "main_tutor_error"
+    ] = None
+    st.session_state[
+        "main_xai_result"
+    ] = None
+
+
+
 def _clear_manual_region() -> None:
+    """Clear the current rectangle and mapped AOIs."""
     st.session_state[
         "main_manual_bbox"
     ] = None
@@ -565,8 +625,11 @@ def _clear_manual_region() -> None:
         "main_selection_error"
     ] = None
     st.session_state[
-        "main_confirmed"
-    ] = False
+        "main_confirmation_target_choice"
+    ] = None
+
+    _invalidate_confirmation()
+
     st.session_state[
         "main_canvas_revision"
     ] = (
@@ -806,33 +869,48 @@ def _render_manual_canvas(
 def _store_manual_selection(
     selection: ManualSelectionResult,
 ) -> None:
-    st.session_state[
-        "main_manual_bbox"
-    ] = list(
+    """Store a rectangle and invalidate only when it changes."""
+    next_bbox = list(
         selection.bbox
     )
 
-    st.session_state[
-        "main_selected_aoi_ids"
-    ] = [
+    next_aoi_ids = [
         match.aoi_id
         for match in selection.matches
     ]
 
+    changed = (
+        st.session_state.get(
+            "main_manual_bbox"
+        )
+        != next_bbox
+        or st.session_state.get(
+            "main_selected_aoi_ids"
+        )
+        != next_aoi_ids
+    )
+
+    if changed:
+        _invalidate_confirmation()
+        st.session_state[
+            "main_confirmation_target_choice"
+        ] = None
+
+    st.session_state[
+        "main_manual_bbox"
+    ] = next_bbox
+    st.session_state[
+        "main_selected_aoi_ids"
+    ] = next_aoi_ids
     st.session_state[
         "main_selection_matches"
     ] = [
         match.to_dict()
         for match in selection.matches
     ]
-
     st.session_state[
         "main_selection_text"
     ] = selection.selected_text
-
-    st.session_state[
-        "main_confirmed"
-    ] = False
 
 
 def _set_whole_slide_target(
@@ -891,22 +969,17 @@ def _on_typed_command_change() -> None:
         if command
         else None
     )
-
     st.session_state[
         "main_explicit_intent"
     ] = None
-
     st.session_state[
         "main_intent_result"
     ] = None
-
     st.session_state[
         "main_intent_error"
     ] = None
 
-    st.session_state[
-        "main_confirmed"
-    ] = False
+    _invalidate_confirmation()
 
 
 def _apply_quick_intent(
@@ -917,26 +990,20 @@ def _apply_quick_intent(
     st.session_state[
         "main_typed_command"
     ] = command
-
     st.session_state[
         "main_intent_source"
     ] = "ui_action"
-
     st.session_state[
         "main_explicit_intent"
     ] = intent_name
-
     st.session_state[
         "main_intent_result"
     ] = None
-
     st.session_state[
         "main_intent_error"
     ] = None
 
-    st.session_state[
-        "main_confirmed"
-    ] = False
+    _invalidate_confirmation()
 
 
 def _resolve_current_intent(
@@ -1066,6 +1133,720 @@ def _render_quick_intent_actions() -> None:
                 action.intent,
                 action.command,
             ),
+        )
+
+
+def _switch_to_whole_slide() -> None:
+    """Switch target scope through a widget callback."""
+    _clear_manual_region()
+
+    st.session_state[
+        "main_target_scope"
+    ] = "Whole slide"
+
+    st.session_state[
+        "main_confirmation_target_choice"
+    ] = "whole_slide"
+
+
+def _render_confirmation_panel(
+    view: MainUIViewModel,
+    resolution: ManualIntentResolution | None,
+) -> None:
+    """Render inspection, correction, and confirmation controls."""
+    st.markdown(
+        "#### Confirmation and correction"
+    )
+
+    try:
+        preview = build_manual_confirmation_preview(
+            deck_id=view.deck_id,
+            slide_id=view.active_slide_id,
+            target_scope=(
+                st.session_state[
+                    "main_target_scope"
+                ]
+            ),
+            bbox=(
+                st.session_state[
+                    "main_manual_bbox"
+                ]
+            ),
+            selected_aoi_ids=(
+                st.session_state[
+                    "main_selected_aoi_ids"
+                ]
+            ),
+            selection_matches=(
+                st.session_state[
+                    "main_selection_matches"
+                ]
+            ),
+            slide_text=(
+                view.active_slide.slide_text
+            ),
+            aois=view.active_slide.aois,
+            intent_resolution=resolution,
+        )
+
+    except Exception as exc:
+        st.error(
+            f"Unable to build confirmation preview: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return
+
+    option_ids = list(
+        preview.target_option_ids
+    )
+
+    if not option_ids:
+        st.error(
+            "No target is available for confirmation."
+        )
+        return
+
+    current_choice = st.session_state.get(
+        "main_confirmation_target_choice"
+    )
+
+    if current_choice not in option_ids:
+        st.session_state[
+            "main_confirmation_target_choice"
+        ] = (
+            preview.proposed_aoi_id
+            if preview.proposed_aoi_id
+            in option_ids
+            else option_ids[0]
+        )
+
+    option_by_id = {
+        option.aoi_id: option
+        for option in preview.target_options
+    }
+
+    selected_target_id = st.selectbox(
+        "Target to confirm",
+        options=option_ids,
+        key="main_confirmation_target_choice",
+        format_func=lambda aoi_id: (
+            option_by_id[aoi_id].label
+        ),
+        on_change=_invalidate_confirmation,
+    )
+
+    selected_option = preview.get_target_option(
+        selected_target_id
+    )
+
+    assessment = assess_manual_confirmation(
+        preview,
+        selected_target_id=selected_target_id,
+    )
+
+    summary_columns = st.columns(3)
+
+    summary_columns[0].metric(
+        "Target",
+        selected_option.label,
+    )
+
+    summary_columns[1].metric(
+        "Intent",
+        (
+            resolution.intent
+            if resolution is not None
+            else "unresolved"
+        ),
+    )
+
+    summary_columns[2].metric(
+        "Confirmation",
+        (
+            "Confirmed"
+            if st.session_state[
+                "main_confirmed"
+            ]
+            else "Pending"
+        ),
+    )
+
+    st.text_area(
+        "Context that will be confirmed",
+        value=selected_option.text,
+        height=150,
+        disabled=True,
+        key=(
+            "main_confirmation_context_"
+            f"{view.deck_id}_"
+            f"{view.active_slide_id}_"
+            f"{selected_target_id}"
+        ),
+    )
+
+    if assessment.status == "blocked":
+        st.error(
+            assessment.message
+        )
+    elif assessment.status == "warning":
+        st.warning(
+            assessment.message
+        )
+
+        for warning in assessment.warnings:
+            st.write(
+                f"- {warning}"
+            )
+    else:
+        st.success(
+            assessment.message
+        )
+
+    with st.expander(
+        "Confirmation preview",
+        expanded=False,
+    ):
+        st.json(
+            {
+                "preview": preview.to_dict(),
+                "assessment": (
+                    assessment.to_dict()
+                ),
+                "selected_target_id": (
+                    selected_target_id
+                ),
+            }
+        )
+
+    confirm_column, whole_column, cancel_column = (
+        st.columns(3)
+    )
+
+    confirm_clicked = confirm_column.button(
+        "Confirm target and intent",
+        type="primary",
+        disabled=not assessment.ready,
+        width="stretch",
+    )
+
+    whole_column.button(
+        "Use whole slide",
+        disabled=(
+            selected_target_id
+            == "whole_slide"
+        ),
+        width="stretch",
+        on_click=_switch_to_whole_slide,
+    )
+
+    cancel_column.button(
+        "Cancel confirmation",
+        disabled=not st.session_state[
+            "main_confirmed"
+        ],
+        width="stretch",
+        on_click=_invalidate_confirmation,
+    )
+
+    if confirm_clicked:
+        try:
+            confirmed = confirm_manual_interaction(
+                preview,
+                selected_target_id=(
+                    selected_target_id
+                ),
+                interaction_id=(
+                    "manual_"
+                    + uuid.uuid4().hex
+                ),
+            )
+
+        except Exception as exc:
+            st.session_state[
+                "main_confirmation_error"
+            ] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+            _invalidate_confirmation()
+
+        else:
+            interaction = (
+                confirmed.interaction
+            )
+
+            st.session_state[
+                "main_confirmed"
+            ] = True
+            st.session_state[
+                "main_confirmation_source"
+            ] = (
+                interaction
+                .confirmation
+                .source
+            )
+            st.session_state[
+                "main_confirmed_aoi_id"
+            ] = (
+                interaction
+                .confirmation
+                .confirmed_aoi_id
+            )
+            st.session_state[
+                "main_corrected_from_aoi_id"
+            ] = (
+                interaction
+                .confirmation
+                .corrected_from_aoi_id
+            )
+            st.session_state[
+                "main_confirmed_interaction"
+            ] = confirmed.to_dict()
+            st.session_state[
+                "main_confirmation_error"
+            ] = None
+
+    if st.session_state[
+        "main_confirmation_error"
+    ]:
+        st.error(
+            st.session_state[
+                "main_confirmation_error"
+            ]
+        )
+
+    if st.session_state[
+        "main_confirmed"
+    ]:
+        st.success(
+            "The interaction has been explicitly "
+            "confirmed. Tutor generation remains "
+            "disabled until the next stage."
+        )
+
+        with st.expander(
+            "Confirmed InteractionInput",
+            expanded=False,
+        ):
+            st.json(
+                st.session_state[
+                    "main_confirmed_interaction"
+                ]
+            )
+
+
+def _render_tutor_generation_panel(
+    view: MainUIViewModel,
+) -> None:
+    """Render the explicit grounded-generation control."""
+    st.markdown(
+        "#### Grounded tutor"
+    )
+
+    api_configured = bool(
+        os.environ.get(
+            "DASHSCOPE_API_KEY"
+        )
+    )
+
+    assessment = assess_tutor_generation(
+        st.session_state[
+            "main_confirmed_interaction"
+        ],
+        cloud_text_allowed=(
+            st.session_state[
+                "main_cloud_text_allowed"
+            ]
+        ),
+        api_configured=api_configured,
+    )
+
+    if assessment.ready:
+        st.success(
+            assessment.message
+        )
+    elif (
+        assessment.code
+        == "cloud_permission_required"
+    ):
+        st.warning(
+            assessment.message
+        )
+    elif (
+        assessment.code
+        == "api_not_configured"
+    ):
+        st.error(
+            assessment.message
+        )
+    else:
+        st.info(
+            assessment.message
+        )
+
+    generate_clicked = st.button(
+        "Generate grounded answer",
+        type="primary",
+        disabled=not assessment.ready,
+        width="stretch",
+    )
+
+    if generate_clicked:
+        st.session_state[
+            "main_tutor_error"
+        ] = None
+
+        try:
+            with st.spinner(
+                "Generating and validating "
+                "the grounded answer..."
+            ):
+                client = (
+                    OpenAICompatibleLLMClient
+                    .from_env()
+                )
+
+                agent = GroundedTutorAgent(
+                    llm_client=client,
+                    max_retries=1,
+                )
+
+                generation = (
+                    generate_main_tutor_response(
+                        st.session_state[
+                            "main_confirmed_interaction"
+                        ],
+                        slide=view.active_slide,
+                        agent=agent,
+                        cloud_text_allowed=(
+                            st.session_state[
+                                "main_cloud_text_allowed"
+                            ]
+                        ),
+                        api_configured=True,
+                    )
+                )
+
+                payload = (
+                    generation
+                    .to_session_payload()
+                )
+
+        except Exception as exc:
+            st.session_state[
+                "main_tutor_error"
+            ] = (
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+            st.session_state[
+                "main_tutor_result"
+            ] = None
+            st.session_state[
+                "main_xai_result"
+            ] = None
+
+        else:
+            st.session_state[
+                "main_tutor_result"
+            ] = payload["tutor"]
+            st.session_state[
+                "main_xai_result"
+            ] = payload["xai"]
+            st.session_state[
+                "main_tutor_error"
+            ] = None
+
+    if st.session_state[
+        "main_tutor_error"
+    ]:
+        st.error(
+            st.session_state[
+                "main_tutor_error"
+            ]
+        )
+
+    if st.session_state[
+        "main_tutor_result"
+    ]:
+        st.success(
+            "A validated tutor response "
+            "is available in the Tutor tab."
+        )
+
+
+def _render_tutor_result() -> None:
+    """Render the learner-facing grounded answer."""
+    result = st.session_state[
+        "main_tutor_result"
+    ]
+
+    if result is None:
+        st.info(
+            "Confirm the interaction and generate "
+            "an answer to populate this workspace."
+        )
+        return
+
+    st.markdown("### Tutor answer")
+    st.markdown(
+        result["answer"]
+    )
+
+    if result.get(
+        "active_recall_question"
+    ):
+        st.info(
+            "Active recall: "
+            + result[
+                "active_recall_question"
+            ]
+        )
+
+    if result.get(
+        "uncertainty_note"
+    ):
+        st.warning(
+            "Uncertainty: "
+            + result[
+                "uncertainty_note"
+            ]
+        )
+
+    columns = st.columns(4)
+
+    columns[0].metric(
+        "Status",
+        result["status"],
+    )
+
+    columns[1].metric(
+        "Validation",
+        (
+            "PASS"
+            if result[
+                "validation_is_valid"
+            ]
+            else "FAIL"
+        ),
+    )
+
+    columns[2].metric(
+        "Latency",
+        (
+            f"{result['latency_ms']:.0f} ms"
+        ),
+    )
+
+    columns[3].metric(
+        "Tokens",
+        (
+            result["total_tokens"]
+            if result[
+                "total_tokens"
+            ]
+            is not None
+            else "—"
+        ),
+    )
+
+    st.markdown(
+        "#### Why this answer"
+    )
+    st.write(
+        result[
+            "decision_summary"
+        ]
+    )
+
+    with st.expander(
+        "Tutor response metadata",
+        expanded=False,
+    ):
+        st.json(result)
+
+
+def _render_main_xai() -> None:
+    """Render sanitized interaction and LLM evidence."""
+    confirmed = st.session_state[
+        "main_confirmed_interaction"
+    ]
+
+    xai = st.session_state[
+        "main_xai_result"
+    ]
+
+    st.markdown(
+        "#### Interaction provenance"
+    )
+
+    if confirmed is None:
+        st.info(
+            "No interaction has been confirmed."
+        )
+    else:
+        interaction = confirmed[
+            "interaction"
+        ]
+
+        st.json(
+            {
+                "interaction_mode": (
+                    interaction["mode"]
+                ),
+                "target_source": (
+                    interaction[
+                        "target"
+                    ][
+                        "source"
+                    ]
+                ),
+                "selected_bbox": (
+                    interaction[
+                        "target"
+                    ].get(
+                        "bbox"
+                    )
+                ),
+                "intent_source": (
+                    interaction[
+                        "intent"
+                    ][
+                        "source"
+                    ]
+                ),
+                "typed_command": (
+                    interaction[
+                        "intent"
+                    ][
+                        "text"
+                    ]
+                ),
+                "confirmation_source": (
+                    interaction[
+                        "confirmation"
+                    ][
+                        "source"
+                    ]
+                ),
+                "confirmed_aoi_id": (
+                    interaction[
+                        "confirmation"
+                    ][
+                        "confirmed_aoi_id"
+                    ]
+                ),
+                "corrected_from_aoi_id": (
+                    interaction[
+                        "confirmation"
+                    ].get(
+                        "corrected_from_aoi_id"
+                    )
+                ),
+            }
+        )
+
+    st.markdown(
+        "#### Answer grounding"
+    )
+
+    if xai is None:
+        st.info(
+            "Generate an answer to view "
+            "claim–source grounding."
+        )
+        return
+
+    st.write(
+        xai[
+            "decision_summary"
+        ]
+    )
+
+    validation = xai[
+        "validation"
+    ]
+
+    columns = st.columns(3)
+
+    columns[0].metric(
+        "Validation",
+        (
+            "PASS"
+            if validation[
+                "is_valid"
+            ]
+            else "FAIL"
+        ),
+    )
+
+    coverage = validation[
+        "citation_coverage"
+    ]
+
+    columns[1].metric(
+        "Citation coverage",
+        (
+            f"{coverage:.0%}"
+            if coverage is not None
+            else "N/A"
+        ),
+    )
+
+    columns[2].metric(
+        "Confirmed AOI cited",
+        (
+            "Yes"
+            if validation[
+                "confirmed_aoi_cited"
+            ]
+            else "No"
+        ),
+    )
+
+    st.markdown(
+        "##### Claim–source mapping"
+    )
+
+    if xai["claims"]:
+        st.dataframe(
+            xai["claims"],
+            hide_index=True,
+            width="stretch",
+        )
+    else:
+        st.caption(
+            "No educational claims were produced."
+        )
+
+    st.markdown(
+        "##### Sources"
+    )
+
+    st.dataframe(
+        xai["sources"],
+        hide_index=True,
+        width="stretch",
+    )
+
+    with st.expander(
+        "Validation and telemetry",
+        expanded=False,
+    ):
+        st.json(
+            {
+                "validation": (
+                    xai["validation"]
+                ),
+                "telemetry": (
+                    xai["telemetry"]
+                ),
+                "attempts": (
+                    xai["attempts"]
+                ),
+                "safety": (
+                    xai["safety"]
+                ),
+            }
         )
 
 def _render_manual_interaction(
@@ -1336,6 +2117,15 @@ def _render_manual_interaction(
         width="stretch",
     )
 
+    _render_confirmation_panel(
+        view,
+        resolution,
+    )
+
+    _render_tutor_generation_panel(
+        view
+    )
+
     st.button(
         "Reset current turn",
         width="stretch",
@@ -1410,67 +2200,15 @@ def _render_lower_workspace(
         st.subheader(
             "Tutor workspace"
         )
-        st.info(
-            "TutorAgent integration "
-            "is not active in this stage."
-        )
+
+        _render_tutor_result()
 
     with xai_tab:
         st.subheader(
             "Explainability workspace"
         )
-        st.json(
-            {
-                "target_source": (
-                    "manual_rectangle"
-                    if (
-                        st.session_state[
-                            "main_target_scope"
-                        ]
-                        == "Manual region"
-                    )
-                    else "whole_slide"
-                ),
-                "selected_bbox": (
-                    st.session_state[
-                        "main_manual_bbox"
-                    ]
-                ),
-                "mapped_aoi_ids": (
-                    st.session_state[
-                        "main_selected_aoi_ids"
-                    ]
-                ),
-                "mapping_candidates": (
-                    st.session_state[
-                        "main_selection_matches"
-                    ]
-                ),
-                "intent_source": (
-                    st.session_state[
-                        "main_intent_source"
-                    ]
-                ),
-                "typed_command": (
-                    st.session_state[
-                        "main_typed_command"
-                    ]
-                ),
-                "explicit_intent": (
-                    st.session_state[
-                        "main_explicit_intent"
-                    ]
-                ),
-                "intent_resolution": (
-                    st.session_state[
-                        "main_intent_result"
-                    ]
-                ),
-                "confirmation": (
-                    "not yet performed"
-                ),
-            }
-        )
+
+        _render_main_xai()
 
     with session_tab:
         st.subheader(
@@ -1520,6 +2258,31 @@ def _render_lower_workspace(
                 "intent_result": (
                     st.session_state[
                         "main_intent_result"
+                    ]
+                ),
+                "confirmed": (
+                    st.session_state[
+                        "main_confirmed"
+                    ]
+                ),
+                "confirmation_source": (
+                    st.session_state[
+                        "main_confirmation_source"
+                    ]
+                ),
+                "confirmed_aoi_id": (
+                    st.session_state[
+                        "main_confirmed_aoi_id"
+                    ]
+                ),
+                "corrected_from_aoi_id": (
+                    st.session_state[
+                        "main_corrected_from_aoi_id"
+                    ]
+                ),
+                "confirmed_interaction": (
+                    st.session_state[
+                        "main_confirmed_interaction"
                     ]
                 ),
                 "camera_enabled": False,
