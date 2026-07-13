@@ -244,6 +244,33 @@ def create_app() -> tuple[
 def run_sidebar_scenario() -> dict[str, Any]:
     app, completed = create_app()
 
+    if (
+        app.session_state[
+            "main_history_max_items"
+        ]
+        != 4
+    ):
+        raise AssertionError(
+            "History limit must default to four."
+        )
+
+    history_limit_sliders = [
+        slider
+        for slider in app.sidebar.slider
+        if getattr(
+            slider,
+            "key",
+            None,
+        )
+        == "main_history_max_items"
+    ]
+
+    if history_limit_sliders:
+        raise AssertionError(
+            "The recent-turn history slider "
+            "should not be rendered."
+        )
+
     for index in range(2):
         require_widget(
             app.sidebar,
@@ -256,6 +283,17 @@ def run_sidebar_scenario() -> dict[str, Any]:
             completed,
             f"cloud_off_{index}",
         )
+
+        if (
+            app.session_state[
+                "main_history_max_items"
+            ]
+            != 4
+        ):
+            raise AssertionError(
+                "Cloud permission changed "
+                "the history limit."
+            )
 
         require_widget(
             app.sidebar,
@@ -282,22 +320,15 @@ def run_sidebar_scenario() -> dict[str, Any]:
             f"history_off_{index}",
         )
 
-        slider = require_widget(
-            app.sidebar,
-            "slider",
-            "main_history_max_items",
-        )
-
-        if not bool(
-            getattr(
-                slider,
-                "disabled",
-                False,
-            )
+        if (
+            app.session_state[
+                "main_history_max_items"
+            ]
+            != 4
         ):
             raise AssertionError(
-                "History slider must be disabled "
-                "when conversation history is disabled."
+                "Disabling history changed "
+                "the fixed limit."
             )
 
         require_widget(
@@ -312,26 +343,32 @@ def run_sidebar_scenario() -> dict[str, Any]:
             f"history_on_{index}",
         )
 
-    for index, value in enumerate(
-        (
-            1,
-            4,
-            2,
-            3,
-            1,
-            4,
-        )
-    ):
-        require_widget(
-            app.sidebar,
-            "slider",
-            "main_history_max_items",
-        ).set_value(value)
+        if (
+            app.session_state[
+                "main_history_max_items"
+            ]
+            != 4
+        ):
+            raise AssertionError(
+                "Enabling history changed "
+                "the fixed limit."
+            )
 
-        run_step(
-            app,
-            completed,
-            f"history_limit_{index}_{value}",
+    history_limit_sliders = [
+        slider
+        for slider in app.sidebar.slider
+        if getattr(
+            slider,
+            "key",
+            None,
+        )
+        == "main_history_max_items"
+    ]
+
+    if history_limit_sliders:
+        raise AssertionError(
+            "The history slider reappeared "
+            "after a rerun."
         )
 
     return {
@@ -354,6 +391,7 @@ def run_sidebar_scenario() -> dict[str, Any]:
             ),
         },
     }
+
 
 
 def run_overlay_scenario() -> dict[str, Any]:
@@ -399,12 +437,136 @@ def run_overlay_scenario() -> dict[str, Any]:
 def run_manual_region_scenario() -> dict[str, Any]:
     app, completed = create_app()
 
-    require_widget(
-        app,
-        "radio",
-        "main_target_scope",
-    ).set_value(
-        "Manual region"
+    skipped: list[str] = []
+
+    scope_option_snapshots: list[
+        list[str]
+    ] = []
+
+    def read_scope_radio() -> tuple[
+        Any,
+        list[Any],
+    ]:
+        radio = require_widget(
+            app,
+            "radio",
+            "main_target_scope",
+        )
+
+        options = list(
+            getattr(
+                radio,
+                "options",
+                [],
+            )
+        )
+
+        normalized_snapshot = [
+            str(option)
+            for option in options
+        ]
+
+        scope_option_snapshots.append(
+            normalized_snapshot
+        )
+
+        if not options:
+            raise AssertionError(
+                "main_target_scope has no "
+                "available options."
+            )
+
+        return (
+            radio,
+            options,
+        )
+
+    def normalized_option(
+        option: Any,
+    ) -> str:
+        return (
+            str(option)
+            .strip()
+            .casefold()
+        )
+
+    def find_manual_option(
+        options: list[Any],
+    ) -> Any:
+        exact_matches = [
+            option
+            for option in options
+            if normalized_option(option)
+            == "manual region"
+        ]
+
+        if exact_matches:
+            return exact_matches[0]
+
+        semantic_matches = [
+            option
+            for option in options
+            if (
+                "manual"
+                in normalized_option(option)
+                and (
+                    "region"
+                    in normalized_option(option)
+                    or "area"
+                    in normalized_option(option)
+                )
+            )
+        ]
+
+        if semantic_matches:
+            return semantic_matches[0]
+
+        raise AssertionError(
+            "Manual-region option is missing. "
+            f"Available options: "
+            f"{[str(option) for option in options]}"
+        )
+
+    def find_alternative_option(
+        options: list[Any],
+        manual_option: Any,
+    ) -> Any | None:
+        alternatives = [
+            option
+            for option in options
+            if option != manual_option
+        ]
+
+        if not alternatives:
+            return None
+
+        preferred_terms = (
+            "whole",
+            "full",
+            "entire",
+            "current slide",
+            "slide",
+        )
+
+        for term in preferred_terms:
+            for option in alternatives:
+                if term in normalized_option(
+                    option
+                ):
+                    return option
+
+        return alternatives[0]
+
+    scope_radio, scope_options = (
+        read_scope_radio()
+    )
+
+    manual_option = find_manual_option(
+        scope_options
+    )
+
+    scope_radio.set_value(
+        manual_option
     )
 
     run_step(
@@ -486,36 +648,90 @@ def run_manual_region_scenario() -> dict[str, Any]:
             f"clear_region_{index}",
         )
 
-    require_widget(
-        app,
-        "radio",
-        "main_target_scope",
-    ).set_value(
-        "Whole slide"
+    # Read the current options again. They may change after
+    # reruns or after the target-selection state changes.
+    scope_radio, scope_options = (
+        read_scope_radio()
     )
 
-    run_step(
-        app,
-        completed,
-        "whole_slide_mode",
+    current_manual_option = (
+        find_manual_option(
+            scope_options
+        )
     )
 
-    require_widget(
-        app,
-        "radio",
-        "main_target_scope",
-    ).set_value(
-        "Manual region"
+    alternative_option = (
+        find_alternative_option(
+            scope_options,
+            current_manual_option,
+        )
     )
 
-    run_step(
-        app,
-        completed,
-        "manual_region_mode_again",
+    if alternative_option is None:
+        skipped.append(
+            "alternative_target_scope"
+        )
+
+    else:
+        scope_radio.set_value(
+            alternative_option
+        )
+
+        run_step(
+            app,
+            completed,
+            "alternative_scope_mode",
+        )
+
+        # Re-read the widget after rerun instead of assuming
+        # that its options remain identical.
+        scope_radio, scope_options = (
+            read_scope_radio()
+        )
+
+        current_manual_option = (
+            find_manual_option(
+                scope_options
+            )
+        )
+
+        scope_radio.set_value(
+            current_manual_option
+        )
+
+        run_step(
+            app,
+            completed,
+            "manual_region_mode_again",
+        )
+
+    final_scope_radio, final_options = (
+        read_scope_radio()
     )
+
+    final_value = getattr(
+        final_scope_radio,
+        "value",
+        app.session_state[
+            "main_target_scope"
+        ],
+    )
+
+    if final_value not in final_options:
+        raise AssertionError(
+            "Final target-scope value is not "
+            "contained in the current options. "
+            f"value={final_value!r}, "
+            f"options="
+            f"{[str(option) for option in final_options]}"
+        )
 
     return {
         "completed_steps": completed,
+        "skipped": skipped,
+        "scope_option_snapshots": (
+            scope_option_snapshots
+        ),
         "final_state": {
             "target_scope": (
                 app.session_state[
@@ -529,6 +745,7 @@ def run_manual_region_scenario() -> dict[str, Any]:
             ),
         },
     }
+
 
 
 def run_intent_scenario() -> dict[str, Any]:

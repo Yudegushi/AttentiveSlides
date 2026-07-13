@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import json
 from io import BytesIO
 import os
@@ -104,6 +106,8 @@ def main() -> None:
         layout="wide",
     )
 
+    _inject_compact_ui_css()
+
     workspace = _load_uploaded_workspace(
         str(RUNTIME_DATA_DIR)
     )
@@ -163,29 +167,21 @@ def main() -> None:
         browser,
         view,
     )
+
     _render_header(view)
+    _render_slide_selector(
+        browser
+    )
+    _render_slide_workspace(view)
     _render_navigation(
         browser,
         view,
     )
-
-    slide_column, interaction_column = (
-        st.columns(
-            [1.55, 0.95],
-            gap="large",
-        )
+    _render_manual_interaction(
+        view
     )
-
-    with slide_column:
-        _render_slide_workspace(view)
-
-    with interaction_column:
-        _render_manual_interaction(
-            view
-        )
-
-    st.divider()
     _render_lower_workspace(view)
+
 
 
 @st.cache_resource
@@ -454,7 +450,6 @@ def _activate_manual_region() -> None:
 def _render_upload_controls(
     workspace: UploadedDeckWorkspace,
 ) -> None:
-    st.sidebar.header("AttentiveSlides")
 
     st.sidebar.markdown(
         "### Deck"
@@ -667,57 +662,67 @@ def _render_sidebar_status(
     browser: Any,
     view: MainUIViewModel,
 ) -> None:
-    st.sidebar.markdown(
-        "### Privacy status"
-    )
-    st.sidebar.success(
-        "Camera: disabled"
-    )
-    st.sidebar.success(
-        "Microphone: disabled"
-    )
-    st.sidebar.success(
-        "Biometric collection: disabled"
-    )
+    with st.sidebar.expander(
+        "Privacy Status",
+        expanded=False,
+    ):
+        st.markdown(
+            "**Camera**"
+        )
 
-    st.sidebar.checkbox(
-        (
-            "Permit selected slide text "
-            "to be sent to the cloud tutor"
-        ),
-        key="main_cloud_text_allowed",
-        help=(
-            "When enabled, only confirmed slide context "
-            "and sanitized conversation history may be sent."
-        ),
-        on_change=_on_cloud_permission_change,
-    )
+        st.caption(
+            "Off in Manual mode. "
+            "No camera frames are collected."
+        )
 
+        st.markdown(
+            "**Microphone**"
+        )
+
+        st.caption(
+            "Off in Manual mode. "
+            "No audio is collected."
+        )
+
+        st.checkbox(
+            (
+                "Permit selected slide text "
+                "to be sent to the cloud tutor"
+            ),
+            key="main_cloud_text_allowed",
+            help=(
+                "Only confirmed slide context and "
+                "sanitized conversation history "
+                "may be transmitted."
+            ),
+            on_change=(
+                _on_cloud_permission_change
+            ),
+        )
     st.sidebar.markdown(
-        "### Conversation memory"
+        "### Conversation Memory"
     )
 
     st.sidebar.checkbox(
         "Use recent conversation history",
         key="main_history_enabled",
         help=(
-            "Only sanitized recent turns are "
+            "Only sanitized previous turns are "
             "included. Current slide evidence "
             "remains the grounding source."
         ),
-        on_change=_on_history_enabled_change,
+        on_change=(
+            _on_history_enabled_change
+        ),
     )
 
-    st.sidebar.slider(
-        "Recent turns sent to tutor",
-        min_value=1,
-        max_value=4,
-        step=1,
-        key="main_history_max_items",
-        disabled=not st.session_state[
-            "main_history_enabled"
-        ],
-        on_change=_on_history_limit_change,
+    st.session_state[
+        "main_history_max_items"
+    ] = 4
+
+    st.sidebar.caption(
+        "Tutor context uses the latest "
+        "4 sanitized turns."
     )
 
     st.sidebar.caption(
@@ -726,6 +731,64 @@ def _render_sidebar_status(
         "turn(s)."
     )
 
+    st.sidebar.markdown(
+        "### System Status"
+    )
+
+    sidebar_status_row_1 = (
+        st.sidebar.columns(2)
+    )
+
+    with sidebar_status_row_1[0]:
+        with st.container(
+            border=True
+        ):
+            st.caption("MODE")
+            st.markdown("**Manual**")
+
+    with sidebar_status_row_1[1]:
+        with st.container(
+            border=True
+        ):
+            st.caption("CAMERA")
+            st.markdown("**Off**")
+
+    sidebar_status_row_2 = (
+        st.sidebar.columns(2)
+    )
+
+    with sidebar_status_row_2[0]:
+        with st.container(
+            border=True
+        ):
+            st.caption("MICROPHONE")
+            st.markdown("**Off**")
+
+    cloud_api_configured = bool(
+        os.environ.get(
+            "DASHSCOPE_API_KEY"
+        )
+    )
+
+    if not st.session_state[
+        "main_cloud_text_allowed"
+    ]:
+        cloud_tutor_status = "Blocked"
+
+    elif cloud_api_configured:
+        cloud_tutor_status = "Ready"
+
+    else:
+        cloud_tutor_status = "No API key"
+
+    with sidebar_status_row_2[1]:
+        with st.container(
+            border=True
+        ):
+            st.caption("CLOUD TUTOR")
+            st.markdown(
+                f"**{cloud_tutor_status}**"
+            )
     st.sidebar.markdown(
         "### Active deck"
     )
@@ -740,39 +803,287 @@ def _render_sidebar_status(
     )
 
 
+def _inject_compact_ui_css() -> None:
+    """Use the viewport for the learner-facing workspace."""
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            max-width: 96vw;
+            padding-top: 0.8rem;
+            padding-bottom: 1.2rem;
+        }
+
+        h1 {
+            margin-bottom: 0.15rem;
+        }
+
+        div[data-testid="stImage"] {
+            width: 100%;
+        }
+
+        div[data-testid="stImage"] img {
+            width: 100%;
+            max-height: 72vh;
+            object-fit: contain;
+        }
+
+        div[data-testid="stExpander"] details {
+            border-radius: 0.7rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_slide_selector(
+    browser: Any,
+) -> None:
+    """Render the current-slide selector directly below the title."""
+    selector_column, spacer_column = (
+        st.columns(
+            [0.28, 0.72],
+            gap="small",
+        )
+    )
+
+    del spacer_column
+
+    with selector_column:
+        st.selectbox(
+            "Current slide",
+            options=list(
+                browser.slide_ids
+            ),
+            key="main_active_slide_id",
+            format_func=lambda slide_id: (
+                f"Slide {slide_id}"
+            ),
+            on_change=_reset_turn_state,
+        )
+
+
+def _render_compact_target_summary(
+    view: MainUIViewModel,
+) -> None:
+    bbox = st.session_state.get(
+        "main_manual_bbox"
+    )
+
+    selected_aoi_ids = (
+        st.session_state.get(
+            "main_selected_aoi_ids",
+            [],
+        )
+    )
+
+    if not bbox:
+        st.caption(
+            "No target has been selected."
+        )
+        return
+
+    st.caption(
+        "Target ready · "
+        f"Slide {view.active_slide_id} · "
+        f"{len(selected_aoi_ids)} AOI match(es)"
+    )
+
+    if selected_aoi_ids:
+        st.caption(
+            "Matched: "
+            + ", ".join(
+                selected_aoi_ids
+            )
+        )
+
+
+def _render_target_column(
+    view: MainUIViewModel,
+) -> None:
+    st.markdown(
+        "### 1. Select region"
+    )
+
+    st.radio(
+        "Target scope",
+        options=[
+            "Use whole slide",
+            "Manual region",
+        ],
+        horizontal=True,
+        key="main_target_scope",
+        on_change=_on_target_scope_change,
+    )
+
+    st.checkbox(
+        "Show AOI overlay",
+        key="main_show_aoi_overlay",
+        on_change=_on_overlay_change,
+    )
+
+    if (
+        st.session_state[
+            "main_target_scope"
+        ]
+        == "Manual region"
+    ):
+        _render_manual_canvas(
+            view
+        )
+    else:
+        _set_whole_slide_target(
+            view
+        )
+        st.caption(
+            "The complete slide is selected."
+        )
+
+    _render_compact_target_summary(
+        view
+    )
+
+
+def _render_intent_column(
+    view: MainUIViewModel,
+) -> None:
+    st.markdown(
+        "### 2. Ask"
+    )
+
+    _render_quick_intent_actions()
+
+    st.text_area(
+        "Typed command",
+        key="main_typed_command",
+        height=110,
+        placeholder=(
+            "Examples: explain this, "
+            "summarize this, quiz me"
+        ),
+        on_change=_on_typed_command_change,
+    )
+
+    command = st.session_state[
+        "main_typed_command"
+    ].strip()
+
+    target_ready = bool(
+        st.session_state[
+            "main_manual_bbox"
+        ]
+    )
+
+    resolution = (
+        _resolve_current_intent()
+    )
+
+    assessment = assess_intent_target(
+        resolution,
+        target_available=target_ready,
+        selected_aoi_count=len(
+            st.session_state[
+                "main_selected_aoi_ids"
+            ]
+        ),
+    )
+
+    if st.session_state[
+        "main_intent_error"
+    ]:
+        st.error(
+            st.session_state[
+                "main_intent_error"
+            ]
+        )
+    elif not command:
+        st.caption(
+            "Choose a Quick action or type a command."
+        )
+    elif resolution is None:
+        st.info(
+            assessment.message
+        )
+    elif not resolution.recognized:
+        st.error(
+            assessment.message
+        )
+    elif assessment.status == "warning":
+        st.warning(
+            assessment.message
+        )
+    else:
+        st.success(
+            "Intent recognized: "
+            f"{resolution.intent_result.intent}"
+        )
+
+    _render_confirmation_panel(
+        view,
+        resolution,
+    )
+
+
+@contextmanager
+def _xai_section(
+    label: str,
+    expanded: bool = False,
+):
+    """Render an XAI subsection without nesting expanders."""
+    del expanded
+
+    with st.container(
+        border=True
+    ):
+        st.markdown(
+            f"#### {label}"
+        )
+        yield
+
+
+def _render_xai_drawer() -> None:
+    """Single home for current and future XAI content."""
+    with st.expander(
+        "Explainability (XAI)",
+        expanded=False,
+    ):
+        _render_main_xai()
+
+
+def _render_answer_column(
+    view: MainUIViewModel,
+) -> None:
+    st.markdown(
+        "### 3. Tutor answer"
+    )
+
+    _render_tutor_generation_panel(
+        view
+    )
+    _render_tutor_result()
+    _render_xai_drawer()
+
+    st.button(
+        "Reset current turn",
+        width="stretch",
+        key="main_reset_turn_button",
+        on_click=_reset_turn_state,
+    )
+
 def _render_header(
     view: MainUIViewModel,
 ) -> None:
+    del view
+
     st.title("AttentiveSlides")
 
     st.caption(
-        "Manual slide targeting and typed "
-        "commands without camera or microphone."
+        "Select a slide region, state your learning goal, "
+        "and receive a grounded tutor response."
     )
 
-    columns = st.columns(4)
 
-    columns[0].metric(
-        "Mode",
-        "Manual",
-    )
-    columns[1].metric(
-        "Camera",
-        "Off",
-    )
-    columns[2].metric(
-        "Microphone",
-        "Off",
-    )
-    columns[3].metric(
-        "Cloud tutor",
-        (
-            "Called"
-            if view.privacy
-            .cloud_llm_called
-            else "Not called"
-        ),
-    )
 
 
 def _render_navigation(
@@ -790,12 +1101,18 @@ def _render_navigation(
         )
     )
 
-    previous_column, selector_column, next_column = (
-        st.columns(
-            [0.18, 0.64, 0.18],
-            gap="medium",
-        )
+    (
+        left_spacer,
+        previous_column,
+        next_column,
+        right_spacer,
+    ) = st.columns(
+        [0.26, 0.24, 0.24, 0.26],
+        gap="small",
     )
+
+    del left_spacer
+    del right_spacer
 
     previous_column.button(
         "← Previous",
@@ -806,18 +1123,6 @@ def _render_navigation(
         args=(previous_id,),
     )
 
-    selector_column.selectbox(
-        "Current slide",
-        options=list(
-            browser.slide_ids
-        ),
-        key="main_active_slide_id",
-        format_func=lambda slide_id: (
-            f"Slide {slide_id}"
-        ),
-        on_change=_reset_turn_state,
-    )
-
     next_column.button(
         "Next →",
         disabled=next_id is None,
@@ -826,6 +1131,7 @@ def _render_navigation(
         on_click=_navigate_to_slide,
         args=(next_id,),
     )
+
 
 
 def _navigate_to_slide(
@@ -969,57 +1275,20 @@ def _on_target_scope_change() -> None:
 def _render_slide_workspace(
     view: MainUIViewModel,
 ) -> None:
-    st.subheader("Slide workspace")
-
-    slide = view.active_slide
-    columns = st.columns(3)
-
-    columns[0].metric(
-        "Slide",
-        (
-            f"{view.active_slide_index + 1}"
-            f" / {view.total_slides}"
-        ),
-    )
-
-    columns[1].metric(
-        "AOIs",
-        len(slide.aois),
-    )
-
-    columns[2].metric(
-        "Image",
-        (
-            "Available"
-            if slide.image_available
-            else "Fallback"
-        ),
-    )
-
-    st.checkbox(
-        "Show AOI overlay",
-        key="main_show_aoi_overlay",
-        on_change=_on_overlay_change,
-    )
-
     if (
         st.session_state[
             "main_target_scope"
         ]
-        == "Manual region"
+        == "Whole slide"
     ):
-        _render_manual_canvas(
-            view
-        )
-
-    else:
         _set_whole_slide_target(
             view
         )
 
-        _render_static_slide(
-            slide
-        )
+    _render_static_slide(
+        view.active_slide
+    )
+
 
 
 def _render_static_slide(
@@ -1044,6 +1313,44 @@ def _render_static_slide(
                     slide,
                 )
 
+            bbox = st.session_state.get(
+                "main_manual_bbox"
+            )
+
+            if (
+                bbox
+                and st.session_state.get(
+                    "main_target_scope"
+                )
+                == "Manual region"
+            ):
+                if display_image is base_image:
+                    display_image = (
+                        base_image.copy()
+                    )
+
+                width, height = (
+                    display_image.size
+                )
+
+                rectangle = (
+                    round(float(bbox[0]) * width),
+                    round(float(bbox[1]) * height),
+                    round(float(bbox[2]) * width),
+                    round(float(bbox[3]) * height),
+                )
+
+                ImageDraw.Draw(
+                    display_image
+                ).rectangle(
+                    rectangle,
+                    outline=(220, 70, 40),
+                    width=max(
+                        3,
+                        round(width / 360),
+                    ),
+                )
+
             st.image(
                 display_image,
                 width="stretch",
@@ -1060,8 +1367,7 @@ def _render_static_slide(
             border=True
         ):
             st.markdown(
-                f"### Slide "
-                f"{slide.slide_id}"
+                f"### Slide {slide.slide_id}"
             )
 
             st.write(
@@ -1070,28 +1376,12 @@ def _render_static_slide(
             )
 
 
+
 def _render_manual_canvas(
     view: MainUIViewModel,
 ) -> None:
-    """Render a normalized-region editor with an optional image preview."""
+    """Render normalized region controls without duplicating the slide."""
     slide = view.active_slide
-
-    image_path = (
-        Path(slide.image_path)
-        if slide.image_path
-        else None
-    )
-
-    has_image = bool(
-        slide.image_available
-        and image_path is not None
-        and image_path.is_file()
-    )
-
-    st.caption(
-        "Adjust the horizontal and vertical ranges. "
-        "Coordinates are normalized to the slide."
-    )
 
     st.slider(
         "Horizontal region",
@@ -1116,14 +1406,14 @@ def _render_manual_canvas(
     )
 
     apply_column.button(
-        "Apply current region",
+        "Apply region",
         key="main_apply_region_button",
         width="stretch",
         on_click=_activate_manual_region,
     )
 
     clear_column.button(
-        "Clear selected region",
+        "Clear",
         key="main_clear_region_button",
         width="stretch",
         on_click=_clear_manual_region,
@@ -1136,65 +1426,77 @@ def _render_manual_canvas(
         )
     )
 
-    if active:
-        x_min, x_max = (
-            st.session_state[
-                "main_region_x_range"
-            ]
-        )
+    if not active:
+        st.session_state[
+            "main_manual_bbox"
+        ] = None
+        st.session_state[
+            "main_selected_aoi_ids"
+        ] = []
+        st.session_state[
+            "main_selection_matches"
+        ] = []
+        st.session_state[
+            "main_selection_text"
+        ] = ""
+        return
 
-        y_min, y_max = (
-            st.session_state[
-                "main_region_y_range"
-            ]
-        )
+    x_min, x_max = (
+        st.session_state[
+            "main_region_x_range"
+        ]
+    )
+    y_min, y_max = (
+        st.session_state[
+            "main_region_y_range"
+        ]
+    )
 
-        bbox = (
-            float(x_min),
-            float(y_min),
-            float(x_max),
-            float(y_max),
-        )
+    bbox = (
+        float(x_min),
+        float(y_min),
+        float(x_max),
+        float(y_max),
+    )
 
-        try:
-            matches = tuple(
-                map_bbox_to_aois(
-                    bbox,
-                    slide.aois,
-                )
+    try:
+        matches = tuple(
+            map_bbox_to_aois(
+                bbox,
+                slide.aois,
             )
+        )
 
-            matched_aoi_ids = {
-                str(
-                    getattr(
-                        match,
-                        "aoi_id",
-                        "",
-                    )
-                ).strip()
-                for match in matches
-                if str(
-                    getattr(
-                        match,
-                        "aoi_id",
-                        "",
-                    )
-                ).strip()
-            }
-
-            selected_text_parts = [
-                str(aoi.text).strip()
-                for aoi in slide.aois
-                if (
-                    aoi.aoi_id
-                    in matched_aoi_ids
-                    and str(
-                        aoi.text
-                    ).strip()
+        matched_aoi_ids = {
+            str(
+                getattr(
+                    match,
+                    "aoi_id",
+                    "",
                 )
-            ]
+            ).strip()
+            for match in matches
+            if str(
+                getattr(
+                    match,
+                    "aoi_id",
+                    "",
+                )
+            ).strip()
+        }
 
-            selection = SimpleNamespace(
+        selected_text_parts = [
+            str(aoi.text).strip()
+            for aoi in slide.aois
+            if (
+                aoi.aoi_id
+                in matched_aoi_ids
+                and str(aoi.text).strip()
+            )
+        ]
+
+        _store_manual_selection(
+            SimpleNamespace(
                 bbox=bbox,
                 matches=matches,
                 selected_text=(
@@ -1203,39 +1505,18 @@ def _render_manual_canvas(
                     )
                 ),
             )
+        )
 
-            _store_manual_selection(
-                selection
-            )
-
-            st.session_state[
-                "main_selection_error"
-            ] = None
-
-        except Exception as exc:
-            st.session_state[
-                "main_selection_error"
-            ] = (
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
-
-    else:
         st.session_state[
-            "main_manual_bbox"
+            "main_selection_error"
         ] = None
 
+    except Exception as exc:
         st.session_state[
-            "main_selected_aoi_ids"
-        ] = []
-
-        st.session_state[
-            "main_selection_matches"
-        ] = []
-
-        st.session_state[
-            "main_selection_text"
-        ] = ""
+            "main_selection_error"
+        ] = (
+            f"{type(exc).__name__}: {exc}"
+        )
 
     if st.session_state.get(
         "main_selection_error"
@@ -1246,130 +1527,6 @@ def _render_manual_canvas(
             ]
         )
 
-    if has_image:
-        base_image = _load_slide_image(
-            str(image_path)
-        )
-
-        display_image = base_image
-
-        try:
-            if st.session_state[
-                "main_show_aoi_overlay"
-            ]:
-                display_image = (
-                    _draw_aoi_overlay(
-                        base_image,
-                        slide,
-                    )
-                )
-
-            if active:
-                bbox = st.session_state.get(
-                    "main_manual_bbox"
-                )
-
-                if bbox:
-                    draw = ImageDraw.Draw(
-                        display_image
-                    )
-
-                    width, height = (
-                        display_image.size
-                    )
-
-                    rectangle = (
-                        round(
-                            float(bbox[0])
-                            * width
-                        ),
-                        round(
-                            float(bbox[1])
-                            * height
-                        ),
-                        round(
-                            float(bbox[2])
-                            * width
-                        ),
-                        round(
-                            float(bbox[3])
-                            * height
-                        ),
-                    )
-
-                    draw.rectangle(
-                        rectangle,
-                        outline=(
-                            220,
-                            70,
-                            40,
-                        ),
-                        width=max(
-                            3,
-                            round(
-                                width / 360
-                            ),
-                        ),
-                    )
-
-            st.image(
-                display_image,
-                width="stretch",
-            )
-
-        finally:
-            if (
-                display_image
-                is not base_image
-            ):
-                display_image.close()
-
-            base_image.close()
-
-    else:
-        st.info(
-            "Slide image preview is unavailable. "
-            "Normalized region controls remain active "
-            "and AOI overlap is computed from the manifest."
-        )
-
-        if active:
-            st.code(
-                json.dumps(
-                    {
-                        "normalized_bbox": (
-                            st.session_state.get(
-                                "main_manual_bbox"
-                            )
-                        ),
-                        "matched_aoi_ids": (
-                            st.session_state.get(
-                                "main_selected_aoi_ids",
-                                [],
-                            )
-                        ),
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                language="json",
-            )
-
-    if (
-        active
-        and st.session_state.get(
-            "main_manual_bbox"
-        )
-    ):
-        st.success(
-            "Manual region captured."
-        )
-
-    else:
-        st.info(
-            "Adjust a range or click "
-            "Apply current region."
-        )
 
 
 def _store_manual_selection(
@@ -1679,11 +1836,7 @@ def _render_confirmation_panel(
     view: MainUIViewModel,
     resolution: ManualIntentResolution | None,
 ) -> None:
-    """Render inspection, correction, and confirmation controls."""
-    st.markdown(
-        "#### Confirmation and correction"
-    )
-
+    """Render a compact user-facing confirmation step."""
     try:
         preview = build_manual_confirmation_preview(
             deck_id=view.deck_id,
@@ -1717,7 +1870,7 @@ def _render_confirmation_panel(
 
     except Exception as exc:
         st.error(
-            f"Unable to build confirmation preview: "
+            "Unable to prepare confirmation: "
             f"{type(exc).__name__}: {exc}"
         )
         return
@@ -1727,8 +1880,8 @@ def _render_confirmation_panel(
     )
 
     if not option_ids:
-        st.error(
-            "No target is available for confirmation."
+        st.info(
+            "Select a target and command before confirming."
         )
         return
 
@@ -1752,7 +1905,7 @@ def _render_confirmation_panel(
     }
 
     selected_target_id = st.selectbox(
-        "Target to confirm",
+        "Confirm target",
         options=option_ids,
         key="main_confirmation_target_choice",
         format_func=lambda aoi_id: (
@@ -1761,53 +1914,9 @@ def _render_confirmation_panel(
         on_change=_invalidate_confirmation,
     )
 
-    selected_option = preview.get_target_option(
-        selected_target_id
-    )
-
     assessment = assess_manual_confirmation(
         preview,
         selected_target_id=selected_target_id,
-    )
-
-    summary_columns = st.columns(3)
-
-    summary_columns[0].metric(
-        "Target",
-        selected_option.label,
-    )
-
-    summary_columns[1].metric(
-        "Intent",
-        (
-            resolution.intent
-            if resolution is not None
-            else "unresolved"
-        ),
-    )
-
-    summary_columns[2].metric(
-        "Confirmation",
-        (
-            "Confirmed"
-            if st.session_state[
-                "main_confirmed"
-            ]
-            else "Pending"
-        ),
-    )
-
-    st.text_area(
-        "Context that will be confirmed",
-        value=selected_option.text,
-        height=150,
-        disabled=True,
-        key=(
-            "main_confirmation_context_"
-            f"{view.deck_id}_"
-            f"{view.active_slide_id}_"
-            f"{selected_target_id}"
-        ),
     )
 
     if assessment.status == "blocked":
@@ -1818,30 +1927,9 @@ def _render_confirmation_panel(
         st.warning(
             assessment.message
         )
-
-        for warning in assessment.warnings:
-            st.write(
-                f"- {warning}"
-            )
     else:
-        st.success(
+        st.caption(
             assessment.message
-        )
-
-    with st.expander(
-        "Confirmation preview",
-        expanded=False,
-    ):
-        st.json(
-            {
-                "preview": preview.to_dict(),
-                "assessment": (
-                    assessment.to_dict()
-                ),
-                "selected_target_id": (
-                    selected_target_id
-                ),
-            }
         )
 
     confirm_column, whole_column, cancel_column = (
@@ -1902,40 +1990,32 @@ def _render_confirmation_panel(
             )
 
         except Exception as exc:
+            _invalidate_confirmation()
             st.session_state[
                 "main_confirmation_error"
             ] = (
                 f"{type(exc).__name__}: {exc}"
             )
-            _invalidate_confirmation()
 
         else:
-            interaction = (
-                confirmed.interaction
-            )
+            interaction = confirmed.interaction
 
             st.session_state[
                 "main_confirmed"
             ] = True
             st.session_state[
                 "main_confirmation_source"
-            ] = (
-                interaction
-                .confirmation
-                .source
-            )
+            ] = interaction.confirmation.source
             st.session_state[
                 "main_confirmed_aoi_id"
             ] = (
-                interaction
-                .confirmation
+                interaction.confirmation
                 .confirmed_aoi_id
             )
             st.session_state[
                 "main_corrected_from_aoi_id"
             ] = (
-                interaction
-                .confirmation
+                interaction.confirmation
                 .corrected_from_aoi_id
             )
             st.session_state[
@@ -1958,20 +2038,9 @@ def _render_confirmation_panel(
         "main_confirmed"
     ]:
         st.success(
-            "The interaction has been explicitly "
-            "confirmed. Grounded tutor generation "
-            "is available below."
+            "Target and intent confirmed."
         )
 
-        with st.expander(
-            "Confirmed InteractionInput",
-            expanded=False,
-        ):
-            st.json(
-                st.session_state[
-                    "main_confirmed_interaction"
-                ]
-            )
 
 
 def _clear_conversation() -> None:
@@ -2521,30 +2590,21 @@ def _render_tutor_generation_panel(
     ]:
         st.success(
             "A validated tutor response "
-            "is available in the Tutor tab."
+            "is shown below."
         )
 
 
 def _render_tutor_result() -> None:
-    """Render the answer and multi-turn follow-up control."""
+    """Render the learner-facing answer without developer diagnostics."""
     result = st.session_state[
         "main_tutor_result"
     ]
 
     if result is None:
         st.info(
-            "Confirm the interaction and generate "
-            "an answer to populate this workspace."
+            "Confirm the request and generate an answer."
         )
         return
-
-    context = st.session_state.get(
-        "main_tutor_context"
-    ) or {}
-
-    st.markdown(
-        "### Tutor answer"
-    )
 
     st.markdown(
         result["answer"]
@@ -2570,14 +2630,16 @@ def _render_tutor_result() -> None:
             ]
         )
 
-    columns = st.columns(5)
+    status_column, validation_column = (
+        st.columns(2)
+    )
 
-    columns[0].metric(
+    status_column.metric(
         "Status",
         result["status"],
     )
 
-    columns[1].metric(
+    validation_column.metric(
         "Validation",
         (
             "PASS"
@@ -2588,68 +2650,13 @@ def _render_tutor_result() -> None:
         ),
     )
 
-    columns[2].metric(
-        "Latency",
-        (
-            f"{result['latency_ms']:.0f} ms"
-        ),
-    )
-
-    columns[3].metric(
-        "Tokens",
-        (
-            result["total_tokens"]
-            if result[
-                "total_tokens"
-            ]
-            is not None
-            else "—"
-        ),
-    )
-
-    columns[4].metric(
-        "History turns",
-        context.get(
-            "history_item_count",
-            0,
-        ),
-    )
-
-    st.markdown(
-        "#### Why this answer"
-    )
-
-    st.write(
-        result[
-            "decision_summary"
-        ]
-    )
-
-    with st.expander(
-        "Tutor response metadata",
-        expanded=False,
-    ):
-        st.json(
-            {
-                "context": context,
-                "response": result,
-            }
-        )
-
-    st.divider()
-
-    st.caption(
-        "Start a follow-up to preserve the "
-        "current target while creating a new "
-        "command, intent, and confirmation."
-    )
-
     st.button(
         "Start follow-up",
         width="stretch",
         key="main_start_follow_up_button",
         on_click=_start_follow_up,
     )
+
 
 
 def _render_main_xai() -> None:
@@ -2872,7 +2879,7 @@ def _render_main_xai() -> None:
             )
 
         if intent["provenance"]:
-            with st.expander(
+            with _xai_section(
                 "Intent provenance",
                 expanded=False,
             ):
@@ -3005,7 +3012,7 @@ def _render_main_xai() -> None:
                     f"- {warning}"
                 )
 
-        with st.expander(
+        with _xai_section(
             "Reliability telemetry",
             expanded=False,
         ):
@@ -3065,7 +3072,7 @@ def _render_main_xai() -> None:
             f"- {action}"
         )
 
-    with st.expander(
+    with _xai_section(
         "Privacy and public-XAI guarantees",
         expanded=False,
     ):
@@ -3078,467 +3085,45 @@ def _render_main_xai() -> None:
 def _render_manual_interaction(
     view: MainUIViewModel,
 ) -> None:
-    """Render manual target and typed-intent interaction."""
-    st.subheader("Manual interaction")
-
-    st.radio(
-        "Target scope",
-        options=[
-            "Whole slide",
-            "Manual region",
-        ],
-        horizontal=True,
-        key="main_target_scope",
-        on_change=_on_target_scope_change,
+    """Render the core learner workflow in one horizontal row."""
+    (
+        target_column,
+        intent_column,
+        answer_column,
+    ) = st.columns(
+        [1.05, 1.20, 1.35],
+        gap="medium",
     )
 
-    _render_quick_intent_actions()
-
-    st.text_area(
-        "Typed command",
-        key="main_typed_command",
-        height=120,
-        placeholder=(
-            "Examples: explain this, "
-            "summarize this, quiz me "
-            "on this"
-        ),
-        on_change=_on_typed_command_change,
-    )
-
-    command = st.session_state[
-        "main_typed_command"
-    ].strip()
-
-    target_ready = bool(
-        st.session_state[
-            "main_manual_bbox"
-        ]
-    )
-
-    selected_aoi_count = len(
-        st.session_state[
-            "main_selected_aoi_ids"
-        ]
-    )
-
-    resolution = (
-        _resolve_current_intent()
-    )
-
-    assessment = assess_intent_target(
-        resolution,
-        target_available=target_ready,
-        selected_aoi_count=(
-            selected_aoi_count
-        ),
-    )
-
-    st.markdown(
-        "#### Intent resolution"
-    )
-
-    if st.session_state[
-        "main_intent_error"
-    ]:
-        st.error(
-            st.session_state[
-                "main_intent_error"
-            ]
+    with target_column:
+        _render_target_column(
+            view
         )
 
-    elif resolution is None:
-        st.info(
-            assessment.message
+    with intent_column:
+        _render_intent_column(
+            view
         )
 
-    else:
-        columns = st.columns(3)
-
-        columns[0].metric(
-            "Intent",
-            resolution.intent_result.intent,
+    with answer_column:
+        _render_answer_column(
+            view
         )
 
-        columns[1].metric(
-            "Confidence",
-            (
-                f"{resolution.intent_result.confidence:.2f}"
-            ),
-        )
-
-        columns[2].metric(
-            "Source",
-            resolution.intent_input.source,
-        )
-
-        if not resolution.recognized:
-            st.error(
-                assessment.message
-            )
-        elif assessment.status == "warning":
-            st.warning(
-                assessment.message
-            )
-        else:
-            st.success(
-                assessment.message
-            )
-
-        with st.expander(
-            "Intent provenance",
-            expanded=False,
-        ):
-            for item in resolution.provenance:
-                st.write(
-                    f"- {item}"
-                )
-
-            st.json(
-                resolution.to_dict()
-            )
-
-    if target_ready:
-        st.success(
-            "Target is ready."
-        )
-    else:
-        st.warning(
-            "Select a target region."
-        )
-
-    st.markdown(
-        "#### Selected target"
-    )
-
-    bbox = st.session_state[
-        "main_manual_bbox"
-    ]
-
-    if bbox:
-        st.code(
-            json.dumps(
-                {
-                    "slide_id": (
-                        view.active_slide_id
-                    ),
-                    "bbox": bbox,
-                    "target_source": (
-                        "manual_rectangle"
-                        if (
-                            st.session_state[
-                                "main_target_scope"
-                            ]
-                            == "Manual region"
-                        )
-                        else "whole_slide"
-                    ),
-                },
-                indent=2,
-            ),
-            language="json",
-        )
-
-    matches = st.session_state[
-        "main_selection_matches"
-    ]
-
-    if matches:
-        st.markdown(
-            "#### AOI matches"
-        )
-
-        _render_records_table(
-            matches,
-            hide_index=True,
-            width="stretch",
-        )
-
-    elif (
-        st.session_state[
-            "main_target_scope"
-        ]
-        == "Manual region"
-        and bbox
-    ):
-        st.warning(
-            "The rectangle does not strongly "
-            "overlap a known AOI."
-        )
-
-    selected_text = (
-        st.session_state[
-            "main_selection_text"
-        ].strip()
-    )
-
-    st.markdown(
-        "#### Selected context"
-    )
-
-    if selected_text:
-        st.text_area(
-            "Context extracted from target",
-            value=selected_text,
-            height=180,
-            disabled=True,
-            key="main_manual_interaction_text_preview",
-        )
-    else:
-        st.caption(
-            "No text-bearing AOI "
-            "has been selected."
-        )
-
-    if not command:
-        intent_status = "missing"
-    elif resolution is None:
-        intent_status = "error"
-    elif resolution.recognized:
-        intent_status = (
-            "recognized"
-            if assessment.ready
-            else "blocked"
-        )
-    else:
-        intent_status = "unknown"
-
-    readiness = [
-        {
-            "step": "Slide",
-            "status": "ready",
-        },
-        {
-            "step": "Manual target",
-            "status": (
-                "ready"
-                if target_ready
-                else "missing"
-            ),
-        },
-        {
-            "step": "Typed command",
-            "status": (
-                "captured"
-                if command
-                else "missing"
-            ),
-        },
-        {
-            "step": "Intent resolution",
-            "status": intent_status,
-        },
-        {
-            "step": "Confirmation",
-            "status": "next stage",
-        },
-        {
-            "step": "Tutor",
-            "status": "not called",
-        },
-    ]
-
-    _render_records_table(
-        readiness,
-        hide_index=True,
-        width="stretch",
-    )
-
-    _render_confirmation_panel(
-        view,
-        resolution,
-    )
-
-    _render_tutor_generation_panel(
-        view
-    )
-
-    st.button(
-        "Reset current turn",
-        width="stretch",
-        key="main_reset_turn_button",
-        on_click=_reset_turn_state,
-    )
 
 
 def _render_lower_workspace(
     view: MainUIViewModel,
 ) -> None:
-    (
-        context_tab,
-        tutor_tab,
-        xai_tab,
-        conversation_tab,
-    ) = st.tabs(
-        [
-            "Context preview",
-            "Tutor",
-            "Explainability",
-            "Conversation",
-        ]
-    )
-
-    with context_tab:
-        st.subheader(
-            "Context preview"
-        )
-
-        st.markdown(
-            "#### Selected context"
-        )
-
-        st.write(
-            st.session_state[
-                "main_selection_text"
-            ]
-            or "No selected context."
-        )
-
-        st.markdown(
-            "#### Current slide text"
-        )
-
-        st.write(
-            view.active_slide.slide_text
-            or "No slide text."
-        )
-
-        st.markdown(
-            "#### AOI manifest"
-        )
-
-        _render_records_table(
-            [
-                {
-                    "aoi_id": aoi.aoi_id,
-                    "name": aoi.name,
-                    "type": aoi.type,
-                    "bbox": list(
-                        aoi.bbox
-                    ),
-                    "text": aoi.text,
-                }
-                for aoi
-                in view.active_slide.aois
-            ],
-            hide_index=True,
-            width="stretch",
-        )
-
-    with tutor_tab:
-        st.subheader(
-            "Tutor workspace"
-        )
-
-        _render_tutor_result()
-
-    with xai_tab:
-        st.subheader(
-            "Explainability workspace"
-        )
-
-        _render_main_xai()
-
-    with conversation_tab:
-        st.subheader(
-            "Conversation history"
-        )
-
+    """Keep secondary session information collapsed by default."""
+    with st.expander(
+        "Conversation history",
+        expanded=False,
+    ):
         _render_conversation_history(
             view
         )
 
-        st.divider()
-
-        with st.expander(
-            "Current session debug state",
-            expanded=False,
-        ):
-            st.json(
-                {
-                    "deck_id": view.deck_id,
-                    "active_slide_id": (
-                        view.active_slide_id
-                    ),
-                    "uploaded_deck_id": (
-                        st.session_state[
-                            "main_uploaded_deck_id"
-                        ]
-                    ),
-                    "target_scope": (
-                        st.session_state[
-                            "main_target_scope"
-                        ]
-                    ),
-                    "manual_bbox": (
-                        st.session_state[
-                            "main_manual_bbox"
-                        ]
-                    ),
-                    "selected_aoi_ids": (
-                        st.session_state[
-                            "main_selected_aoi_ids"
-                        ]
-                    ),
-                    "typed_command": (
-                        st.session_state[
-                            "main_typed_command"
-                        ]
-                    ),
-                    "intent_source": (
-                        st.session_state[
-                            "main_intent_source"
-                        ]
-                    ),
-                    "intent_result": (
-                        st.session_state[
-                            "main_intent_result"
-                        ]
-                    ),
-                    "confirmed": (
-                        st.session_state[
-                            "main_confirmed"
-                        ]
-                    ),
-                    "confirmed_interaction": (
-                        st.session_state[
-                            "main_confirmed_interaction"
-                        ]
-                    ),
-                    "tutor_context": (
-                        st.session_state[
-                            "main_tutor_context"
-                        ]
-                    ),
-                    "conversation_deck_id": (
-                        st.session_state[
-                            "main_conversation_deck_id"
-                        ]
-                    ),
-                    "conversation_turn_count": len(
-                        st.session_state[
-                            "main_conversation_turns"
-                        ]
-                    ),
-                    "history_enabled": (
-                        st.session_state[
-                            "main_history_enabled"
-                        ]
-                    ),
-                    "history_max_items": (
-                        st.session_state[
-                            "main_history_max_items"
-                        ]
-                    ),
-                    "camera_enabled": False,
-                    "microphone_enabled": False,
-                    "cloud_llm_called": bool(
-                        st.session_state[
-                            "main_tutor_result"
-                        ]
-                    ),
-                }
-            )
 
 
 def _draw_aoi_overlay(
