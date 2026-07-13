@@ -192,7 +192,7 @@ git commit -m "docs: record UI live merge baseline"
 - Produces: `build_fallback_app(ingress=None, *, capture_html=None, health_check=None) -> web.Application`.
 - Produces: `LiveIngressService.health_status() -> tuple[bool, dict[str, object]]`.
 
-- [ ] **Step 1: Replace the incorrect deck-reload regression expectation**
+- [x] **Step 1: Replace the incorrect deck-reload regression expectation**
 
 Replace `test_external_shared_source_stop_restarts_runtime_through_fresh_gate` with a test that asserts no restart until both new tracks arrive:
 
@@ -238,7 +238,7 @@ Run:
 
 Expected: FAIL because the second reconcile still reuses old freshness.
 
-- [ ] **Step 2: Add the smallest readiness reset**
+- [x] **Step 2: Add the smallest readiness reset**
 
 Add to `FallbackMediaIngress`:
 
@@ -268,7 +268,7 @@ self.ingress.reset_active_readiness(
 
 Run the failing test again. Expected: PASS.
 
-- [ ] **Step 3: Write coordinator health tests**
+- [x] **Step 3: Write coordinator health tests**
 
 Add tests covering a healthy pending task and a task that ended with an exception:
 
@@ -312,7 +312,7 @@ Also add an aiohttp route test asserting `/health` returns 503 when an injected 
 
 Run both new tests. Expected: FAIL because the health callback and state do not exist.
 
-- [ ] **Step 4: Make health reflect the coordinator task**
+- [x] **Step 4: Make health reflect the coordinator task**
 
 Add `_coordinator_last_error: str | None = None` in `LiveIngressService.__init__` and reset it before creating the coordinator task.
 
@@ -370,7 +370,7 @@ async def _coordinate(self) -> None:
         raise
 ```
 
-- [ ] **Step 5: Run lifecycle and launcher regressions**
+- [x] **Step 5: Run lifecycle and launcher regressions**
 
 Run:
 
@@ -384,7 +384,7 @@ git diff --check
 
 Expected: PASS, including the new 503 behavior.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add modules/media/single_port_transport.py \
