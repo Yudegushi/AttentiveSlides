@@ -90,6 +90,12 @@ def _load_uploaded_deck(runtime: LiveViewModel, uploaded: Any) -> str | None:
     return deck_id
 
 
+def next_master_switch_state(current_state: bool, button_pressed: bool) -> bool:
+    """Keep the media lifecycle switch stable between Streamlit reruns."""
+
+    return not current_state if button_pressed else current_state
+
+
 def _render_media(runtime: LiveViewModel, master_switch: bool, deck_loaded: bool) -> None:
     if not master_switch or not deck_loaded:
         if runtime.is_running:
@@ -219,7 +225,18 @@ def main() -> None:
             f"Tutor: {snapshot['tutor']['selection']} · "
             f"{snapshot['tutor']['provider']} / {snapshot['tutor']['model']}"
         )
-        master_switch = st.toggle("Master switch", value=False, key="live_master_switch")
+        current_master_switch = bool(st.session_state.get("live_master_switch", False))
+        master_switch = next_master_switch_state(
+            current_master_switch,
+            st.button(
+                "Master switch: Stop live runtime"
+                if current_master_switch
+                else "Master switch: Start live runtime",
+                key="live_master_switch_button",
+                type="secondary" if current_master_switch else "primary",
+            ),
+        )
+        st.session_state.live_master_switch = master_switch
         if snapshot["deck"]["loaded"]:
             selected_slide = st.number_input(
                 "Slide",

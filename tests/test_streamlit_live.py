@@ -3,6 +3,7 @@ import unittest
 
 from PIL import Image
 
+from apps import streamlit_live
 from apps.streamlit_live import build_aoi_overlay
 
 
@@ -46,6 +47,21 @@ class StreamlitLiveSurfaceTest(unittest.TestCase):
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, source)
+
+    def test_master_switch_uses_a_button_state_transition(self) -> None:
+        self.assertTrue(
+            hasattr(streamlit_live, "next_master_switch_state"),
+            "the live surface must expose the button state transition",
+        )
+        transition = streamlit_live.next_master_switch_state
+        self.assertFalse(transition(False, False))
+        self.assertTrue(transition(False, True))
+        self.assertTrue(transition(True, False))
+        self.assertFalse(transition(True, True))
+
+        source = Path("apps/streamlit_live.py").read_text(encoding="utf-8")
+        self.assertIn("st.button(", source)
+        self.assertNotIn('st.toggle("Master switch"', source)
 
 
 if __name__ == "__main__":
