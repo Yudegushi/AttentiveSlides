@@ -10,6 +10,7 @@ from PIL import Image
 
 from apps import streamlit_live
 from apps.streamlit_live import build_aoi_display_label, build_aoi_overlay
+from scripts.run_live_single_port import select_origin
 
 
 class StreamlitLiveSurfaceTest(unittest.TestCase):
@@ -21,11 +22,11 @@ class StreamlitLiveSurfaceTest(unittest.TestCase):
         for expected in (
             "navigator.mediaDevices.getUserMedia",
             "Grant camera/mic",
-            'fetch("/media/start"',
-            'fetch("/media/video"',
-            'fetch("/media/audio"',
-            'fetch("/media/heartbeat"',
-            'sendBeacon("/media/stop',
+            'fetch("/attentive-media/start"',
+            'fetch("/attentive-media/video"',
+            'fetch("/attentive-media/audio"',
+            'fetch("/attentive-media/heartbeat"',
+            'sendBeacon("/attentive-media/stop',
             'addEventListener("ended"',
             'addEventListener("mute"',
             'addEventListener("unmute"',
@@ -35,9 +36,21 @@ class StreamlitLiveSurfaceTest(unittest.TestCase):
                 self.assertIn(expected, component)
         self.assertNotIn("http://", component)
         self.assertNotIn("https://", component)
+        self.assertNotIn('"/media/', component)
         self.assertNotIn('id="start"', component)
         self.assertNotIn('id="stop"', component)
         self.assertEqual(component.count("Grant camera/mic"), 1)
+
+        for suffix in ("start", "video", "audio", "heartbeat", "stop", "stats"):
+            with self.subTest(capture_route=suffix):
+                self.assertEqual(
+                    select_origin(
+                        f"/attentive-media/{suffix}",
+                        "http://streamlit",
+                        "http://ingress",
+                    ),
+                    "http://ingress",
+                )
 
     def test_live_app_uses_cached_shared_http_media_resources(self) -> None:
         source = Path("apps/streamlit_live.py").read_text(encoding="utf-8")

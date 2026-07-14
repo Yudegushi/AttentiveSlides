@@ -76,7 +76,7 @@
 
   async function waitForActivation(expectedGeneration) {
     for (let attempt = 0; attempt < 100; attempt += 1) {
-      const payload = await (await requireOk(await fetch("/media/stats"))).json();
+      const payload = await (await requireOk(await fetch("/attentive-media/stats"))).json();
       if (!payload.armed) throw new Error("Master switch is off.");
       if (payload.session_state === "active" && payload.generation === expectedGeneration) return;
       await new Promise((resolve) => window.setTimeout(resolve, 50));
@@ -97,7 +97,7 @@
           return;
         }
         try {
-          await requireOk(await fetch("/media/video", {
+          await requireOk(await fetch("/attentive-media/video", {
             method: "POST",
             headers: headers({
               "Content-Type": "image/jpeg",
@@ -124,7 +124,7 @@
       if (!running || audioInFlight) return;
       const pcm = downsampleToS16(event.inputBuffer.getChannelData(0), audioContext.sampleRate);
       audioInFlight = true;
-      fetch("/media/audio", {
+      fetch("/attentive-media/audio", {
         method: "POST",
         headers: headers({
           "Content-Type": "audio/L16",
@@ -147,7 +147,7 @@
   function startHeartbeat() {
     heartbeatTimer = window.setInterval(() => {
       if (!running) return;
-      fetch("/media/heartbeat", { method: "POST", headers: headers() })
+      fetch("/attentive-media/heartbeat", { method: "POST", headers: headers() })
         .then(requireOk)
         .catch((error) => void stopCapture(false, "Heartbeat stopped: " + error.message));
     }, 1000);
@@ -157,7 +157,7 @@
     if (running) return;
     permissionButton.hidden = true;
     try {
-      const before = await (await requireOk(await fetch("/media/stats"))).json();
+      const before = await (await requireOk(await fetch("/attentive-media/stats"))).json();
       if (!before.armed) {
         setStatus("Master switch is off.");
         return;
@@ -168,7 +168,7 @@
       }
       stream.getTracks().forEach(installTrackCleanup);
       const started = await (
-        await requireOk(await fetch("/media/start", { method: "POST", headers: headers() }))
+        await requireOk(await fetch("/attentive-media/start", { method: "POST", headers: headers() }))
       ).json();
       generation = started.generation;
       await waitForActivation(generation);
@@ -208,14 +208,14 @@
     stream = null;
     preview.srcObject = null;
     if (notifyServer && hadCapture) {
-      await fetch("/media/stop", { method: "POST", headers: headers() }).catch(() => {});
+      await fetch("/attentive-media/stop", { method: "POST", headers: headers() }).catch(() => {});
     }
     if (message) setStatus(message);
   }
 
   async function refreshServerState() {
     try {
-      const payload = await (await requireOk(await fetch("/media/stats"))).json();
+      const payload = await (await requireOk(await fetch("/attentive-media/stats"))).json();
       if (running && (
         !payload.armed || payload.session_state !== "active" || payload.generation !== generation
       )) {
@@ -230,7 +230,7 @@
   window.addEventListener("pagehide", () => {
     running = false;
     if (stream) stream.getTracks().forEach((track) => track.stop());
-    navigator.sendBeacon("/media/stop?session=" + encodeURIComponent(sessionId), "");
+    navigator.sendBeacon("/attentive-media/stop?session=" + encodeURIComponent(sessionId), "");
   });
   window.setInterval(refreshServerState, 1000);
   void startCapture(false);

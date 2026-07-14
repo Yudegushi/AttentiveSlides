@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from modules.slide.aoi_manager import AOI, AOIManager, SlideAOIData
-from modules.slide.llm_aoi import LLMAOIGenerator
+from modules.slide.llm_aoi import LLMAOIConfig, LLMAOIGenerator, sanitized_llm_error
 
 
 PNG = (
@@ -57,6 +57,14 @@ def llm_item(text="alpha beta gamma delta", *, aoi_type="text", bbox=None):
 
 
 class LLMAOIGeneratorValidationTest(unittest.TestCase):
+    def test_sanitized_error_never_echoes_arbitrary_exception_text(self):
+        sentinel = "SENTINEL_ENDPOINT_TOKEN"
+
+        error = sanitized_llm_error(ValueError(f"bad endpoint https://host/?key={sentinel}"))
+
+        self.assertEqual(error, "LLM AOI processing failed")
+        self.assertNotIn(sentinel, error)
+
     def test_rejects_empty_and_invalid_bbox_results(self):
         generator = LLMAOIGenerator()
         for payload in ([], [{"bbox": []}], [{"bbox": [0.8, 0.1, 0.2, 0.4]}]):
@@ -164,6 +172,27 @@ class LLMAOIManagerTest(unittest.TestCase):
                 self.assertLessEqual(len(result["llm_aoi_error"]), 280)
                 self.assertNotIn("  ", result["llm_aoi_error"])
                 self.assertEqual(json.dumps(result["aois"], ensure_ascii=False), before)
+
+    def test_malformed_endpoint_and_key_never_reach_manifest_or_exposed_state(self):
+        endpoint_sentinel = "SENTINEL_ENDPOINT_TOKEN"
+        key_sentinel = "SENTINEL_API_KEY"
+        generator = LLMAOIGenerator(
+            LLMAOIConfig(
+                endpoint=f"not a url {endpoint_sentinel}",
+                api_key=key_sentinel,
+                model="fake-vlm",
+            )
+        )
+        manager = self.seeded_manager(generator)
+
+        result = manager.process_llm_aoi("deck", 1, allow_ocr=False)
+        state = manager.get_llm_aoi_state("deck", 1)
+        exposed = json.dumps({"result": result, "state": state}, ensure_ascii=False)
+
+        self.assertEqual(result["llm_aoi_status"], "fallback_used")
+        self.assertEqual(result["llm_aoi_error"], "LLM AOI processing failed")
+        self.assertNotIn(endpoint_sentinel, exposed)
+        self.assertNotIn(key_sentinel, exposed)
 
     def test_anchor_change_invalidates_old_variant_and_effective_selection(self):
         generator = FakeLLMGenerator(result=[llm_item("alpha beta gamma delta epsilon zeta eta theta")])

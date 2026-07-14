@@ -7,7 +7,6 @@ from io import BytesIO
 import json
 import os
 import re
-import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,8 +21,10 @@ ALLOWED_AOI_TYPES = {
 
 
 def sanitized_llm_error(error: Exception) -> str:
-    message = " ".join(str(error).split())
-    return f"{type(error).__name__}: {message[:240]}"
+    # Exception messages from URL/request libraries may contain the configured
+    # endpoint, query parameters, response bodies, or other credentials.
+    # Persist and display only fixed copy at this trust boundary.
+    return "LLM AOI processing failed"
 
 
 @dataclass
@@ -75,23 +76,23 @@ class LLMAOIGenerator:
     def generate(self, image_path: str, slide_text: str, rule_aois: list[dict[str, Any]], text_aois: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not self.is_configured():
             raise RuntimeError("LLM AOI API is not configured")
-        payload = self._build_payload(image_path, slide_text, rule_aois, text_aois)
-        request = urllib.request.Request(
-            str(self.config.endpoint),
-            data=json.dumps(payload).encode("utf-8"),
-            headers=self._headers(),
-            method="POST",
-        )
         try:
+            payload = self._build_payload(image_path, slide_text, rule_aois, text_aois)
+            request = urllib.request.Request(
+                str(self.config.endpoint),
+                data=json.dumps(payload).encode("utf-8"),
+                headers=self._headers(),
+                method="POST",
+            )
             with urllib.request.urlopen(request, timeout=self.config.timeout_sec) as response:
                 raw = response.read().decode("utf-8")
-        except urllib.error.URLError as exc:
+            data = self._extract_json_object(self._extract_message_content(raw))
+            aois = data.get("aois")
+            if not isinstance(aois, list):
+                raise ValueError("LLM AOI response must contain an 'aois' list")
+            return self._validate_aois(aois)
+        except Exception as exc:
             raise RuntimeError("LLM AOI request failed") from exc
-        data = self._extract_json_object(self._extract_message_content(raw))
-        aois = data.get("aois")
-        if not isinstance(aois, list):
-            raise ValueError("LLM AOI response must contain an 'aois' list")
-        return self._validate_aois(aois)
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
