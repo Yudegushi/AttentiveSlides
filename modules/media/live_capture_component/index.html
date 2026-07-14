@@ -27,6 +27,10 @@
   const FACE_MESH_ROOT =
     "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619";
   const EYETHEIA_URL = "ws://127.0.0.1:8001/ws/predict_gaze";
+  const DEBUG_CHANNEL_NAME = "attentiveslides-gaze-debug-v1";
+  const debugChannel = typeof BroadcastChannel === "function"
+    ? new BroadcastChannel(DEBUG_CHANNEL_NAME)
+    : null;
   const sessionId = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() :
     String(Date.now()) + "-" + Math.random().toString(16).slice(2);
   const status = document.getElementById("status");
@@ -67,6 +71,15 @@
   let latestGaze = null;
   let lastGazeUploadAt = -Infinity;
   const energyVadThreshold = 250;
+
+  function publishDebug(message) {
+    if (!debugChannel) return;
+    debugChannel.postMessage({ version: 1, ...message });
+  }
+
+  function clearDebugGaze() {
+    publishDebug({ kind: "gaze_clear" });
+  }
 
   function headers(extra = {}) {
     return { "X-Attentive-Media-Session": sessionId, ...extra };
@@ -112,6 +125,7 @@
 
   function handleLocalGazeFailure(detail, reconnect = true) {
     latestGaze = null;
+    clearDebugGaze();
     setGazeStatus(
       reconnect
         ? "EyeTheia: reconnecting; cloud gaze fallback active"
@@ -225,6 +239,7 @@
       face_detected: true,
       source: "eyetheia_local",
     };
+    publishDebug({ kind: "gaze", ...latestGaze });
     scheduleGazeUpload();
   }
 
@@ -334,6 +349,7 @@
   }
 
   function stopLocalGaze() {
+    clearDebugGaze();
     window.clearInterval(faceMeshTimer);
     window.clearTimeout(eyeTheiaReconnectTimer);
     window.clearTimeout(gazeUploadTimer);
@@ -563,6 +579,8 @@
   window.addEventListener("pagehide", () => {
     running = false;
     stopLocalGaze();
+    clearDebugGaze();
+    if (debugChannel) debugChannel.close();
     if (stream) stream.getTracks().forEach((track) => track.stop());
     navigator.sendBeacon("/attentive-media/stop?session=" + encodeURIComponent(sessionId), "");
   });
