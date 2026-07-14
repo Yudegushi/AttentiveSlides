@@ -44,6 +44,9 @@
       let dragStart = null;
       let scheduled = false;
       let reportTimer = null;
+      let componentValueRequested = false;
+      let geometryInFlight = false;
+      let pendingGeometry = null;
       let lastReportedSignature = null;
       let lastCoordinateErrorSignature = null;
       let lastRequestedRevision = null;
@@ -66,6 +69,31 @@
         send("streamlit:setFrameHeight", {
           height: Math.ceil(root.getBoundingClientRect().height),
         });
+      }
+
+      async function flushGeometry() {
+        if (geometryInFlight || pendingGeometry === null) return;
+        const payload = pendingGeometry;
+        pendingGeometry = null;
+        geometryInFlight = true;
+        try {
+          const response = await fetch("/attentive-media/geometry", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+        } catch (error) {
+          console.warn("AttentiveSlides geometry upload failed", error);
+        } finally {
+          geometryInFlight = false;
+          if (pendingGeometry !== null) void flushGeometry();
+        }
+      }
+
+      function postGeometry(payload) {
+        pendingGeometry = payload;
+        void flushGeometry();
       }
 
       function coordinateContext() {
@@ -106,7 +134,8 @@
       }
 
       function geometrySignature(payload) {
-        return JSON.stringify(payload, function (_key, value) {
+        return JSON.stringify(payload, function (key, value) {
+          if (key === "browser_timestamp_ms") return undefined;
           if (typeof value !== "number") return value;
           const precision = this === payload.manual_bbox ? 10000 : 10;
           return Math.round(value * precision) / precision;
@@ -115,6 +144,8 @@
 
       function report() {
         scheduled = false;
+        const shouldSetComponentValue = componentValueRequested;
+        componentValueRequested = false;
         if (!args || !image || !image.complete || !image.naturalWidth) return;
         setFrameHeight();
         const context = coordinateContext();
@@ -144,24 +175,31 @@
           slide_pixel_height: localSlideRect.height,
           aoi_rects: aoiRects,
           manual_bbox: manualBBox,
+          browser_timestamp_ms: performance.timeOrigin + performance.now(),
         };
         const signature = geometrySignature(payload);
-        if (signature === lastReportedSignature) return;
-        revision += 1;
+        if (signature !== lastReportedSignature) {
+          revision += 1;
+          lastReportedSignature = signature;
+          payload.layout_revision = revision;
+          postGeometry(payload);
+        }
         payload.layout_revision = revision;
-        lastReportedSignature = signature;
-        setValue(payload);
+        if (shouldSetComponentValue) {
+          setValue(Object.assign({ event: "manual_selection" }, payload));
+        }
         setFrameHeight();
       }
 
-      function scheduleReport() {
+      function scheduleReport({ componentValue = false } = {}) {
+        componentValueRequested ||= componentValue;
         if (scheduled) return;
         scheduled = true;
         window.requestAnimationFrame(report);
       }
 
-      function scheduleDebouncedReport() {
-        if (reportTimer !== null) window.clearTimeout(reportTimer);
+      function scheduleThrottledReport() {
+        if (reportTimer !== null) return;
         reportTimer = window.setTimeout(() => {
           reportTimer = null;
           scheduleReport();
@@ -228,7 +266,7 @@
           drawManual(end);
         }
         dragStart = null;
-        scheduleReport();
+        scheduleReport({ componentValue: true });
       }
 
       function cleanupListeners() {
@@ -302,8 +340,8 @@
         image.addEventListener("load", scheduleReport, { once: true });
         image.src = args.image_data_url;
 
-        resizeHandler = scheduleDebouncedReport;
-        parentScrollHandler = scheduleDebouncedReport;
+        resizeHandler = scheduleThrottledReport;
+        parentScrollHandler = scheduleThrottledReport;
         window.addEventListener("resize", resizeHandler);
         try {
           window.parent.addEventListener("resize", resizeHandler);
@@ -311,7 +349,7 @@
         } catch (_) {
           scheduleReport();
         }
-        observer = new ResizeObserver(scheduleDebouncedReport);
+        observer = new ResizeObserver(scheduleThrottledReport);
         observer.observe(slide);
         setFrameHeight();
         scheduleReport();

@@ -93,7 +93,7 @@ class SlideViewportComponentContractTest(unittest.TestCase):
             "modules/ui/slide_viewport_component/index.html"
         ).read_text(encoding="utf-8")
 
-    def test_apptest_escape_hatch_returns_none(self):
+    def test_apptest_escape_hatch_returns_disabled_event(self):
         from modules.ui.slide_viewport_component import render_slide_viewport
 
         slide = MainUISlide(
@@ -113,7 +113,7 @@ class SlideViewportComponentContractTest(unittest.TestCase):
                 key="test-viewport",
             )
 
-        self.assertIsNone(value)
+        self.assertEqual(value, {"event": "disabled"})
 
     def test_display_width_is_passed_to_declared_component(self):
         from modules.ui.slide_viewport_component import render_slide_viewport
@@ -129,24 +129,32 @@ class SlideViewportComponentContractTest(unittest.TestCase):
                 aois=(),
                 image_path=str(image_path),
             )
-            with patch(
-                "modules.ui.slide_viewport_component._component",
-                return_value=declared_component,
+            with patch.dict(
+                os.environ,
+                {"ATTENTIVE_DISABLE_CANVAS_FOR_APPTEST": "0"},
             ):
-                value = render_slide_viewport(
-                    deck_id="deck-a",
-                    slide=slide,
-                    layout_revision=0,
-                    drawing_enabled=False,
-                    show_aoi_overlay=False,
-                    display_width_percent=75,
-                    key="test-viewport",
-                )
+                with patch(
+                    "modules.ui.slide_viewport_component._component",
+                    return_value=declared_component,
+                ):
+                    value = render_slide_viewport(
+                        deck_id="deck-a",
+                        slide=slide,
+                        layout_revision=0,
+                        drawing_enabled=False,
+                        show_aoi_overlay=False,
+                        display_width_percent=75,
+                        key="test-viewport",
+                    )
 
         self.assertEqual(value, {"status": "ok"})
         self.assertEqual(
             declared_component.call_args.kwargs["display_width_percent"],
             75,
+        )
+        self.assertEqual(
+            declared_component.call_args.kwargs["default"],
+            {"event": "mounted"},
         )
 
     def test_static_component_uses_parent_viewport_protocol(self):
@@ -161,6 +169,13 @@ class SlideViewportComponentContractTest(unittest.TestCase):
         self.assertIn("ResizeObserver", component)
         self.assertIn("streamlit:setComponentValue", component)
         self.assertIn("streamlit:setFrameHeight", component)
+        self.assertIn('fetch("/attentive-media/geometry"', component)
+        self.assertIn("geometryInFlight", component)
+        self.assertIn("pendingGeometry", component)
+        self.assertIn(
+            "performance.timeOrigin + performance.now()",
+            component,
+        )
         self.assertNotIn("npm", component)
 
     def test_unchanged_geometry_is_deduplicated_before_revision_advances(self):
@@ -169,14 +184,28 @@ class SlideViewportComponentContractTest(unittest.TestCase):
         self.assertIn("lastReportedSignature", component)
         self.assertIn("geometrySignature", component)
         comparison = component.index(
-            "signature === lastReportedSignature"
+            "signature !== lastReportedSignature"
         )
         self.assertNotIn("revision += 1", component[:comparison])
         revision = component.index("revision += 1", comparison)
-        send = component.index("setValue(payload)", revision)
+        send = component.index("postGeometry(payload)", revision)
 
         self.assertLess(comparison, revision)
         self.assertLess(revision, send)
+
+    def test_component_value_is_reserved_for_manual_selection_and_errors(self):
+        component = self.component_source()
+
+        self.assertNotIn("setValue(payload)", component)
+        self.assertIn(
+            'setValue(Object.assign({ event: "manual_selection" }, payload))',
+            component,
+        )
+        self.assertIn("setValue(errorPayload)", component)
+        self.assertIn(
+            "scheduleReport({ componentValue: true })",
+            component,
+        )
 
     def test_repeated_coordinate_errors_are_deduplicated(self):
         component = self.component_source()
@@ -226,24 +255,24 @@ class SlideViewportComponentContractTest(unittest.TestCase):
         self.assertIn("requestedRevision", reset_identity)
         self.assertNotIn("display_width_percent", reset_identity)
 
-    def test_layout_listeners_use_one_trailing_debounced_report(self):
+    def test_layout_listeners_use_one_throttled_report(self):
         component = self.component_source()
 
         self.assertIn("let reportTimer = null", component)
-        self.assertIn("function scheduleDebouncedReport", component)
-        self.assertIn("window.clearTimeout(reportTimer)", component)
+        self.assertIn("function scheduleThrottledReport", component)
+        self.assertIn("if (reportTimer !== null) return", component)
         self.assertIn("window.setTimeout", component)
         self.assertIn("}, 180)", component)
         self.assertIn(
-            "resizeHandler = scheduleDebouncedReport",
+            "resizeHandler = scheduleThrottledReport",
             component,
         )
         self.assertIn(
-            "parentScrollHandler = scheduleDebouncedReport",
+            "parentScrollHandler = scheduleThrottledReport",
             component,
         )
         self.assertIn(
-            "ResizeObserver(scheduleDebouncedReport)",
+            "ResizeObserver(scheduleThrottledReport)",
             component,
         )
 

@@ -356,6 +356,9 @@ class TestStreamlitAttentiveSlides(
             source,
         )
         self.assertIn("parse_component_geometry", source)
+        self.assertIn('event == "mounted"', source)
+        self.assertIn('event == "disabled"', source)
+        self.assertIn('event != "manual_selection"', source)
         self.assertNotIn("st_canvas", self.source)
         self.assertNotIn("streamlit_drawable_canvas", self.source)
 
@@ -404,6 +407,16 @@ class TestStreamlitAttentiveSlides(
             if "_render_current_slide_llm_aoi_action" in names
         )
         self.assertLess(process_statement, slider_statement)
+
+    def test_live_fragment_does_not_receive_component_geometry(self) -> None:
+        periodic = self.function_source("_render_live_periodic")
+        manual = self.function_source("_render_manual_interaction")
+        consume = self.function_source("_consume_live_proposal")
+
+        self.assertNotIn("SlideViewportGeometry", self.source)
+        self.assertNotIn("geometry:", periodic)
+        self.assertNotIn("geometry=", manual)
+        self.assertIn("latest_geometry_for", consume)
 
     def test_llm_opt_in_precedes_browser_resolution_and_live_binding(self) -> None:
         statement_calls = [

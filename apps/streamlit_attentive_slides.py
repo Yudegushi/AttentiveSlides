@@ -113,10 +113,7 @@ from modules.system.live_ui_bridge import (
 )
 from modules.system.sensing_snapshot_store import SensingSnapshotStore
 from modules.system.sensing_worker import SensingWorker
-from modules.system.slide_geometry import (
-    SlideViewportGeometry,
-    parse_component_geometry,
-)
+from modules.system.slide_geometry import parse_component_geometry
 from modules.system.turn_context import TurnContextCollector
 from modules.system.uploaded_deck_service import (
     UploadedDeckWorkspace,
@@ -357,7 +354,7 @@ def main() -> None:
     _render_slide_selector(
         browser
     )
-    geometry = _render_slide_workspace(
+    _render_slide_workspace(
         view,
         workspace=workspace,
     )
@@ -368,7 +365,6 @@ def main() -> None:
     _render_manual_interaction(
         view,
         live_resources=live_resources,
-        geometry=geometry,
     )
     _render_lower_workspace(view)
 
@@ -1914,7 +1910,7 @@ def _render_slide_workspace(
     view: MainUIViewModel,
     *,
     workspace: UploadedDeckWorkspace,
-) -> SlideViewportGeometry | None:
+) -> None:
     drawing_enabled = (
         st.session_state["main_target_scope"]
         == "Manual region"
@@ -1958,11 +1954,29 @@ def _render_slide_workspace(
     )
     if payload is None:
         _render_static_slide(view.active_slide)
+        return
+
+    event = payload.get("event")
+    if event == "disabled":
+        _render_static_slide(view.active_slide)
         if drawing_enabled:
             st.caption(
                 "Viewport selection is disabled only in AppTest workers."
             )
-        return None
+        return
+    if event == "mounted":
+        return
+    if payload.get("coordinate_error"):
+        st.session_state["main_selection_error"] = str(
+            payload["coordinate_error"]
+        )
+        st.error(
+            "Unable to read slide viewport geometry: "
+            + st.session_state["main_selection_error"]
+        )
+        return
+    if event != "manual_selection":
+        return
 
     try:
         geometry = parse_component_geometry(
@@ -2008,9 +2022,7 @@ def _render_slide_workspace(
             "Unable to read slide viewport geometry: "
             + st.session_state["main_selection_error"]
         )
-        return None
-
-    return geometry
+        return
 
 
 
@@ -3793,7 +3805,6 @@ def _store_live_confirmation(
 def _consume_live_proposal(
     resources: MainLiveResources,
     view: MainUIViewModel,
-    geometry: SlideViewportGeometry | None,
 ) -> None:
     resources.runtime.poll()
     confirmed = (
@@ -3813,6 +3824,12 @@ def _consume_live_proposal(
         return
     if raw.deck_id != view.deck_id or raw.slide_id != view.active_slide_id:
         return
+
+    snapshot = resources.ingress.observations.latest_geometry_for(
+        view.deck_id,
+        view.active_slide_id,
+    )
+    geometry = snapshot.geometry if snapshot is not None else None
 
     if geometry is None:
         proposal = replace(
@@ -3989,10 +4006,9 @@ def _render_live_interaction(
 def _render_live_periodic(
     resources: MainLiveResources,
     view: MainUIViewModel,
-    geometry: SlideViewportGeometry | None,
 ) -> None:
     try:
-        _consume_live_proposal(resources, view, geometry)
+        _consume_live_proposal(resources, view)
     except Exception as exc:
         st.error(
             "Live proposal processing failed: "
@@ -4015,7 +4031,6 @@ def _render_manual_interaction(
     view: MainUIViewModel,
     *,
     live_resources: MainLiveResources | None = None,
-    geometry: SlideViewportGeometry | None = None,
 ) -> None:
     """Render the core learner workflow in one horizontal row."""
     if (
@@ -4026,7 +4041,6 @@ def _render_manual_interaction(
             _render_live_periodic(
                 live_resources,
                 view,
-                geometry,
             )
         else:
             _render_live_interaction(view)

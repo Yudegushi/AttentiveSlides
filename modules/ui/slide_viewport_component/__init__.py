@@ -27,7 +27,7 @@ def render_slide_viewport(
     key: str,
 ) -> dict[str, object] | None:
     if os.environ.get("ATTENTIVE_DISABLE_CANVAS_FOR_APPTEST") == "1":
-        return None
+        return {"event": "disabled"}
     if not slide.image_available or slide.image_path is None:
         return None
 
@@ -54,7 +54,7 @@ def render_slide_viewport(
         drawing_enabled=bool(drawing_enabled),
         show_aoi_overlay=bool(show_aoi_overlay),
         display_width_percent=bounded_width,
-        default=None,
+        default={"event": "mounted"},
         key=key,
     )
     return value if isinstance(value, dict) else None
