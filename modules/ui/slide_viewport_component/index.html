@@ -43,6 +43,10 @@
       let manualBBox = null;
       let dragStart = null;
       let scheduled = false;
+      let reportTimer = null;
+      let lastReportedSignature = null;
+      let lastCoordinateErrorSignature = null;
+      let lastRequestedRevision = null;
       let parentScrollHandler = null;
       let resizeHandler = null;
 
@@ -75,13 +79,19 @@
           if (!(viewportWidth > 0 && viewportHeight > 0)) {
             throw new Error("parent viewport dimensions are unavailable");
           }
+          lastCoordinateErrorSignature = null;
           return { frameRect, viewportWidth, viewportHeight };
         } catch (error) {
-          setValue({
+          const errorPayload = {
             deck_id: args ? args.deck_id : null,
             slide_id: args ? args.slide_id : null,
             coordinate_error: String(error && error.message ? error.message : error),
-          });
+          };
+          const errorSignature = JSON.stringify(errorPayload);
+          if (errorSignature === lastCoordinateErrorSignature) return null;
+          lastCoordinateErrorSignature = errorSignature;
+          lastReportedSignature = null;
+          setValue(errorPayload);
           return null;
         }
       }
@@ -95,10 +105,17 @@
         };
       }
 
-      function report(incrementRevision) {
+      function geometrySignature(payload) {
+        return JSON.stringify(payload, function (_key, value) {
+          if (typeof value !== "number") return value;
+          const precision = this === payload.manual_bbox ? 10000 : 10;
+          return Math.round(value * precision) / precision;
+        });
+      }
+
+      function report() {
         scheduled = false;
         if (!args || !image || !image.complete || !image.naturalWidth) return;
-        if (incrementRevision) revision += 1;
         setFrameHeight();
         const context = coordinateContext();
         if (!context) return;
@@ -116,10 +133,9 @@
             y2: slideRect.y1 + y2 * localSlideRect.height,
           };
         }
-        setValue({
+        const payload = {
           deck_id: String(args.deck_id),
           slide_id: Number(args.slide_id),
-          layout_revision: revision,
           viewport_width: Number(context.viewportWidth),
           viewport_height: Number(context.viewportHeight),
           device_pixel_ratio: Number(window.devicePixelRatio || 1),
@@ -128,14 +144,28 @@
           slide_pixel_height: localSlideRect.height,
           aoi_rects: aoiRects,
           manual_bbox: manualBBox,
-        });
+        };
+        const signature = geometrySignature(payload);
+        if (signature === lastReportedSignature) return;
+        revision += 1;
+        payload.layout_revision = revision;
+        lastReportedSignature = signature;
+        setValue(payload);
         setFrameHeight();
       }
 
-      function scheduleReport(incrementRevision = true) {
+      function scheduleReport() {
         if (scheduled) return;
         scheduled = true;
-        window.requestAnimationFrame(() => report(incrementRevision));
+        window.requestAnimationFrame(report);
+      }
+
+      function scheduleDebouncedReport() {
+        if (reportTimer !== null) window.clearTimeout(reportTimer);
+        reportTimer = window.setTimeout(() => {
+          reportTimer = null;
+          scheduleReport();
+        }, 180);
       }
 
       function normalizedPoint(event) {
@@ -146,17 +176,24 @@
         };
       }
 
-      function drawManual(current) {
-        if (!dragStart || !current) return;
-        const x1 = Math.min(dragStart.x, current.x);
-        const y1 = Math.min(dragStart.y, current.y);
-        const x2 = Math.max(dragStart.x, current.x);
-        const y2 = Math.max(dragStart.y, current.y);
+      function showManualBBox(bbox) {
+        if (!manual || !bbox) return;
+        const [x1, y1, x2, y2] = bbox;
         manual.style.display = "block";
         manual.style.left = `${x1 * 100}%`;
         manual.style.top = `${y1 * 100}%`;
         manual.style.width = `${(x2 - x1) * 100}%`;
         manual.style.height = `${(y2 - y1) * 100}%`;
+      }
+
+      function drawManual(current) {
+        if (!dragStart || !current) return;
+        showManualBBox([
+          Math.min(dragStart.x, current.x),
+          Math.min(dragStart.y, current.y),
+          Math.max(dragStart.x, current.x),
+          Math.max(dragStart.y, current.y),
+        ]);
       }
 
       function beginDraw(event) {
@@ -191,12 +228,16 @@
           drawManual(end);
         }
         dragStart = null;
-        scheduleReport(true);
+        scheduleReport();
       }
 
       function cleanupListeners() {
         if (observer) observer.disconnect();
         observer = null;
+        if (reportTimer !== null) {
+          window.clearTimeout(reportTimer);
+          reportTimer = null;
+        }
         if (resizeHandler) {
           window.removeEventListener("resize", resizeHandler);
           try { window.parent.removeEventListener("resize", resizeHandler); } catch (_) {}
@@ -208,9 +249,17 @@
 
       function render(nextArgs) {
         cleanupListeners();
+        const requestedRevision = Number(nextArgs.layout_revision) || 0;
+        const sameSlideIdentity = Boolean(args)
+          && String(args.deck_id) === String(nextArgs.deck_id)
+          && Number(args.slide_id) === Number(nextArgs.slide_id);
+        const preserveManualBBox = sameSlideIdentity
+          && Boolean(nextArgs.drawing_enabled)
+          && requestedRevision === lastRequestedRevision;
         args = nextArgs;
-        revision = Math.max(revision, Number(args.layout_revision) || 0);
-        manualBBox = null;
+        revision = Math.max(revision, requestedRevision);
+        if (!preserveManualBBox) manualBBox = null;
+        lastRequestedRevision = requestedRevision;
         root.innerHTML = "";
 
         slide = document.createElement("div");
@@ -241,27 +290,28 @@
         slide.appendChild(image);
         slide.appendChild(overlay);
         root.appendChild(slide);
+        if (manualBBox) showManualBBox(manualBBox);
 
         slide.addEventListener("pointerdown", beginDraw);
         slide.addEventListener("pointermove", moveDraw);
         slide.addEventListener("pointerup", endDraw);
         slide.addEventListener("pointercancel", endDraw);
-        image.addEventListener("load", () => scheduleReport(true), { once: true });
+        image.addEventListener("load", scheduleReport, { once: true });
         image.src = args.image_data_url;
 
-        resizeHandler = () => scheduleReport(true);
-        parentScrollHandler = () => scheduleReport(true);
+        resizeHandler = scheduleDebouncedReport;
+        parentScrollHandler = scheduleDebouncedReport;
         window.addEventListener("resize", resizeHandler);
         try {
           window.parent.addEventListener("resize", resizeHandler);
           window.parent.addEventListener("scroll", parentScrollHandler, true);
         } catch (_) {
-          scheduleReport(false);
+          scheduleReport();
         }
-        observer = new ResizeObserver(() => scheduleReport(true));
+        observer = new ResizeObserver(scheduleDebouncedReport);
         observer.observe(slide);
         setFrameHeight();
-        scheduleReport(false);
+        scheduleReport();
       }
 
       window.addEventListener("message", (event) => {

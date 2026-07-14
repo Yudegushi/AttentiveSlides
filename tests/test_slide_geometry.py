@@ -86,6 +86,12 @@ class SlideGeometryTest(unittest.TestCase):
 
 
 class SlideViewportComponentContractTest(unittest.TestCase):
+    @staticmethod
+    def component_source():
+        return Path(
+            "modules/ui/slide_viewport_component/index.html"
+        ).read_text(encoding="utf-8")
+
     def test_apptest_escape_hatch_returns_none(self):
         from modules.ui.slide_viewport_component import render_slide_viewport
 
@@ -108,9 +114,7 @@ class SlideViewportComponentContractTest(unittest.TestCase):
         self.assertIsNone(value)
 
     def test_static_component_uses_parent_viewport_protocol(self):
-        component = Path(
-            "modules/ui/slide_viewport_component/index.html"
-        ).read_text(encoding="utf-8")
+        component = self.component_source()
 
         self.assertIn("window.frameElement.getBoundingClientRect()", component)
         self.assertIn("window.parent.innerWidth", component)
@@ -118,6 +122,79 @@ class SlideViewportComponentContractTest(unittest.TestCase):
         self.assertIn("streamlit:setComponentValue", component)
         self.assertIn("streamlit:setFrameHeight", component)
         self.assertNotIn("npm", component)
+
+    def test_unchanged_geometry_is_deduplicated_before_revision_advances(self):
+        component = self.component_source()
+
+        self.assertIn("lastReportedSignature", component)
+        self.assertIn("geometrySignature", component)
+        comparison = component.index(
+            "signature === lastReportedSignature"
+        )
+        self.assertNotIn("revision += 1", component[:comparison])
+        revision = component.index("revision += 1", comparison)
+        send = component.index("setValue(payload)", revision)
+
+        self.assertLess(comparison, revision)
+        self.assertLess(revision, send)
+
+    def test_repeated_coordinate_errors_are_deduplicated(self):
+        component = self.component_source()
+
+        self.assertIn("lastCoordinateErrorSignature", component)
+        self.assertIn(
+            "errorSignature === lastCoordinateErrorSignature",
+            component,
+        )
+
+    def test_coordinate_error_invalidates_last_successful_signature(self):
+        component = self.component_source()
+        error_guard = component.index(
+            "errorSignature === lastCoordinateErrorSignature"
+        )
+        error_send = component.index("setValue(errorPayload)", error_guard)
+
+        self.assertIn(
+            "lastReportedSignature = null",
+            component[error_guard:error_send],
+        )
+
+    def test_manual_bbox_keeps_finer_signature_precision_than_layout_pixels(self):
+        component = self.component_source()
+
+        self.assertIn("this === payload.manual_bbox", component)
+        self.assertIn("? 10000 : 10", component)
+
+    def test_same_render_preserves_manual_bbox_until_explicit_reset(self):
+        component = self.component_source()
+
+        self.assertIn("lastRequestedRevision", component)
+        self.assertIn("sameSlideIdentity", component)
+        self.assertIn("preserveManualBBox", component)
+        self.assertIn("!preserveManualBBox", component)
+        self.assertIn("lastRequestedRevision = requestedRevision", component)
+        self.assertIn("showManualBBox(manualBBox)", component)
+
+    def test_layout_listeners_use_one_trailing_debounced_report(self):
+        component = self.component_source()
+
+        self.assertIn("let reportTimer = null", component)
+        self.assertIn("function scheduleDebouncedReport", component)
+        self.assertIn("window.clearTimeout(reportTimer)", component)
+        self.assertIn("window.setTimeout", component)
+        self.assertIn("}, 180)", component)
+        self.assertIn(
+            "resizeHandler = scheduleDebouncedReport",
+            component,
+        )
+        self.assertIn(
+            "parentScrollHandler = scheduleDebouncedReport",
+            component,
+        )
+        self.assertIn(
+            "ResizeObserver(scheduleDebouncedReport)",
+            component,
+        )
 
 
 if __name__ == "__main__":

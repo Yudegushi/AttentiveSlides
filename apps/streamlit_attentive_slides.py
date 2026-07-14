@@ -3921,11 +3921,14 @@ def _render_manual_interaction(
         st.session_state.get("main_interaction_mode") == "Live"
         and live_resources is not None
     ):
-        _render_live_periodic(
-            live_resources,
-            view,
-            geometry,
-        )
+        if st.session_state.get("main_live_master_enabled"):
+            _render_live_periodic(
+                live_resources,
+                view,
+                geometry,
+            )
+        else:
+            _render_live_interaction(view)
         return
 
     (

@@ -20,6 +20,7 @@ Pinned inputs:
 | 4 Live proposal bridge | complete | 20 bridge/context/sensing/controller/runner tests passed | `0300ed5` | Latest-only proposal transport; background workers do not read Streamlit state or call the tutor. |
 | 5 Official UI integration | complete | 110 affected UI/runtime tests passed; browser media status reached `speech_active` / `ready` | `6d315bb` | Official frontend is the launcher default; diagnostic UI remains selectable. One Main Tutor and one exact-once logger path. |
 | 6 Acceptance and push | complete | 446 tests, compileall, demo, both 8-case evaluations, diagnostic + official HTTP smoke passed; branch pushed to origin | `4585dac` | Real LLM was unavailable because no API key was configured. Real human voice/calibrated point-gaze remain explicit manual follow-up; no claim of point-gaze accuracy. |
+| 7 Rerun stability follow-up | complete | 98 focused tests + compileall + browser stability samples passed | this change | Geometry reports are deduplicated/debounced; inactive Live mode no longer creates a 0.5-second polling fragment. |
 
 ## Checkpoint 0 — merge baseline
 
@@ -93,3 +94,14 @@ Pinned inputs:
 - The real browser one-port gate used the official UI and verified same-origin capture plus live status. No real LLM call was attempted because neither supported API key was configured.
 - Automated lifecycle coverage verifies low/no gaze fallback, auto-confirm gating, exact-once retry behavior, deck-reload fresh video+audio, coordinator 503, and launcher ingress-loss handling.
 - Deliberately pending physical checks: a scripted real-human voice/STT turn and calibrated point gaze. Point gaze/calibration are outside this course-project integration scope; current production behavior is coarse 3×3 gaze.
+
+## Checkpoint 7 — Streamlit rerun stability follow-up
+
+- Root causes: the slide component emitted a new layout revision for unchanged geometry on every scroll/resize/observer callback, and the 0.5-second Live fragment ran even when camera and microphone were disabled.
+- Viewport reports now use a rounded geometry signature, advance revision only for a distinct payload, deduplicate repeated coordinate errors, and use one 180 ms trailing debounce for scroll, resize, and `ResizeObserver` events. Layout pixels use 0.1 px signature precision while normalized manual boxes keep four decimal places. Initial/image-load/manual-selection reports remain immediate.
+- Error recovery invalidates the last successful signature so an identical recovered geometry replaces the error value. A manual box persists across equivalent Streamlit renders, but clears on deck/slide identity changes, drawing-mode exit, or an explicit incoming canvas revision change.
+- The Main UI now creates the periodic Live fragment only while `main_live_master_enabled` is true; Live-media-off renders the panel once.
+- Final command: `/root/miniconda3/envs/attentive-app/bin/python -m compileall -q apps/streamlit_attentive_slides.py modules && /root/miniconda3/envs/attentive-app/bin/python -m unittest tests.test_slide_geometry tests.test_manual_targeting tests.test_live_single_port_launcher tests.test_streamlit_attentive_slides tests.test_main_ui_widget_inventory tests.test_compact_main_layout tests.test_slide_preview_canvas tests.test_live_ui_bridge tests.test_main_ui_state && git diff --check`.
+- Final result: 98 tests passed; compileall and `git diff --check` passed.
+- Browser gate through `http://127.0.0.1:18601`: Manual, Live-media-off, and Live-media-ready each showed 0 persistent `Running` samples across 25 samples; a 650 px page scroll also showed 0/25. Media reached `Live transport: armed · Runtime: monitoring · Media: ready`; turning media off returned transport to off.
+- Resize listener behavior is enforced by the component contract test; the browser control surface did not expose a viewport-resize operation during this follow-up.

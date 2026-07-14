@@ -384,6 +384,18 @@ class TestStreamlitAttentiveSlides(
         self.assertIn("controller.state.value", periodic)
         self.assertIn("Media:", periodic)
 
+    def test_live_fragment_runs_only_while_media_is_enabled(self) -> None:
+        interaction = self.function_source("_render_manual_interaction")
+
+        self.assertIn("main_live_master_enabled", interaction)
+        self.assertIn("_render_live_interaction", interaction)
+        master_check = interaction.index("main_live_master_enabled")
+        periodic = interaction.index("_render_live_periodic", master_check)
+        inactive = interaction.index("_render_live_interaction", periodic)
+
+        self.assertLess(master_check, periodic)
+        self.assertLess(periodic, inactive)
+
     def test_live_fragment_callbacks_do_not_force_app_reruns(self) -> None:
         manual = self.function_source("_enable_live_manual_region")
         overlay = self.function_source("_on_live_overlay_change")
