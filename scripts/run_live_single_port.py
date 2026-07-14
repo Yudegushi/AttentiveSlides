@@ -46,7 +46,8 @@ def build_streamlit_command(app: str, host: str, port: int) -> list[str]:
 
 
 def select_origin(path: str, streamlit_origin: str, ingress_origin: str) -> str:
-    return ingress_origin if path == "/capture" or path.startswith("/media/") else streamlit_origin
+    is_capture_path = path == "/capture" or path.startswith("/attentive-media/")
+    return ingress_origin if is_capture_path else streamlit_origin
 
 
 def validate_distinct_bindings(*bindings: tuple[str, int]) -> None:

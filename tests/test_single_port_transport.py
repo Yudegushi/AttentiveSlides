@@ -113,26 +113,23 @@ class SinglePortTransportTest(unittest.TestCase):
             app = build_fallback_app(self.ingress)
         paths = {route.resource.canonical for route in app.router.routes()}
 
-        self.assertTrue(
-            {
-                "/",
-                "/health",
-                "/capture",
-                "/media/start",
-                "/media/video",
-                "/media/audio",
-                "/media/heartbeat",
-                "/media/stop",
-                "/media/stats",
-            }.issubset(paths)
-        )
+        expected_capture_paths = {
+            "/attentive-media/start",
+            "/attentive-media/video",
+            "/attentive-media/audio",
+            "/attentive-media/heartbeat",
+            "/attentive-media/stop",
+            "/attentive-media/stats",
+        }
+        self.assertTrue(expected_capture_paths.issubset(paths))
+        self.assertNotIn("/media/video", paths)
 
     def test_page_captures_media_and_uses_relative_single_origin_requests(self):
         page = fallback_page_html()
 
         self.assertIn("getUserMedia({ video: true, audio: true })", page)
-        self.assertIn('fetch("/media/video"', page)
-        self.assertIn('fetch("/media/audio"', page)
+        self.assertIn('fetch("/attentive-media/video"', page)
+        self.assertIn('fetch("/attentive-media/audio"', page)
         self.assertNotIn("http://", page)
         self.assertNotIn("https://", page)
 

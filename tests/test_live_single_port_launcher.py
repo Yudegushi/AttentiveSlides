@@ -36,13 +36,17 @@ class LiveSinglePortLauncherSpikeTest(unittest.TestCase):
         self.assertEqual(command[:3], [sys.executable, "-m", "streamlit"])
         self.assertIn("tests/fixtures/live_media_path_spike.py", command)
 
-    def test_media_routes_use_ingress_and_everything_else_uses_streamlit(self):
+    def test_capture_routes_use_private_namespace_and_streamlit_media_stays_streamlit(self):
         from scripts.run_live_single_port import select_origin
 
         streamlit = "http://127.0.0.1:8502"
         ingress = "http://127.0.0.1:8503"
         self.assertEqual(select_origin("/capture", streamlit, ingress), ingress)
-        self.assertEqual(select_origin("/media/video", streamlit, ingress), ingress)
+        self.assertEqual(
+            select_origin("/attentive-media/video", streamlit, ingress),
+            ingress,
+        )
+        self.assertEqual(select_origin("/media/thumbnail.jpg", streamlit, ingress), streamlit)
         self.assertEqual(select_origin("/_stcore/stream", streamlit, ingress), streamlit)
         self.assertEqual(select_origin("/", streamlit, ingress), streamlit)
 
@@ -182,8 +186,15 @@ class LiveSinglePortProxyTest(unittest.IsolatedAsyncioTestCase):
     async def test_http_routes_headers_cookie_and_pdf_streaming(self):
         async with self.client.get(self.proxy_url("/capture")) as response:
             self.assertEqual(await response.text(), "ingress:/capture")
-        async with self.client.post(self.proxy_url("/media/heartbeat")) as response:
-            self.assertEqual(await response.text(), "ingress:/media/heartbeat")
+        async with self.client.post(
+            self.proxy_url("/attentive-media/heartbeat")
+        ) as response:
+            self.assertEqual(
+                await response.text(),
+                "ingress:/attentive-media/heartbeat",
+            )
+        async with self.client.get(self.proxy_url("/media/thumbnail.jpg")) as response:
+            self.assertEqual(await response.text(), "streamlit:/media/thumbnail.jpg")
         async with self.client.get(self.proxy_url("/static/app.js")) as response:
             self.assertEqual(await response.text(), "streamlit:/static/app.js")
         async with self.client.get(self.proxy_url("/")) as response:
@@ -201,6 +212,8 @@ class LiveSinglePortProxyTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.content_type, "application/pdf")
 
         self.assertIn(("ingress", "/capture"), self.seen)
+        self.assertIn(("ingress", "/attentive-media/heartbeat"), self.seen)
+        self.assertIn(("streamlit", "/media/thumbnail.jpg"), self.seen)
         self.assertIn(("streamlit", "/_stcore/upload_file/test"), self.seen)
 
     async def test_streamlit_binary_websocket_round_trips(self):

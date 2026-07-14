@@ -436,7 +436,7 @@ def fallback_page_html() -> str:
           return;
         }
         try {
-          await requireOk(await fetch("/media/video", {
+          await requireOk(await fetch("/attentive-media/video", {
             method: "POST",
             headers: headers({
               "Content-Type": "image/jpeg",
@@ -469,7 +469,7 @@ def fallback_page_html() -> str:
         event.inputBuffer.getChannelData(0), audioContext.sampleRate
       );
       audioInFlight = true;
-      fetch("/media/audio", {
+      fetch("/attentive-media/audio", {
         method: "POST",
         headers: headers({
           "Content-Type": "audio/L16",
@@ -492,7 +492,7 @@ def fallback_page_html() -> str:
   function startHeartbeat() {
     heartbeatTimer = window.setInterval(() => {
       if (!running) return;
-      fetch("/media/heartbeat", { method: "POST", headers: headers() })
+      fetch("/attentive-media/heartbeat", { method: "POST", headers: headers() })
         .then(requireOk)
         .catch(() => stopCapture(false));
     }, 1000);
@@ -505,7 +505,7 @@ def fallback_page_html() -> str:
       if (!stream.getVideoTracks().length || !stream.getAudioTracks().length) {
         throw new Error("Both camera and microphone tracks are required.");
       }
-      await requireOk(await fetch("/media/start", { method: "POST", headers: headers() }));
+      await requireOk(await fetch("/attentive-media/start", { method: "POST", headers: headers() }));
       preview.srcObject = stream;
       await preview.play();
       await (audioContext ? audioContext.resume() : Promise.resolve());
@@ -544,7 +544,7 @@ def fallback_page_html() -> str:
     startButton.disabled = false;
     stopButton.disabled = true;
     if (notifyServer && wasRunning) {
-      await fetch("/media/stop", { method: "POST", headers: headers() }).catch(() => {});
+      await fetch("/attentive-media/stop", { method: "POST", headers: headers() }).catch(() => {});
     }
     if (!status.textContent.startsWith("Capture did not start")) {
       setStatus("Off. Browser tracks and server queues have been stopped.");
@@ -553,7 +553,7 @@ def fallback_page_html() -> str:
 
   async function refreshStats() {
     try {
-      const payload = await (await fetch("/media/stats")).json();
+      const payload = await (await fetch("/attentive-media/stats")).json();
       payload.client_video_drops = clientVideoDrops;
       payload.client_audio_drops = clientAudioDrops;
       stats.textContent = JSON.stringify(payload, null, 2);
@@ -571,7 +571,7 @@ def fallback_page_html() -> str:
   window.addEventListener("pagehide", () => {
     running = false;
     if (stream) stream.getTracks().forEach((track) => track.stop());
-    navigator.sendBeacon("/media/stop?session=" + encodeURIComponent(sessionId), "");
+    navigator.sendBeacon("/attentive-media/stop?session=" + encodeURIComponent(sessionId), "");
   });
   window.setInterval(refreshStats, 1000);
   refreshStats();
@@ -668,12 +668,12 @@ def build_fallback_app(
     app.router.add_get("/", page)
     app.router.add_get("/health", health)
     app.router.add_get("/capture", capture)
-    app.router.add_post("/media/start", start)
-    app.router.add_post("/media/video", video)
-    app.router.add_post("/media/audio", audio)
-    app.router.add_post("/media/heartbeat", heartbeat)
-    app.router.add_post("/media/stop", stop)
-    app.router.add_get("/media/stats", stats)
+    app.router.add_post("/attentive-media/start", start)
+    app.router.add_post("/attentive-media/video", video)
+    app.router.add_post("/attentive-media/audio", audio)
+    app.router.add_post("/attentive-media/heartbeat", heartbeat)
+    app.router.add_post("/attentive-media/stop", stop)
+    app.router.add_get("/attentive-media/stats", stats)
     app.on_startup.append(_start_watchdog)
     app.on_cleanup.append(_stop_watchdog)
     return app
