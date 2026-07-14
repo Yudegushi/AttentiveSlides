@@ -1026,7 +1026,7 @@ git add docs/plans/UI-integration/handoffs/ui-live-runtime-integration-log.md \
 git commit -m "docs: record UI live runtime acceptance"
 ```
 
-- [ ] **Step 6: Verify branch ancestry and push**
+- [x] **Step 6: Verify branch ancestry and push**
 
 Run:
 

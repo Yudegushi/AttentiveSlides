@@ -19,7 +19,7 @@ Pinned inputs:
 | 3 Slide component | complete | 7 geometry/component tests + 17 geometry/manual/widget tests passed; one-port browser coordinate gate passed | `99c804b`, `d41a9a9` | Gate exposed a proxy bug: aiohttp decompressed component assets but retained gzip headers. `auto_decompress=False` preserves bytes. Temporary spike was deleted and not committed. |
 | 4 Live proposal bridge | complete | 20 bridge/context/sensing/controller/runner tests passed | `0300ed5` | Latest-only proposal transport; background workers do not read Streamlit state or call the tutor. |
 | 5 Official UI integration | complete | 110 affected UI/runtime tests passed; browser media status reached `speech_active` / `ready` | `6d315bb` | Official frontend is the launcher default; diagnostic UI remains selectable. One Main Tutor and one exact-once logger path. |
-| 6 Acceptance and push | ready to push | 446 tests, compileall, demo, both 8-case evaluations, diagnostic + official HTTP smoke passed | — | Real LLM was unavailable because no API key was configured. Real human voice/calibrated point-gaze remain explicit manual follow-up; no claim of point-gaze accuracy. |
+| 6 Acceptance and push | complete | 446 tests, compileall, demo, both 8-case evaluations, diagnostic + official HTTP smoke passed; branch pushed to origin | `4585dac` | Real LLM was unavailable because no API key was configured. Real human voice/calibrated point-gaze remain explicit manual follow-up; no claim of point-gaze accuracy. |
 
 ## Checkpoint 0 — merge baseline
 
