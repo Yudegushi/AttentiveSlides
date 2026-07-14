@@ -375,7 +375,12 @@ class UploadedDeckWorkspace:
             arguments.append("--enable-ocr")
         if force:
             arguments.append("--force")
-        self._run_native_worker(arguments, timeout_seconds=300)
+        try:
+            self._run_native_worker(arguments, timeout_seconds=300)
+        except Exception:
+            raise RuntimeError(
+                "Unable to prepare LLM AOIs for this slide."
+            ) from None
         self.aoi_manager = AOIManager(str(self.data_dir))
         return self.aoi_manager.get_llm_aoi_state(deck_id, slide_id)
 

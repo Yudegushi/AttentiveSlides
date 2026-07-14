@@ -16,7 +16,7 @@ This ledger accompanies `docs/plans/UI-integration/2026-07-14-llm-aoi-slide-medi
 |---|---|---|---|---|
 | 1. Media routing | Complete | 23/23 focused tests pass | `HEAD` (`fix: restore Streamlit media routing`) | Checkpoint 2 unblocked |
 | 2. Slide width | Complete | 54/54 focused tests pass | `HEAD` (`feat: add adjustable slide width`) | Checkpoint 3 unblocked |
-| 3. Current-page LLM AOI | Complete | 60/60 fake-only focused tests pass | `HEAD` (`feat: integrate optional current-slide LLM AOI`) | Checkpoint 4 unblocked |
+| 3. Current-page LLM AOI | Complete | 60/60 focused + 22/22 review-fix tests pass | `HEAD` (`fix: harden LLM AOI activation boundaries`) | Checkpoint 4 unblocked |
 | 4. Deck batch/final acceptance | Not started | — | — | Ready after Checkpoint 3 gate |
 
 ## Verification Budget
@@ -88,4 +88,10 @@ Next: Step 3.10
 Changed: `docs/plans/UI-integration/handoffs/llm-aoi-slide-media-log.md`
 Verified: security/state diff review and commit recorded in the Checkpoint 3 execution report
 Decision/blocker: no secret, header, endpoint, or full model response is persisted or shown; built-in decks and thumbnail/navigation paths never prepare LLM AOIs; no blocker
+Next: Step 4.1
+
+2026-07-14 20:35 CST — Checkpoint 3 / review hardening
+Changed: `modules/slide/aoi_manager.py`, `modules/system/real_slide_provider.py`, `modules/system/uploaded_deck_service.py`, `tests/test_llm_aoi.py`, `tests/test_real_slide_provider.py`, `tests/test_uploaded_deck_service.py`
+Verified: targeted expected red ran 22 tests with exactly 3 failures; targeted green ran 22 tests with 0 failures/errors; no browser, full suite, or network call
+Decision/blocker: provider activation now reuses complete manager eligibility; worker exceptions cross the workspace boundary only as a fixed non-sensitive message; model anchors are projected to flat stable fields without `children`; no blocker
 Next: Step 4.1

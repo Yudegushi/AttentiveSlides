@@ -304,8 +304,8 @@ class AOIManager:
         raw = self.llm_aoi_generator.generate(
             image_path,
             slide_text,
-            [aoi.to_dict() for aoi in rule_aois],
-            [aoi.to_dict() for aoi in text_aois],
+            [self._llm_prompt_aoi(aoi) for aoi in rule_aois],
+            [self._llm_prompt_aoi(aoi) for aoi in text_aois],
         )
         aois: list[AOI] = []
         for item in raw:
@@ -321,6 +321,16 @@ class AOIManager:
                 include_in_learning=bool(item.get("include_in_learning", True)),
             ))
         return aois
+
+    @staticmethod
+    def _llm_prompt_aoi(aoi: AOI) -> dict[str, Any]:
+        return {
+            "aoi_id": aoi.aoi_id,
+            "bbox": [float(value) for value in aoi.bbox],
+            "type": aoi.type,
+            "text": aoi.text,
+            "source": aoi.source,
+        }
 
     def reconcile_llm_aois(
         self,

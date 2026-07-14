@@ -90,6 +90,17 @@ class RealSlideProvider:
         cache_key = (slide_id, use_llm_aoi)
         if cache_key not in self._frames:
             payload = self._aoi_manager.process_slide(self.deck_id, slide_id)
+            selected_payload = payload
+            allow_llm_guided = False
+            if use_llm_aoi:
+                raw_aois, profile = self._aoi_manager.get_effective_aois(
+                    self.deck_id,
+                    slide_id,
+                    use_llm_aoi=True,
+                )
+                selected_payload = dict(payload)
+                selected_payload["aois"] = raw_aois
+                allow_llm_guided = profile != "deterministic"
             neighbors = []
             if slide_id > 1:
                 neighbors.append(self._slide_text(slide_id - 1))
@@ -98,7 +109,10 @@ class RealSlideProvider:
             self._frames[cache_key] = SlideFrame(
                 deck_id=self.deck_id,
                 slide_id=slide_id,
-                aois=self._canonical_aois(payload, use_llm_aoi=use_llm_aoi),
+                aois=self._canonical_aois(
+                    selected_payload,
+                    allow_llm_guided=allow_llm_guided,
+                ),
                 slide_text=str(payload.get("ocr_text", "")),
                 neighbor_slide_text="\n".join(text for text in neighbors if text),
                 slide_image_path=str(payload["slide_image_path"]),
@@ -108,29 +122,20 @@ class RealSlideProvider:
     def _slide_text(self, slide_id: int) -> str:
         return str(self._aoi_manager.process_slide(self.deck_id, slide_id).get("ocr_text", ""))
 
-    def _canonical_aois(self, payload: dict[str, Any], *, use_llm_aoi: bool = False) -> list[AOI]:
-        deterministic_aois = list(payload.get("aois", []))
-        raw_aois = list(payload.get("llm_aois", [])) if use_llm_aoi else deterministic_aois
-        if use_llm_aoi:
-            chosen = [
-                raw
-                for raw in raw_aois
-                if self._is_eligible(raw) and str(raw.get("source", "")) == "llm_guided"
-            ]
-            if not chosen:
-                raw_aois = deterministic_aois
-            else:
-                canonical = [self._to_canonical(raw) for raw in chosen]
-                canonical.sort(key=self._aoi_priority)
-                whole = next((raw for raw in raw_aois if isinstance(raw, dict) and raw.get("aoi_id") == "whole_slide" and self._valid_bbox(raw.get("bbox"))), None)
-                if whole is None:
-                    whole = {"aoi_id": "whole_slide", "bbox": [0, 0, 1, 1], "type": "whole_slide", "text": str(payload.get("ocr_text", ""))}
-                canonical.append(self._to_canonical(whole))
-                return canonical
+    def _canonical_aois(
+        self,
+        payload: dict[str, Any],
+        *,
+        allow_llm_guided: bool = False,
+    ) -> list[AOI]:
+        raw_aois = list(payload.get("aois", []))
+        automatic_sources = set(self._AUTO_SOURCES)
+        if allow_llm_guided:
+            automatic_sources.add("llm_guided")
         automatic = [
             raw
             for raw in raw_aois
-            if self._is_eligible(raw) and str(raw.get("source", "")) in self._AUTO_SOURCES
+            if self._is_eligible(raw) and str(raw.get("source", "")) in automatic_sources
         ]
         chosen = automatic or [
             raw

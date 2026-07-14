@@ -26,6 +26,8 @@ class FakeLLMGenerator:
         self.calls = 0
         self.config = SimpleNamespace(model="fake-vlm")
         self._profile = profile
+        self.last_rule_aois = None
+        self.last_text_aois = None
 
     def is_configured(self):
         return True
@@ -35,6 +37,8 @@ class FakeLLMGenerator:
 
     def generate(self, image_path, slide_text, rule_aois, text_aois):
         self.calls += 1
+        self.last_rule_aois = list(rule_aois)
+        self.last_text_aois = list(text_aois)
         if self.error is not None:
             raise self.error
         return list(self.result)
@@ -134,6 +138,17 @@ class LLMAOIManagerTest(unittest.TestCase):
         self.assertEqual(json.dumps(first["aois"], ensure_ascii=False), before)
         manager.process_llm_aoi("deck", 1, allow_ocr=False, force=True)
         self.assertEqual(generator.calls, 2)
+
+    def test_generator_receives_only_flat_stable_anchor_fields(self):
+        generator = FakeLLMGenerator(result=[llm_item("alpha beta gamma delta epsilon zeta eta theta")])
+        manager = self.seeded_manager(generator)
+        manager.process_llm_aoi("deck", 1, allow_ocr=False)
+        self.assertIsNotNone(generator.last_text_aois)
+        self.assertEqual(
+            set(generator.last_text_aois[0]),
+            {"aoi_id", "bbox", "type", "text", "source"},
+        )
+        self.assertNotIn("children", generator.last_text_aois[0])
 
     def test_timeout_and_malformed_output_fall_back_without_touching_aois(self):
         for generator in (

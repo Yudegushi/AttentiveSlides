@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import fitz
@@ -83,11 +84,33 @@ class RealSlideProviderTest(unittest.TestCase):
                     {"aoi_id": "whole_slide", "bbox": [0, 0, 1, 1], "type": "whole_slide", "source": "rule"},
                 ],
             }
+            class ConfiguredGenerator:
+                config = SimpleNamespace(model="fake-vlm")
+
+                @staticmethod
+                def is_configured():
+                    return True
+
+                @staticmethod
+                def profile(anchor_digest):
+                    return f"profile:{anchor_digest}"
+
+            provider._aoi_manager.llm_aoi_generator = ConfiguredGenerator()
+            provider._aoi_manager.manifest[f"{provider.deck_id}:1"] = payload
             with patch.object(provider._aoi_manager, "process_slide", return_value=payload):
                 deterministic = provider.get_slide_frame(1)
-                selected = provider.get_slide_frame(1, use_llm_aoi=True)
+                ineligible = provider.get_slide_frame(1, use_llm_aoi=True)
             self.assertIn("det", [aoi.aoi_id for aoi in deterministic.aois])
             self.assertNotIn("llm_aoi_1", [aoi.aoi_id for aoi in deterministic.aois])
+            self.assertIn("det", [aoi.aoi_id for aoi in ineligible.aois])
+            self.assertNotIn("llm_aoi_1", [aoi.aoi_id for aoi in ineligible.aois])
+
+            digest = provider._aoi_manager._anchor_digest(payload)
+            payload["llm_aoi_status"] = "used"
+            payload["llm_aoi_profile"] = ConfiguredGenerator.profile(digest)
+            provider._frames.clear()
+            with patch.object(provider._aoi_manager, "process_slide", return_value=payload):
+                selected = provider.get_slide_frame(1, use_llm_aoi=True)
             self.assertIn("llm_aoi_1", [aoi.aoi_id for aoi in selected.aois])
             self.assertIsNot(deterministic, selected)
 

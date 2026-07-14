@@ -209,6 +209,22 @@ class TestUploadedDeckService(
                 browser.get_slide(1)
             prepare.assert_not_called()
 
+    def test_prepare_llm_aoi_hides_native_worker_exception_details(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = UploadedDeckWorkspace(directory)
+            with patch.object(
+                workspace,
+                "_run_native_worker",
+                side_effect=RuntimeError(
+                    "Worker stderr: endpoint=SECRET_ENDPOINT_TOKEN response=private"
+                ),
+            ):
+                with self.assertRaises(RuntimeError) as raised:
+                    workspace.prepare_llm_aoi("deck", 1)
+            message = str(raised.exception)
+            self.assertEqual(message, "Unable to prepare LLM AOIs for this slide.")
+            self.assertNotIn("SECRET_ENDPOINT_TOKEN", message)
+
 
 if __name__ == "__main__":
     unittest.main()
