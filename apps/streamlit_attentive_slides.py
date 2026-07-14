@@ -37,6 +37,7 @@ from modules.audio.streaming_vad import default_vad_backend
 from modules.audio.transcriber import TranscriptionConfig
 from modules.audio.voice_turn_detector import VoiceTurnDetector
 from modules.logging.interaction_logger import InteractionLogger
+from modules.slide.llm_aoi import sanitized_llm_error
 from modules.media import BrowserMediaSource
 from modules.media.live_ingress_service import LiveIngressService
 from modules.media.single_port_transport import FallbackMediaIngress
@@ -277,6 +278,8 @@ def main() -> None:
         workspace
     )
 
+    _render_llm_aoi_opt_in()
+
     browser = _resolve_active_browser(
         workspace,
         built_in_browser,
@@ -312,6 +315,8 @@ def main() -> None:
         st.exception(exc)
         st.stop()
 
+    _sync_active_aoi_signature(view)
+
     live_resources = build_main_live_resources(
         start_ingress=(
             os.environ.get(
@@ -340,7 +345,8 @@ def main() -> None:
         browser
     )
     geometry = _render_slide_workspace(
-        view
+        view,
+        workspace=workspace,
     )
     _render_navigation(
         browser,
@@ -381,6 +387,10 @@ def _initialize_global_state() -> None:
         "main_upload_message": None,
         "main_upload_error": None,
         "main_cloud_text_allowed": True,
+        "main_llm_aoi_enabled": False,
+        "main_active_aoi_signature": None,
+        "main_llm_aoi_message": None,
+        "main_llm_aoi_error": None,
         "main_show_aoi_overlay": True,
         "main_canvas_revision": 0,
         "main_slide_width_percent": 100,
@@ -473,6 +483,7 @@ def _normalize_widget_state() -> None:
 
     boolean_defaults = {
         "main_cloud_text_allowed": True,
+        "main_llm_aoi_enabled": False,
         "main_history_enabled": True,
         "main_show_aoi_overlay": True,
         "main_manual_region_active": False,
@@ -893,6 +904,30 @@ def _render_upload_controls(
         )
 
 
+def _render_llm_aoi_opt_in() -> None:
+    if not st.session_state.get("main_uploaded_deck_id"):
+        return
+    st.sidebar.checkbox(
+        "Enable LLM AOI (send slide images to the configured cloud model)",
+        key="main_llm_aoi_enabled",
+        on_change=_on_llm_aoi_mode_change,
+    )
+
+
+def _on_llm_aoi_mode_change() -> None:
+    _reset_turn_state()
+    st.session_state["main_active_aoi_signature"] = None
+    st.session_state["main_llm_aoi_message"] = None
+    st.session_state["main_llm_aoi_error"] = None
+
+
+def _sync_active_aoi_signature(view: MainUIViewModel) -> None:
+    signature = f"{view.deck_id}:{view.active_slide_id}:{view.active_slide.aoi_profile}"
+    if st.session_state.get("main_active_aoi_signature") != signature:
+        _reset_turn_state()
+        st.session_state["main_active_aoi_signature"] = signature
+
+
 def _resolve_active_browser(
     workspace: UploadedDeckWorkspace,
     built_in_browser: ManifestDeckBrowser,
@@ -906,7 +941,10 @@ def _resolve_active_browser(
 
     try:
         return workspace.open_browser(
-            deck_id
+            deck_id,
+            use_llm_aoi=bool(
+                st.session_state.get("main_llm_aoi_enabled")
+            ),
         )
     except Exception as exc:
         st.session_state[
@@ -1835,8 +1873,76 @@ def _on_target_scope_change() -> None:
     _clear_manual_region()
 
 
+def _render_current_slide_llm_aoi_action(
+    view: MainUIViewModel,
+    workspace: UploadedDeckWorkspace,
+) -> None:
+    if (
+        not st.session_state.get("main_uploaded_deck_id")
+        or not st.session_state.get("main_llm_aoi_enabled")
+    ):
+        return
+    try:
+        state = workspace.get_llm_aoi_state(view.deck_id, view.active_slide_id)
+    except Exception as exc:
+        message = sanitized_llm_error(exc)
+        st.session_state["main_llm_aoi_error"] = message
+        st.error(message)
+        return
+
+    configured = bool(state.get("configured"))
+    eligible = bool(state.get("eligible"))
+    retry = state.get("status") == "fallback_used"
+    label = (
+        "LLM AOIs loaded"
+        if eligible
+        else "Retry current slide with LLM"
+        if retry
+        else "Process current slide with LLM"
+    )
+    clicked = st.button(
+        label,
+        key="main_process_current_llm_aoi",
+        disabled=eligible or not configured,
+    )
+    if not configured:
+        st.caption("LLM AOI is not configured")
+    if st.session_state.get("main_llm_aoi_message"):
+        st.success(st.session_state["main_llm_aoi_message"])
+    if st.session_state.get("main_llm_aoi_error"):
+        st.error(st.session_state["main_llm_aoi_error"])
+    if not clicked:
+        return
+
+    st.session_state["main_llm_aoi_message"] = None
+    st.session_state["main_llm_aoi_error"] = None
+    try:
+        result = workspace.prepare_llm_aoi(
+            view.deck_id,
+            view.active_slide_id,
+            force=retry,
+        )
+    except Exception as exc:
+        st.session_state["main_llm_aoi_error"] = sanitized_llm_error(exc)
+        st.error(st.session_state["main_llm_aoi_error"])
+        return
+    if result.get("eligible"):
+        st.session_state["main_llm_aoi_message"] = "LLM AOIs loaded"
+        _reset_turn_state()
+        st.session_state["main_active_aoi_signature"] = (
+            f"{view.deck_id}:{view.active_slide_id}:{result.get('profile')}"
+        )
+        st.rerun()
+    else:
+        message = str(result.get("error") or "LLM AOI generation fell back to deterministic AOIs")
+        st.session_state["main_llm_aoi_error"] = message
+        st.error(message)
+
+
 def _render_slide_workspace(
     view: MainUIViewModel,
+    *,
+    workspace: UploadedDeckWorkspace,
 ) -> SlideViewportGeometry | None:
     drawing_enabled = (
         st.session_state["main_target_scope"]
@@ -1844,6 +1950,8 @@ def _render_slide_workspace(
     )
     if not drawing_enabled:
         _set_whole_slide_target(view)
+
+    _render_current_slide_llm_aoi_action(view, workspace)
 
     st.slider(
         "Slide size",

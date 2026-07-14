@@ -134,6 +134,35 @@ def prepare_slide(
     }
 
 
+def prepare_llm_aoi(
+    *,
+    data_dir: Path,
+    deck_id: str,
+    slide_id: int,
+    dpi: int,
+    enable_ocr: bool,
+    force: bool,
+) -> dict[str, Any]:
+    from modules.slide.aoi_manager import AOIManager
+
+    slide_data = AOIManager(str(data_dir)).process_llm_aoi(
+        deck_id,
+        slide_id,
+        dpi=dpi,
+        allow_ocr=enable_ocr,
+        force=force,
+    )
+    return {
+        "deck_id": deck_id,
+        "slide_id": slide_id,
+        "status": slide_data.get("llm_aoi_status", "fallback_used"),
+        "model": slide_data.get("llm_aoi_model"),
+        "profile": slide_data.get("llm_aoi_profile"),
+        "aoi_count": len(slide_data.get("llm_aois", [])),
+        "error": slide_data.get("llm_aoi_error"),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
 
@@ -187,6 +216,14 @@ def main() -> None:
         action="store_true",
     )
 
+    llm_parser = subparsers.add_parser("prepare-llm-aoi")
+    llm_parser.add_argument("--data-dir", required=True)
+    llm_parser.add_argument("--deck-id", required=True)
+    llm_parser.add_argument("--slide-id", required=True, type=int)
+    llm_parser.add_argument("--dpi", default=220, type=int)
+    llm_parser.add_argument("--enable-ocr", action="store_true")
+    llm_parser.add_argument("--force", action="store_true")
+
     arguments = parser.parse_args()
 
     output_path = Path(
@@ -212,6 +249,16 @@ def main() -> None:
                 enable_ocr=(
                     arguments.enable_ocr
                 ),
+            )
+
+        elif arguments.action == "prepare-llm-aoi":
+            result = prepare_llm_aoi(
+                data_dir=Path(arguments.data_dir).resolve(),
+                deck_id=arguments.deck_id,
+                slide_id=arguments.slide_id,
+                dpi=arguments.dpi,
+                enable_ocr=arguments.enable_ocr,
+                force=arguments.force,
             )
 
         else:

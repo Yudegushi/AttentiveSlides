@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import fitz
 
@@ -146,6 +147,67 @@ class TestUploadedDeckService(
                     filename="notes.txt",
                     content=b"not a pdf",
                 )
+
+    def test_prepare_llm_aoi_uses_one_worker_and_reloads_manager(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = UploadedDeckWorkspace(directory)
+            deck_id = "deck"
+            workspace.slide_parser.metadata[deck_id] = {
+                "deck_id": deck_id,
+                "original_name": "deck.pdf",
+                "pdf_path": str(Path(directory) / "uploaded_decks" / "deck.pdf"),
+                "page_count": 1,
+            }
+            commands = []
+            old_manager = workspace.aoi_manager
+
+            def fake_worker(arguments, *, timeout_seconds):
+                commands.append((list(arguments), timeout_seconds))
+                old_manager.manifest["deck:1"] = {
+                    "slide_id": 1,
+                    "slide_image_path": "deck_slide_001_220dpi.png",
+                    "ocr_text": "anchors",
+                    "aois": [{"aoi_id": "whole_slide", "bbox": [0, 0, 1, 1], "type": "whole_slide", "source": "rule"}],
+                    "llm_aois": [],
+                    "llm_aoi_status": "fallback_used",
+                    "llm_aoi_model": "fake-vlm",
+                    "llm_aoi_profile": None,
+                    "llm_aoi_error": "TimeoutError: timeout",
+                }
+                old_manager._save_manifest()
+                return {"status": "fallback_used"}
+
+            with patch.object(workspace, "_run_native_worker", side_effect=fake_worker):
+                state = workspace.prepare_llm_aoi(deck_id, 1, force=True)
+
+            self.assertEqual(commands[0][0][0], "prepare-llm-aoi")
+            self.assertIn("--force", commands[0][0])
+            self.assertEqual(commands[0][1], 300)
+            self.assertIsNot(workspace.aoi_manager, old_manager)
+            self.assertEqual(state["status"], "fallback_used")
+
+    def test_llm_browser_selection_never_prepares_during_slide_lookup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = UploadedDeckWorkspace(directory)
+            deck_id = "deck"
+            workspace.slide_parser.metadata[deck_id] = {
+                "deck_id": deck_id,
+                "original_name": "deck.pdf",
+                "pdf_path": str(Path(directory) / "uploaded_decks" / "deck.pdf"),
+                "page_count": 1,
+            }
+            workspace.aoi_manager.manifest["deck:1"] = {
+                "slide_id": 1,
+                "slide_image_path": "",
+                "ocr_text": "anchors",
+                "aois": [{"aoi_id": "whole_slide", "bbox": [0, 0, 1, 1], "type": "whole_slide", "source": "rule"}],
+            }
+            browser = workspace.open_browser(deck_id, use_llm_aoi=True)
+            with patch.object(workspace, "prepare_llm_aoi") as prepare, \
+                 patch.object(workspace, "_get_or_process_slide", return_value=workspace.aoi_manager.manifest["deck:1"]):
+                browser.get_slide(1)
+                browser.get_slide(1)
+            prepare.assert_not_called()
 
 
 if __name__ == "__main__":

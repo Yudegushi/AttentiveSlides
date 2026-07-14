@@ -21,8 +21,12 @@ class RealSlideProvider:
         "text": 1,
         "mixed": 2,
         "figure": 3,
-        "caption": 4,
-        "axis_label": 5,
+        "diagram": 4,
+        "table": 5,
+        "formula": 6,
+        "code": 7,
+        "caption": 8,
+        "axis_label": 9,
     }
 
     def __init__(self, *, data_dir: str | Path = "data/live_decks") -> None:
@@ -30,7 +34,7 @@ class RealSlideProvider:
         self._parser = SlideParser(str(self.data_dir))
         self._aoi_manager = AOIManager(str(self.data_dir))
         self._deck_id: str | None = None
-        self._frames: dict[int, SlideFrame] = {}
+        self._frames: dict[tuple[int, bool], SlideFrame] = {}
 
     @property
     def deck_id(self) -> str:
@@ -76,35 +80,53 @@ class RealSlideProvider:
         self._frames.clear()
         return self._deck_id
 
-    def get_slide_frame(self, slide_id: int) -> SlideFrame:
+    def get_slide_frame(self, slide_id: int, *, use_llm_aoi: bool = False) -> SlideFrame:
         """Return the rendered slide, neighbor text, and deterministic canonical AOIs."""
 
         if not isinstance(slide_id, int):
             raise TypeError("slide_id must be an integer")
         if slide_id < 1 or slide_id > self.page_count:
             raise ValueError(f"slide_id out of range: {slide_id}; page_count={self.page_count}")
-        if slide_id not in self._frames:
+        cache_key = (slide_id, use_llm_aoi)
+        if cache_key not in self._frames:
             payload = self._aoi_manager.process_slide(self.deck_id, slide_id)
             neighbors = []
             if slide_id > 1:
                 neighbors.append(self._slide_text(slide_id - 1))
             if slide_id < self.page_count:
                 neighbors.append(self._slide_text(slide_id + 1))
-            self._frames[slide_id] = SlideFrame(
+            self._frames[cache_key] = SlideFrame(
                 deck_id=self.deck_id,
                 slide_id=slide_id,
-                aois=self._canonical_aois(payload),
+                aois=self._canonical_aois(payload, use_llm_aoi=use_llm_aoi),
                 slide_text=str(payload.get("ocr_text", "")),
                 neighbor_slide_text="\n".join(text for text in neighbors if text),
                 slide_image_path=str(payload["slide_image_path"]),
             )
-        return self._frames[slide_id]
+        return self._frames[cache_key]
 
     def _slide_text(self, slide_id: int) -> str:
         return str(self._aoi_manager.process_slide(self.deck_id, slide_id).get("ocr_text", ""))
 
-    def _canonical_aois(self, payload: dict[str, Any]) -> list[AOI]:
-        raw_aois = list(payload.get("aois", []))
+    def _canonical_aois(self, payload: dict[str, Any], *, use_llm_aoi: bool = False) -> list[AOI]:
+        deterministic_aois = list(payload.get("aois", []))
+        raw_aois = list(payload.get("llm_aois", [])) if use_llm_aoi else deterministic_aois
+        if use_llm_aoi:
+            chosen = [
+                raw
+                for raw in raw_aois
+                if self._is_eligible(raw) and str(raw.get("source", "")) == "llm_guided"
+            ]
+            if not chosen:
+                raw_aois = deterministic_aois
+            else:
+                canonical = [self._to_canonical(raw) for raw in chosen]
+                canonical.sort(key=self._aoi_priority)
+                whole = next((raw for raw in raw_aois if isinstance(raw, dict) and raw.get("aoi_id") == "whole_slide" and self._valid_bbox(raw.get("bbox"))), None)
+                if whole is None:
+                    whole = {"aoi_id": "whole_slide", "bbox": [0, 0, 1, 1], "type": "whole_slide", "text": str(payload.get("ocr_text", ""))}
+                canonical.append(self._to_canonical(whole))
+                return canonical
         automatic = [
             raw
             for raw in raw_aois

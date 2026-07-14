@@ -16,14 +16,14 @@ This ledger accompanies `docs/plans/UI-integration/2026-07-14-llm-aoi-slide-medi
 |---|---|---|---|---|
 | 1. Media routing | Complete | 23/23 focused tests pass | `HEAD` (`fix: restore Streamlit media routing`) | Checkpoint 2 unblocked |
 | 2. Slide width | Complete | 54/54 focused tests pass | `HEAD` (`feat: add adjustable slide width`) | Checkpoint 3 unblocked |
-| 3. Current-page LLM AOI | Not started | — | — | Blocked on Checkpoint 2 gate |
-| 4. Deck batch/final acceptance | Not started | — | — | Blocked on Checkpoint 3 gate |
+| 3. Current-page LLM AOI | Complete | 60/60 fake-only focused tests pass | `HEAD` (`feat: integrate optional current-slide LLM AOI`) | Checkpoint 4 unblocked |
+| 4. Deck batch/final acceptance | Not started | — | — | Ready after Checkpoint 3 gate |
 
 ## Verification Budget
 
 - [x] Checkpoint 1 focused group run once after implementation
 - [x] Checkpoint 2 focused group run once after implementation
-- [ ] Checkpoint 3 focused group run once after implementation
+- [x] Checkpoint 3 focused group run once after implementation
 - [ ] Checkpoint 4 focused group run once after implementation
 - [ ] Final full suite run once after all checkpoints
 - [ ] Final browser smoke session run once
@@ -31,7 +31,7 @@ This ledger accompanies `docs/plans/UI-integration/2026-07-14-llm-aoi-slide-medi
 
 ## Current Resume Point
 
-- Next unchecked step: `3.1`
+- Next unchecked step: `4.1`
 - Last known blocker: none
 - Uncommitted in-scope files: none at plan creation
 - Out-of-scope/user-owned changes observed: none recorded
@@ -77,3 +77,15 @@ Changed: `docs/plans/UI-integration/handoffs/llm-aoi-slide-media-log.md`
 Verified: `git diff --check`; clean; reviewed only the nine in-scope diffs; `report()` and drawing normalization still use `image.getBoundingClientRect()`, `display_width_percent` is absent from manual bbox reset identity, and turn reset does not own the width preference
 Decision/blocker: checkpoint commit is identified symbolically as `HEAD` in this self-contained commit; record its resolved hash in the execution report; no blocker
 Next: Step 3.1
+
+2026-07-14 20:15 CST — Checkpoint 3 / Steps 3.1–3.9
+Changed: `modules/slide/llm_aoi.py`, `modules/slide/slide_parser.py`, `modules/slide/ocr.py`, `modules/slide/aoi_manager.py`, `scripts/pdf_native_worker.py`, `modules/system/uploaded_deck_service.py`, `modules/system/real_slide_provider.py`, `modules/system/main_ui_state.py`, `apps/streamlit_attentive_slides.py`, and the seven focused test modules
+Verified: focused group expected red ran 52 tests with 2 failures and 7 errors for missing Checkpoint 3 contracts; focused green ran 60 tests with 0 failures/errors; all generator/worker boundaries were fake-only and no network call was made
+Decision/blocker: LLM variants remain in separate `llm_*` fields; deterministic `aois`, RLock/atomic replacement, `children`, `allow_ocr=False`, DPI-specific images, and rule/auto fallback remain intact; no blocker
+Next: Step 3.10
+
+2026-07-14 20:16 CST — Checkpoint 3 / Step 3.10
+Changed: `docs/plans/UI-integration/handoffs/llm-aoi-slide-media-log.md`
+Verified: security/state diff review and commit recorded in the Checkpoint 3 execution report
+Decision/blocker: no secret, header, endpoint, or full model response is persisted or shown; built-in decks and thumbnail/navigation paths never prepare LLM AOIs; no blocker
+Next: Step 4.1

@@ -398,6 +398,29 @@ class TestStreamlitAttentiveSlides(
         )
         self.assertEqual(render_statement, slider_statement + 1)
 
+        process_statement = next(
+            index
+            for index, names in enumerate(statement_calls)
+            if "_render_current_slide_llm_aoi_action" in names
+        )
+        self.assertLess(process_statement, slider_statement)
+
+    def test_llm_opt_in_precedes_browser_resolution_and_live_binding(self) -> None:
+        statement_calls = [
+            {
+                dotted_name(node.func).split(".")[-1]
+                for node in ast.walk(statement)
+                if isinstance(node, ast.Call)
+            }
+            for statement in self.functions["main"].body
+        ]
+        checkbox = next(i for i, names in enumerate(statement_calls) if "_render_llm_aoi_opt_in" in names)
+        resolve = next(i for i, names in enumerate(statement_calls) if "_resolve_active_browser" in names)
+        signature = next(i for i, names in enumerate(statement_calls) if "_sync_active_aoi_signature" in names)
+        bind = next(i for i, names in enumerate(statement_calls) if "_bind_main_live_resources" in names)
+        self.assertLess(checkbox, resolve)
+        self.assertLess(signature, bind)
+
     def test_production_live_graph_has_no_second_tutor_path(self) -> None:
         source = self.function_source("build_main_live_resources")
 

@@ -77,6 +77,15 @@ def make_slide_payload(
 
 
 class TestMainUIState(unittest.TestCase):
+    def test_main_ui_slide_serializes_default_and_selected_aoi_profile(self) -> None:
+        from modules.system.main_ui_state import MainUISlide
+
+        default = MainUISlide(1, "text", "", ())
+        selected = MainUISlide(1, "text", "", (), aoi_profile="profile-a")
+        self.assertEqual(default.aoi_profile, "deterministic")
+        self.assertEqual(default.to_dict()["aoi_profile"], "deterministic")
+        self.assertEqual(selected.to_dict()["aoi_profile"], "profile-a")
+
     def test_slide_width_is_clamped_and_snapped(self) -> None:
         from modules.system.main_ui_state import (
             normalize_main_slide_width_percent,

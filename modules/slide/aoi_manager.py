@@ -3,6 +3,7 @@ AOI generation, persistence, retrieval, and manual correction.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass
 from json import JSONDecodeError
@@ -12,6 +13,7 @@ from typing import Any
 
 from .ocr import OCREngine, TextBox, clamp
 from .slide_parser import SlideParser
+from .llm_aoi import LLMAOIGenerator, sanitized_llm_error
 
 
 @dataclass
@@ -52,12 +54,18 @@ class SlideAOIData:
 
 
 class AOIManager:
-    def __init__(self, data_dir: str = "data") -> None:
+    def __init__(
+        self,
+        data_dir: str = "data",
+        *,
+        llm_aoi_generator: LLMAOIGenerator | None = None,
+    ) -> None:
         self.data_dir = Path(data_dir)
         self.manifest_file = self.data_dir / "aoi_manifest.json"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._lock = RLock()
         self.manifest: dict[str, dict[str, Any]] = self._load_manifest()
+        self.llm_aoi_generator = llm_aoi_generator or LLMAOIGenerator()
 
     def _load_manifest(self) -> dict[str, dict[str, Any]]:
         if not self.manifest_file.exists():
@@ -94,6 +102,15 @@ class AOIManager:
         image_path = parser.render_slide(deck_id, slide_id, dpi=dpi)
         pdf_text_boxes = parser.extract_pdf_text_boxes(deck_id, slide_id)
         pdf_text = "\n".join(box.text for box in pdf_text_boxes).strip()
+        image_text_boxes: list[TextBox] = []
+        if allow_ocr:
+            try:
+                image_text_boxes = self.extract_image_text_boxes(
+                    image_path,
+                    parser.extract_pdf_image_boxes(deck_id, slide_id),
+                )
+            except Exception:
+                image_text_boxes = []
 
         if len(pdf_text) >= 30:
             text_boxes = pdf_text_boxes
@@ -101,6 +118,7 @@ class AOIManager:
             auto_aois = self.build_pdf_semantic_aois(
                 text_boxes
             )
+            auto_aois.extend(self.build_image_region_aois(image_text_boxes))
             auto_aoi_method = "pdf_text_semantic"
 
         elif allow_ocr:
@@ -111,6 +129,7 @@ class AOIManager:
             auto_aois = self.build_text_block_aois(
                 text_boxes
             )
+            auto_aois.extend(self.build_image_region_aois(image_text_boxes))
             auto_aoi_method = "ocr_text_block"
 
         else:
@@ -146,6 +165,46 @@ class AOIManager:
             auto_aoi_method=auto_aoi_method,
         )
         return self.save_slide_data(deck_id, slide_data)
+
+    def extract_image_text_boxes(
+        self,
+        image_path: str,
+        image_regions: list[list[float]],
+    ) -> list[TextBox]:
+        engine = OCREngine()
+        boxes: list[TextBox] = []
+        for region in image_regions:
+            try:
+                boxes.extend(engine.extract_region_boxes(image_path, region))
+            except Exception:
+                continue
+        return self.merge_text_boxes(boxes)
+
+    def build_image_region_aois(self, text_boxes: list[TextBox]) -> list[AOI]:
+        return [
+            AOI(
+                f"ocr_image_block_{index}",
+                list(box.bbox),
+                "text",
+                box.text,
+                source="ocr_image",
+                group_confidence=round(float(box.confidence), 3),
+                children=[self._text_box_child(box)],
+            )
+            for index, box in enumerate(text_boxes, 1)
+            if self._bbox_area(box.bbox) >= 0.002
+        ]
+
+    @classmethod
+    def merge_text_boxes(cls, boxes: list[TextBox]) -> list[TextBox]:
+        merged: list[TextBox] = []
+        seen: set[tuple[str, tuple[float, ...]]] = set()
+        for box in sorted(boxes, key=lambda item: (item.y_min, item.x_min)):
+            key = (cls._normalize_text(box.text), tuple(round(value, 4) for value in box.bbox))
+            if key not in seen:
+                seen.add(key)
+                merged.append(box)
+        return merged
 
     def generate_rule_aois(self, slide_text: str = "") -> list[AOI]:
         return [
@@ -197,9 +256,136 @@ class AOIManager:
                     type="title" if bbox[1] < 0.20 and len(block) <= 3 else "text",
                     text="\n".join(item.text for item in block),
                     source="ocr",
+                    children=[self._text_box_child(item) for item in block],
                 )
             )
         return aois
+
+    def merge_pdf_wrapped_aois(self, aois: list[AOI]) -> list[AOI]:
+        merged: list[AOI] = []
+        for candidate in sorted(aois, key=lambda aoi: (aoi.bbox[1], aoi.bbox[0])):
+            current = next(
+                (previous for previous in reversed(merged) if self._pdf_lines_are_continuous(previous, candidate)),
+                None,
+            )
+            if current is None:
+                merged.append(candidate)
+                continue
+            current.text = f"{current.text.rstrip()} {candidate.text.lstrip()}"
+            current.bbox = [
+                min(current.bbox[0], candidate.bbox[0]),
+                min(current.bbox[1], candidate.bbox[1]),
+                max(current.bbox[2], candidate.bbox[2]),
+                max(current.bbox[3], candidate.bbox[3]),
+            ]
+            current.group_confidence = min(current.group_confidence or 0.62, candidate.group_confidence or 0.62)
+            current.children = list(current.children or []) + list(candidate.children or [])
+        for index, aoi in enumerate(merged, 1):
+            aoi.aoi_id = f"pdf_semantic_block_{index}"
+        return merged
+
+    @staticmethod
+    def _pdf_lines_are_continuous(first: AOI, second: AOI) -> bool:
+        if first.type != "text" or second.type != "text":
+            return False
+        if not first.text.strip() or not second.text.strip():
+            return False
+        if second.text.strip().startswith(("•", "o ", "*")) or first.text.strip().endswith((".", "!", "?", "]")):
+            return False
+        return abs(first.bbox[0] - second.bbox[0]) <= 0.025 and max(0.0, second.bbox[1] - first.bbox[3]) <= 0.025
+
+    def build_llm_guided_aois(
+        self,
+        image_path: str,
+        slide_text: str,
+        rule_aois: list[AOI],
+        text_aois: list[AOI],
+    ) -> list[AOI]:
+        raw = self.llm_aoi_generator.generate(
+            image_path,
+            slide_text,
+            [aoi.to_dict() for aoi in rule_aois],
+            [aoi.to_dict() for aoi in text_aois],
+        )
+        aois: list[AOI] = []
+        for item in raw:
+            bbox = [float(value) for value in item.get("bbox", [])]
+            self._validate_bbox(bbox)
+            aois.append(AOI(
+                str(item.get("aoi_id", "")),
+                bbox,
+                str(item.get("type", "mixed")),
+                str(item.get("text", "")),
+                source="llm_guided",
+                group_confidence=float(item.get("group_confidence", 0.7)),
+                include_in_learning=bool(item.get("include_in_learning", True)),
+            ))
+        return aois
+
+    def reconcile_llm_aois(
+        self,
+        llm_aois: list[AOI],
+        grounding_aois: list[AOI],
+        minimum_text_coverage: float = 0.45,
+    ) -> list[AOI]:
+        by_text: dict[str, list[AOI]] = {}
+        for grounding in grounding_aois:
+            normalized = self._normalize_text(grounding.text)
+            if normalized:
+                by_text.setdefault(normalized, []).append(grounding)
+        text_types = {"title", "text", "caption", "footer", "axis_label"}
+        for aoi in llm_aois:
+            matches = by_text.get(self._normalize_text(aoi.text), [])
+            if aoi.type in text_types and len(matches) == 1:
+                aoi.bbox = list(matches[0].bbox)
+        candidates = sorted(
+            (aoi for aoi in llm_aois if self._bbox_area(aoi.bbox) < 0.90),
+            key=lambda aoi: aoi.group_confidence or 0.0,
+            reverse=True,
+        )
+        resolved: list[AOI] = []
+        for candidate in candidates:
+            if not any(self._same_aoi_category(candidate, other) and self._bbox_iou(candidate.bbox, other.bbox) >= 0.85 for other in resolved):
+                resolved.append(candidate)
+        resolved.sort(key=lambda aoi: (aoi.bbox[1], aoi.bbox[0]))
+        grounding_tokens = self._learning_tokens(grounding_aois)
+        if len(grounding_tokens) >= 8:
+            coverage = len(grounding_tokens & self._learning_tokens(resolved)) / len(grounding_tokens)
+            if coverage < minimum_text_coverage:
+                raise ValueError(f"LLM AOI text coverage too low: {coverage:.1%}; required {minimum_text_coverage:.0%}")
+        if not resolved:
+            raise ValueError("LLM AOI reconciliation produced no usable AOIs")
+        for index, aoi in enumerate(resolved, 1):
+            aoi.aoi_id = f"llm_aoi_{index}"
+        return resolved
+
+    @classmethod
+    def _learning_tokens(cls, aois: list[AOI]) -> set[str]:
+        return {
+            token
+            for aoi in aois
+            if aoi.type != "footer"
+            for token in cls._normalize_text(aoi.text).split()
+        }
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return " ".join("".join(character.casefold() if character.isalnum() else " " for character in text).split())
+
+    @staticmethod
+    def _same_aoi_category(first: AOI, second: AOI) -> bool:
+        visual = {"code", "diagram", "figure", "table", "formula"}
+        return (first.type in visual) == (second.type in visual)
+
+    @staticmethod
+    def _bbox_iou(first: list[float], second: list[float]) -> float:
+        width = max(0.0, min(first[2], second[2]) - max(first[0], second[0]))
+        height = max(0.0, min(first[3], second[3]) - max(first[1], second[1]))
+        intersection = width * height
+        first_area = max(0.0, first[2] - first[0]) * max(0.0, first[3] - first[1])
+        second_area = max(0.0, second[2] - second[0]) * max(0.0, second[3] - second[1])
+        union = first_area + second_area - intersection
+        return intersection / union if union else 0.0
 
     def build_pdf_semantic_aois(self, text_boxes: list[TextBox], threshold: float = 0.72) -> list[AOI]:
         pdf_boxes = [box for box in text_boxes if box.source == "pdf_text"]
@@ -258,16 +444,165 @@ class AOIManager:
                         0.62,
                     )
                 )
-        return aois
+        return self.merge_pdf_wrapped_aois(aois)
 
     def save_slide_data(self, deck_id: str, slide_data: SlideAOIData) -> dict[str, Any]:
         for aoi in slide_data.aois:
             self._validate_bbox(aoi.bbox)
         data = slide_data.to_dict()
         with self._lock:
-            self.manifest[self._slide_key(deck_id, slide_data.slide_id)] = data
+            key = self._slide_key(deck_id, slide_data.slide_id)
+            previous = self.manifest.get(key, {})
+            digest = self._anchor_digest(data)
+            expected = self.llm_aoi_generator.profile(digest)
+            if previous.get("llm_aoi_status") == "used" and previous.get("llm_aoi_profile") == expected:
+                for field in (
+                    "llm_aois", "llm_aoi_status", "llm_aoi_model", "llm_aoi_profile",
+                    "llm_aoi_anchor_digest", "llm_aoi_error",
+                ):
+                    data[field] = previous.get(field)
+            else:
+                data.update({
+                    "llm_aois": [],
+                    "llm_aoi_status": "not_requested",
+                    "llm_aoi_model": None,
+                    "llm_aoi_profile": None,
+                    "llm_aoi_anchor_digest": digest,
+                    "llm_aoi_error": None,
+                })
+            self.manifest[key] = data
             self._save_manifest()
         return data
+
+    def _anchor_digest(self, slide_data: dict[str, Any]) -> str:
+        anchors = [
+            {
+                "aoi_id": str(aoi.get("aoi_id", "")),
+                "bbox": [round(float(value), 6) for value in aoi.get("bbox", [])],
+                "type": str(aoi.get("type", "")),
+                "text": " ".join(str(aoi.get("text", "")).split()),
+            }
+            for aoi in slide_data.get("aois", [])
+            if aoi.get("source") in {"pdf_text_semantic", "ocr", "ocr_image"}
+        ]
+        raw = json.dumps(anchors, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def process_llm_aoi(
+        self,
+        deck_id: str,
+        slide_id: int,
+        *,
+        dpi: int = 250,
+        allow_ocr: bool = True,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        key = self._slide_key(deck_id, slide_id)
+        slide_data = self.manifest.get(key)
+        expected_suffix = f"_{dpi}dpi.png"
+        if slide_data is None or not str(slide_data.get("slide_image_path", "")).endswith(expected_suffix):
+            slide_data = self.process_slide(deck_id, slide_id, dpi=dpi, allow_ocr=allow_ocr)
+        anchor_digest = self._anchor_digest(slide_data)
+        expected_profile = self.llm_aoi_generator.profile(anchor_digest)
+        if not force and slide_data.get("llm_aoi_status") == "used" and slide_data.get("llm_aoi_profile") == expected_profile:
+            return slide_data
+
+        rule_aois = [self._aoi_from_dict(item) for item in slide_data.get("aois", []) if item.get("source") == "rule"]
+        anchor_aois = [
+            self._aoi_from_dict(item)
+            for item in slide_data.get("aois", [])
+            if item.get("source") in {"pdf_text_semantic", "ocr", "ocr_image"}
+        ]
+        try:
+            llm_aois = self.reconcile_llm_aois(
+                self.build_llm_guided_aois(
+                    str(slide_data.get("slide_image_path", "")),
+                    str(slide_data.get("ocr_text", "")),
+                    rule_aois,
+                    anchor_aois,
+                ),
+                anchor_aois,
+            )
+            with self._lock:
+                current = self.manifest[key]
+                if self._anchor_digest(current) != anchor_digest:
+                    raise RuntimeError("Deterministic AOIs changed during LLM generation")
+                current.update({
+                    "llm_aois": [aoi.to_dict() for aoi in llm_aois],
+                    "llm_aoi_status": "used",
+                    "llm_aoi_model": str(self.llm_aoi_generator.config.model),
+                    "llm_aoi_profile": expected_profile,
+                    "llm_aoi_anchor_digest": anchor_digest,
+                    "llm_aoi_error": None,
+                })
+                self._save_manifest()
+                return current
+        except Exception as exc:
+            with self._lock:
+                current = self.manifest[key]
+                if self._anchor_digest(current) == anchor_digest:
+                    current.update({
+                        "llm_aois": [],
+                        "llm_aoi_status": "fallback_used",
+                        "llm_aoi_model": str(self.llm_aoi_generator.config.model),
+                        "llm_aoi_profile": None,
+                        "llm_aoi_anchor_digest": anchor_digest,
+                        "llm_aoi_error": sanitized_llm_error(exc),
+                    })
+                    self._save_manifest()
+                return current
+
+    def get_llm_aoi_state(self, deck_id: str, slide_id: int) -> dict[str, Any]:
+        slide_data = self._ensure_slide_data(deck_id, slide_id)
+        configured = bool(self.llm_aoi_generator.is_configured())
+        digest = self._anchor_digest(slide_data)
+        expected_profile = self.llm_aoi_generator.profile(digest) if configured else None
+        stored_profile = slide_data.get("llm_aoi_profile")
+        status = str(slide_data.get("llm_aoi_status", "not_requested"))
+        llm_aois = list(slide_data.get("llm_aois", []))
+        eligible = configured and status == "used" and bool(llm_aois) and stored_profile == expected_profile
+        return {
+            "configured": configured,
+            "status": status if status in {"not_requested", "used", "fallback_used"} else "not_requested",
+            "model": slide_data.get("llm_aoi_model"),
+            "profile": stored_profile,
+            "expected_profile": expected_profile,
+            "eligible": eligible,
+            "aoi_count": len(llm_aois),
+            "error": slide_data.get("llm_aoi_error"),
+        }
+
+    def get_effective_aois(
+        self,
+        deck_id: str,
+        slide_id: int,
+        *,
+        use_llm_aoi: bool,
+    ) -> tuple[list[dict[str, Any]], str]:
+        slide_data = self._ensure_slide_data(deck_id, slide_id)
+        state = self.get_llm_aoi_state(deck_id, slide_id)
+        if use_llm_aoi and state["eligible"]:
+            selected = [dict(aoi) for aoi in slide_data.get("llm_aois", [])]
+            profile = str(slide_data["llm_aoi_profile"])
+        else:
+            selected = [dict(aoi) for aoi in slide_data.get("aois", [])]
+            profile = "deterministic"
+        if not any(aoi.get("aoi_id") == "whole_slide" for aoi in selected):
+            selected.append(self.generate_rule_aois(str(slide_data.get("ocr_text", "")))[-1].to_dict())
+        return selected, profile
+
+    @staticmethod
+    def _aoi_from_dict(item: dict[str, Any]) -> AOI:
+        return AOI(
+            aoi_id=str(item.get("aoi_id", "")),
+            bbox=[float(value) for value in item.get("bbox", [])],
+            type=str(item.get("type", "mixed")),
+            text=str(item.get("text", "")),
+            source=str(item.get("source", "rule")),
+            group_confidence=item.get("group_confidence"),
+            children=item.get("children"),
+            include_in_learning=bool(item.get("include_in_learning", True)),
+        )
 
     def get_slide_aois(self, deck_id: str, slide_id: int) -> list[dict[str, Any]]:
         slide_data = self._ensure_slide_data(deck_id, slide_id)

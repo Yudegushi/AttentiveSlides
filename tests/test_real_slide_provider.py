@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import fitz
 
@@ -62,6 +63,34 @@ class MissingDeckIdProvider:
 
 
 class RealSlideProviderTest(unittest.TestCase):
+    def test_llm_source_requires_explicit_selection_and_has_separate_cache(self):
+        self.assertIsNotNone(RealSlideProvider)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pdf_path = root / "deck.pdf"
+            make_deck(pdf_path, page_count=1)
+            provider = RealSlideProvider(data_dir=root / "data")
+            provider.load_deck(pdf_path)
+            payload = {
+                "slide_image_path": str(root / "slide.png"),
+                "ocr_text": "deterministic",
+                "aois": [
+                    {"aoi_id": "det", "bbox": [0.1, 0.1, 0.4, 0.3], "type": "text", "text": "deterministic", "source": "pdf_text_semantic"},
+                    {"aoi_id": "whole_slide", "bbox": [0, 0, 1, 1], "type": "whole_slide", "source": "rule"},
+                ],
+                "llm_aois": [
+                    {"aoi_id": "llm_aoi_1", "bbox": [0.2, 0.2, 0.8, 0.8], "type": "diagram", "text": "visual", "source": "llm_guided"},
+                    {"aoi_id": "whole_slide", "bbox": [0, 0, 1, 1], "type": "whole_slide", "source": "rule"},
+                ],
+            }
+            with patch.object(provider._aoi_manager, "process_slide", return_value=payload):
+                deterministic = provider.get_slide_frame(1)
+                selected = provider.get_slide_frame(1, use_llm_aoi=True)
+            self.assertIn("det", [aoi.aoi_id for aoi in deterministic.aois])
+            self.assertNotIn("llm_aoi_1", [aoi.aoi_id for aoi in deterministic.aois])
+            self.assertIn("llm_aoi_1", [aoi.aoi_id for aoi in selected.aois])
+            self.assertIsNot(deterministic, selected)
+
     def test_loads_pdf_with_explicit_deck_id_neighbors_and_canonical_aois(self):
         self.assertIsNotNone(RealSlideProvider)
         with tempfile.TemporaryDirectory() as directory:

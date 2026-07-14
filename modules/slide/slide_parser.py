@@ -157,6 +157,28 @@ class SlideParser:
 
         return sorted(boxes, key=lambda box: (box.y_min, box.x_min))
 
+    def extract_pdf_image_boxes(self, deck_id: str, slide_id: int) -> list[list[float]]:
+        deck_info = self.metadata.get(deck_id)
+        if deck_info is None:
+            raise ValueError(f"Unknown deck_id: {deck_id}")
+        document = fitz.open(str(deck_info["pdf_path"]))
+        boxes: list[list[float]] = []
+        try:
+            page = document.load_page(slide_id - 1)
+            width, height = float(page.rect.width), float(page.rect.height)
+            for block in page.get_text("dict").get("blocks", []):
+                if block.get("type") != 1 or not block.get("bbox"):
+                    continue
+                x1, y1, x2, y2 = (float(value) for value in block["bbox"])
+                bbox = [clamp(x1 / width), clamp(y1 / height), clamp(x2 / width), clamp(y2 / height)]
+                area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+                footer_asset = bbox[1] >= 0.82 and bbox[3] - bbox[1] <= 0.08
+                if bbox[2] > bbox[0] and bbox[3] > bbox[1] and 0.002 <= area <= 0.75 and not footer_asset:
+                    boxes.append(bbox)
+        finally:
+            document.close()
+        return boxes
+
     def get_page_count(self, deck_id: str) -> int:
         deck_info = self.metadata.get(deck_id)
         if deck_info is None:
@@ -173,4 +195,3 @@ def load_deck(pdf_path: str) -> str:
 
 def render_slide(deck_id: str, slide_id: int) -> str:
     return SlideParser().render_slide(deck_id, slide_id)
-

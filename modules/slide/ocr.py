@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from PIL import Image
@@ -80,8 +81,8 @@ class OCREngine:
         if not path.exists():
             raise FileNotFoundError(f"Image file does not exist: {path}")
 
-        image = Image.open(path)
-        image_width, image_height = image.size
+        with Image.open(path) as image:
+            image_width, image_height = image.size
         results = self._get_reader().readtext(
             str(path),
             detail=1,
@@ -116,3 +117,35 @@ class OCREngine:
     def extract_text(self, image_path: str) -> str:
         return "\n".join(box.text for box in self.extract_boxes(image_path)).strip()
 
+    def extract_region_boxes(
+        self,
+        image_path: str,
+        region: list[float],
+        min_confidence: float = 0.25,
+    ) -> list[TextBox]:
+        if len(region) != 4:
+            raise ValueError("region must contain four normalized values")
+        x1, y1, x2, y2 = [clamp(float(value)) for value in region]
+        if x1 >= x2 or y1 >= y2:
+            raise ValueError("region must have positive width and height")
+        with Image.open(image_path) as image:
+            width, height = image.size
+            with image.crop((int(x1 * width), int(y1 * height), int(x2 * width), int(y2 * height))) as crop:
+                with NamedTemporaryFile(suffix=".png") as temporary:
+                    crop.save(temporary.name)
+                    local_boxes = self.extract_boxes(temporary.name, min_confidence=min_confidence)
+        region_width, region_height = x2 - x1, y2 - y1
+        return [
+            TextBox(
+                box.text,
+                [
+                    x1 + box.x_min * region_width,
+                    y1 + box.y_min * region_height,
+                    x1 + box.x_max * region_width,
+                    y1 + box.y_max * region_height,
+                ],
+                box.confidence,
+                "ocr_image",
+            )
+            for box in local_boxes
+        ]

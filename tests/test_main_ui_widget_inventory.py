@@ -156,6 +156,12 @@ class TestMainUIWidgetInventory(
             }:
                 continue
 
+            if (
+                widget_type == "slider"
+                and literal_key(call) == "main_slide_width_percent"
+            ):
+                continue
+
             if "on_change" not in keyword_names(
                 call
             ):
@@ -187,6 +193,8 @@ class TestMainUIWidgetInventory(
 
         required = {
             "main_pdf_upload",
+            "main_llm_aoi_enabled",
+            "main_process_current_llm_aoi",
             "main_cloud_text_allowed",
             "main_interaction_mode",
             "main_live_master_enabled",

@@ -50,6 +50,8 @@ class UploadedDeckBrowser:
         self,
         workspace: "UploadedDeckWorkspace",
         summary: UploadedDeckSummary,
+        *,
+        use_llm_aoi: bool = False,
     ) -> None:
         self.workspace = workspace
         self.deck_id = summary.deck_id
@@ -58,6 +60,7 @@ class UploadedDeckBrowser:
         self.content_digest = (
             summary.content_digest
         )
+        self.use_llm_aoi = use_llm_aoi
         self.manifest_path = (
             workspace.aoi_manager.manifest_file
         )
@@ -79,6 +82,7 @@ class UploadedDeckBrowser:
         return self.workspace.get_slide(
             self.deck_id,
             slide_id,
+            use_llm_aoi=self.use_llm_aoi,
         )
 
     def slide_index(
@@ -311,6 +315,8 @@ class UploadedDeckWorkspace:
     def open_browser(
         self,
         deck_id: str,
+        *,
+        use_llm_aoi: bool = False,
     ) -> UploadedDeckBrowser:
         deck_info = (
             self.slide_parser
@@ -348,12 +354,40 @@ class UploadedDeckWorkspace:
         return UploadedDeckBrowser(
             self,
             summary,
+            use_llm_aoi=use_llm_aoi,
         )
+
+    def prepare_llm_aoi(
+        self,
+        deck_id: str,
+        slide_id: int,
+        *,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        arguments = [
+            "prepare-llm-aoi",
+            "--data-dir", str(self.data_dir),
+            "--deck-id", deck_id,
+            "--slide-id", str(slide_id),
+            "--dpi", str(configured_pdf_render_dpi()),
+        ]
+        if os.environ.get("ATTENTIVE_ENABLE_OCR", "0") == "1":
+            arguments.append("--enable-ocr")
+        if force:
+            arguments.append("--force")
+        self._run_native_worker(arguments, timeout_seconds=300)
+        self.aoi_manager = AOIManager(str(self.data_dir))
+        return self.aoi_manager.get_llm_aoi_state(deck_id, slide_id)
+
+    def get_llm_aoi_state(self, deck_id: str, slide_id: int) -> dict[str, Any]:
+        return self.aoi_manager.get_llm_aoi_state(deck_id, slide_id)
 
     def get_slide(
         self,
         deck_id: str,
         slide_id: int,
+        *,
+        use_llm_aoi: bool = False,
     ) -> MainUISlide:
         page_count = (
             self.slide_parser
@@ -374,6 +408,12 @@ class UploadedDeckWorkspace:
                 deck_id,
                 slide_id,
             )
+        )
+
+        raw_aois, aoi_profile = self.aoi_manager.get_effective_aois(
+            deck_id,
+            slide_id,
+            use_llm_aoi=use_llm_aoi,
         )
 
         aois = tuple(
@@ -405,10 +445,7 @@ class UploadedDeckWorkspace:
                     )
                 ),
             )
-            for item in slide_data.get(
-                "aois",
-                [],
-            )
+            for item in raw_aois
             if item.get(
                 "include_in_learning",
                 True,
@@ -477,6 +514,7 @@ class UploadedDeckWorkspace:
                 if image_path
                 else None
             ),
+            aoi_profile=aoi_profile,
         )
 
     def _get_or_process_slide(

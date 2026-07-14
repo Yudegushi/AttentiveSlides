@@ -20,6 +20,7 @@ class MainUISlide:
     neighbor_slide_text: str
     aois: tuple[AOI, ...]
     image_path: str | None = None
+    aoi_profile: str = "deterministic"
 
     @property
     def image_available(self) -> bool:
@@ -37,6 +38,7 @@ class MainUISlide:
             ),
             "image_path": self.image_path,
             "image_available": self.image_available,
+            "aoi_profile": self.aoi_profile,
             "aois": [
                 asdict(aoi)
                 for aoi in self.aois
