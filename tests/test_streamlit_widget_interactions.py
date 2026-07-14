@@ -38,6 +38,10 @@ class TestStreamlitWidgetInteractions(
             environment.update(
                 {
                     "ATTENTIVE_ENABLE_OCR": "0",
+                    "ATTENTIVE_RUNTIME_DATA_DIR": str(
+                        Path(directory)
+                        / "runtime"
+                    ),
                     "ATTENTIVE_DISABLE_CANVAS_FOR_APPTEST": "1",
                     "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false",
                     "OMP_NUM_THREADS": "1",

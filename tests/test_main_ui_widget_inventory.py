@@ -201,8 +201,6 @@ class TestMainUIWidgetInventory(
             "main_live_master_enabled",
             "main_confirmation_policy",
             "main_history_enabled",
-            "main_thumbnail_window_previous",
-            "main_thumbnail_window_next",
             "main_previous_slide_button",
             "main_next_slide_button",
             "main_target_scope",
