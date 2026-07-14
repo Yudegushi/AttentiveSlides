@@ -239,6 +239,17 @@
         gazeStaleTimer = window.setTimeout(clearAuxiliaryGaze, GAZE_STALE_AFTER_MS);
       }
 
+      function handleServerMatch(message) {
+        if (!args) return;
+        if (
+          String(message.deck_id) !== String(args.deck_id)
+          || Number(message.slide_id) !== Number(args.slide_id)
+        ) return;
+        const requested = message.aoi_id ? String(message.aoi_id) : null;
+        serverMatchedAoiId = requested && aoiElements.has(requested) ? requested : null;
+        refreshDebugClasses();
+      }
+
       function geometrySignature(payload) {
         return JSON.stringify(payload, function (key, value) {
           if (key === "browser_timestamp_ms") return undefined;
@@ -482,6 +493,7 @@
           if (message.version !== 1) return;
           if (message.kind === "gaze") handleGazeMessage(message);
           if (message.kind === "gaze_clear") clearAuxiliaryGaze();
+          if (message.kind === "server_match") handleServerMatch(message);
         });
       }
       window.addEventListener("pagehide", () => {

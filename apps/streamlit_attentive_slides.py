@@ -112,6 +112,7 @@ from modules.system.live_ui_bridge import (
     resolve_grid_target,
     should_auto_confirm,
 )
+from modules.system.live_debug_overlay import resolve_live_debug_aoi_id
 from modules.system.sensing_snapshot_store import SensingSnapshotStore
 from modules.system.sensing_worker import SensingWorker
 from modules.system.slide_geometry import parse_component_geometry
@@ -120,6 +121,7 @@ from modules.system.uploaded_deck_service import (
     UploadedDeckWorkspace,
 )
 from modules.ui.slide_viewport_component import render_slide_viewport
+from modules.ui.live_debug_bridge_component import render_live_debug_bridge
 
 
 BUILT_IN_MANIFEST_PATH = (
@@ -4056,6 +4058,40 @@ def _render_live_periodic(
         f"Local gaze: {'ready' if ingress_stats['gaze_fresh'] else 'fallback'}"
     )
     _render_live_interaction(view)
+    proposal = st.session_state.get("main_live_proposal")
+    if not isinstance(proposal, LiveInteractionProposal):
+        proposal = None
+    confirmed_interaction = st.session_state.get(
+        "main_confirmed_interaction"
+    )
+    if not isinstance(confirmed_interaction, dict):
+        confirmed_interaction = None
+    valid_aoi_ids = {
+        aoi.aoi_id
+        for aoi in view.active_slide.aois
+        if aoi.aoi_id != "whole_slide"
+    }
+    matched_aoi_id = resolve_live_debug_aoi_id(
+        deck_id=view.deck_id,
+        slide_id=view.active_slide_id,
+        valid_aoi_ids=valid_aoi_ids,
+        proposal=proposal,
+        confirmed_interaction=confirmed_interaction,
+    )
+    render_live_debug_bridge(
+        deck_id=view.deck_id,
+        slide_id=view.active_slide_id,
+        matched_aoi_id=matched_aoi_id,
+        enabled=bool(st.session_state["main_show_aoi_overlay"]),
+        clear_match=(
+            proposal is None
+            and confirmed_interaction is None
+        ),
+        key=(
+            "main_live_debug_bridge_"
+            f"{view.deck_id}_{view.active_slide_id}"
+        ),
+    )
     if st.session_state.pop("main_live_full_rerun_requested", False):
         st.rerun(scope="app")
 

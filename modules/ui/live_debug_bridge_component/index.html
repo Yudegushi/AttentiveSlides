@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"></head>
+<body>
+<script>
+(() => {
+  const CHANNEL_NAME = "attentiveslides-gaze-debug-v1";
+  const channel = typeof BroadcastChannel === "function"
+    ? new BroadcastChannel(CHANNEL_NAME)
+    : null;
+  window.parent.postMessage({
+    isStreamlitMessage: true,
+    type: "streamlit:componentReady",
+    apiVersion: 1,
+  }, "*");
+  window.parent.postMessage({
+    isStreamlitMessage: true,
+    type: "streamlit:setFrameHeight",
+    height: 0,
+  }, "*");
+  window.addEventListener("message", (event) => {
+    if (!channel || !event.data || event.data.type !== "streamlit:render") return;
+    const args = event.data.args || {};
+    if (!args.enabled) return;
+    if (!args.matched_aoi_id && !args.clear_match) return;
+    channel.postMessage({
+      version: 1,
+      kind: "server_match",
+      deck_id: String(args.deck_id || ""),
+      slide_id: Number(args.slide_id),
+      aoi_id: args.matched_aoi_id ? String(args.matched_aoi_id) : null,
+    });
+  });
+  window.addEventListener("pagehide", () => {
+    if (channel) channel.close();
+  });
+})();
+</script>
+</body>
+</html>

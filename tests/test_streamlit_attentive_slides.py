@@ -577,6 +577,21 @@ class TestStreamlitAttentiveSlides(
         self.assertIn("Local gaze:", periodic)
         self.assertIn("gaze_fresh", periodic)
 
+    def test_live_debug_bridge_uses_existing_state_inside_fragment(
+        self,
+    ) -> None:
+        periodic = self.function_source("_render_live_periodic")
+        self.assertIn("resolve_live_debug_aoi_id", periodic)
+        self.assertIn("render_live_debug_bridge", periodic)
+        self.assertIn("main_live_proposal", periodic)
+        self.assertIn("main_confirmed_interaction", periodic)
+        self.assertIn("clear_match", periodic)
+        self.assertLess(
+            periodic.index("_render_live_interaction"),
+            periodic.index("render_live_debug_bridge"),
+        )
+        self.assertNotIn("main_live_debug_match", self.source)
+
     def test_live_proposal_uses_point_revision_or_latest_grid_geometry(self) -> None:
         consume = self.function_source("_consume_live_proposal")
 
