@@ -11,9 +11,19 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from .aoi_grouping import (
+    CONTENT_ROLES,
+    EXCLUDED_ROLES,
+    GroupingResult,
+    TextGroup,
+    group_pdf_text,
+)
 from .ocr import OCREngine, TextBox, clamp
 from .slide_parser import SlideParser
 from .llm_aoi import LLMAOIGenerator, sanitized_llm_error
+
+
+AUTO_AOI_SCHEMA_VERSION = "pdf-semantic-v2"
 
 
 @dataclass
@@ -26,6 +36,7 @@ class AOI:
     group_confidence: float | None = None
     children: list[dict[str, Any]] | None = None
     include_in_learning: bool = True
+    role: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -40,6 +51,8 @@ class SlideAOIData:
     aois: list[AOI]
     text_source: str
     auto_aoi_method: str
+    excluded_text_regions: list[dict[str, Any]] | None = None
+    auto_aoi_version: str = AUTO_AOI_SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -49,6 +62,8 @@ class SlideAOIData:
             "slide_text": self.ocr_text,
             "text_source": self.text_source,
             "auto_aoi_method": self.auto_aoi_method,
+            "auto_aoi_version": self.auto_aoi_version,
+            "excluded_text_regions": self.excluded_text_regions or [],
             "aois": [aoi.to_dict() for aoi in self.aois],
         }
 
@@ -102,6 +117,13 @@ class AOIManager:
         image_path = parser.render_slide(deck_id, slide_id, dpi=dpi)
         pdf_text_boxes = parser.extract_pdf_text_boxes(deck_id, slide_id)
         pdf_text = "\n".join(box.text for box in pdf_text_boxes).strip()
+        repeated_top_text: frozenset[str] = frozenset()
+        repeated_bottom_text: frozenset[str] = frozenset()
+        if pdf_text_boxes:
+            try:
+                repeated_top_text, repeated_bottom_text = parser.extract_pdf_margin_profile(deck_id)
+            except (FileNotFoundError, ValueError):
+                pass
         image_text_boxes: list[TextBox] = []
         if allow_ocr:
             try:
@@ -115,9 +137,12 @@ class AOIManager:
         if len(pdf_text) >= 30:
             text_boxes = pdf_text_boxes
             text_source = "pdf_text"
-            auto_aois = self.build_pdf_semantic_aois(
-                text_boxes
+            grouping = group_pdf_text(
+                text_boxes,
+                repeated_top_text,
+                repeated_bottom_text,
             )
+            auto_aois = self._aois_from_text_groups(grouping.content_groups)
             auto_aois.extend(self.build_image_region_aois(image_text_boxes))
             auto_aoi_method = "pdf_text_semantic"
 
@@ -129,6 +154,7 @@ class AOIManager:
             auto_aois = self.build_text_block_aois(
                 text_boxes
             )
+            grouping = GroupingResult([], [])
             auto_aois.extend(self.build_image_region_aois(image_text_boxes))
             auto_aoi_method = "ocr_text_block"
 
@@ -141,13 +167,12 @@ class AOIManager:
                 else "no_embedded_text"
             )
 
-            auto_aois = (
-                self.build_pdf_semantic_aois(
-                    text_boxes
-                )
-                if text_boxes
-                else []
-            )
+            grouping = group_pdf_text(
+                text_boxes,
+                repeated_top_text,
+                repeated_bottom_text,
+            ) if text_boxes else GroupingResult([], [])
+            auto_aois = self._aois_from_text_groups(grouping.content_groups)
 
             auto_aoi_method = (
                 "pdf_text_only_no_ocr"
@@ -163,6 +188,10 @@ class AOIManager:
             aois=rule_aois + auto_aois,
             text_source=text_source,
             auto_aoi_method=auto_aoi_method,
+            excluded_text_regions=[
+                self._excluded_text_group(group) for group in grouping.excluded_groups
+            ],
+            auto_aoi_version=AUTO_AOI_SCHEMA_VERSION,
         )
         return self.save_slide_data(deck_id, slide_data)
 
@@ -397,64 +426,42 @@ class AOIManager:
         union = first_area + second_area - intersection
         return intersection / union if union else 0.0
 
-    def build_pdf_semantic_aois(self, text_boxes: list[TextBox], threshold: float = 0.72) -> list[AOI]:
-        pdf_boxes = [box for box in text_boxes if box.source == "pdf_text"]
-        used: set[int] = set()
-        aois: list[AOI] = []
-        sorted_items = sorted(enumerate(pdf_boxes), key=lambda item: (item[1].y_min, item[1].x_min))
+    def build_pdf_semantic_aois(
+        self,
+        text_boxes: list[TextBox],
+        repeated_top_text: frozenset[str] = frozenset(),
+        repeated_bottom_text: frozenset[str] = frozenset(),
+    ) -> list[AOI]:
+        grouping = group_pdf_text(
+            [box for box in text_boxes if box.source == "pdf_text"],
+            repeated_top_text,
+            repeated_bottom_text,
+        )
+        return self._aois_from_text_groups(grouping.content_groups)
 
-        for left_index, left_box in sorted_items:
-            if left_index in used:
-                continue
+    def _aois_from_text_groups(self, groups: list[TextGroup]) -> list[AOI]:
+        return [
+            AOI(
+                aoi_id=f"pdf_paragraph_{index}",
+                bbox=list(group.bbox),
+                type="text",
+                text=group.text,
+                source="pdf_text_semantic",
+                group_confidence=0.95 if len({line.block_id for line in group.lines}) == 1 else 0.85,
+                children=[self._text_box_child(line) for line in group.lines],
+                role=group.role,
+            )
+            for index, group in enumerate(groups, 1)
+            if self._bbox_area(group.bbox) >= 0.002
+        ]
 
-            special_type = self._special_pdf_box_type(left_box)
-            if special_type is not None:
-                used.add(left_index)
-                aois.append(
-                    self._make_semantic_aoi(
-                        f"pdf_semantic_block_{len(aois) + 1}",
-                        [left_box],
-                        special_type,
-                        0.95,
-                    )
-                )
-                continue
-
-            best_index = None
-            best_confidence = 0.0
-            for right_index, right_box in sorted_items:
-                if right_index == left_index or right_index in used:
-                    continue
-                if self._special_pdf_box_type(right_box) is not None or right_box.x_min <= left_box.x_max:
-                    continue
-                confidence = self._semantic_pair_confidence(left_box, right_box)
-                if confidence > best_confidence:
-                    best_confidence = confidence
-                    best_index = right_index
-
-            if best_index is not None and best_confidence >= threshold:
-                used.add(left_index)
-                used.add(best_index)
-                aois.append(
-                    self._make_semantic_aoi(
-                        f"pdf_semantic_block_{len(aois) + 1}",
-                        [left_box, pdf_boxes[best_index]],
-                        "text",
-                        best_confidence,
-                    )
-                )
-            else:
-                used.add(left_index)
-                aoi_type = "title" if left_box.y_min < 0.20 else "text"
-                aois.append(
-                    self._make_semantic_aoi(
-                        f"pdf_semantic_block_{len(aois) + 1}",
-                        [left_box],
-                        aoi_type,
-                        0.62,
-                    )
-                )
-        return self.merge_pdf_wrapped_aois(aois)
+    def _excluded_text_group(self, group: TextGroup) -> dict[str, Any]:
+        return {
+            "role": group.role,
+            "text": group.text,
+            "bbox": list(group.bbox),
+            "children": [self._text_box_child(line) for line in group.lines],
+        }
 
     def save_slide_data(self, deck_id: str, slide_data: SlideAOIData) -> dict[str, Any]:
         for aoi in slide_data.aois:
@@ -490,6 +497,7 @@ class AOIManager:
                 "aoi_id": str(aoi.get("aoi_id", "")),
                 "bbox": [round(float(value), 6) for value in aoi.get("bbox", [])],
                 "type": str(aoi.get("type", "")),
+                "role": str(aoi.get("role", "")),
                 "text": " ".join(str(aoi.get("text", "")).split()),
             }
             for aoi in slide_data.get("aois", [])
@@ -510,7 +518,11 @@ class AOIManager:
         key = self._slide_key(deck_id, slide_id)
         slide_data = self.manifest.get(key)
         expected_suffix = f"_{dpi}dpi.png"
-        if slide_data is None or not str(slide_data.get("slide_image_path", "")).endswith(expected_suffix):
+        if (
+            slide_data is None
+            or slide_data.get("auto_aoi_version") != AUTO_AOI_SCHEMA_VERSION
+            or not str(slide_data.get("slide_image_path", "")).endswith(expected_suffix)
+        ):
             slide_data = self.process_slide(deck_id, slide_id, dpi=dpi, allow_ocr=allow_ocr)
         anchor_digest = self._anchor_digest(slide_data)
         expected_profile = self.llm_aoi_generator.profile(anchor_digest)
@@ -606,7 +618,27 @@ class AOIManager:
             selected = [dict(aoi) for aoi in slide_data.get("llm_aois", [])]
             profile = str(slide_data["llm_aoi_profile"])
         else:
-            selected = [dict(aoi) for aoi in slide_data.get("aois", [])]
+            deterministic = [dict(aoi) for aoi in slide_data.get("aois", [])]
+            semantic = [
+                aoi
+                for aoi in deterministic
+                if (
+                    (aoi.get("source") == "pdf_text_semantic" and aoi.get("role") in CONTENT_ROLES)
+                    or aoi.get("source") in {"ocr", "ocr_image", "manual"}
+                )
+                and aoi.get("role") not in EXCLUDED_ROLES
+                and aoi.get("type") not in {"title", "footer"}
+            ]
+            if semantic:
+                selected = semantic
+            else:
+                selected = [
+                    aoi
+                    for aoi in deterministic
+                    if aoi.get("source") == "rule"
+                    and aoi.get("aoi_id") not in {"title", "bottom_region", "whole_slide"}
+                    and aoi.get("type") not in {"title", "footer"}
+                ]
             profile = "deterministic"
         if not any(aoi.get("aoi_id") == "whole_slide" for aoi in selected):
             selected.append(self.generate_rule_aois(str(slide_data.get("ocr_text", "")))[-1].to_dict())
@@ -623,6 +655,7 @@ class AOIManager:
             group_confidence=item.get("group_confidence"),
             children=item.get("children"),
             include_in_learning=bool(item.get("include_in_learning", True)),
+            role=item.get("role"),
         )
 
     def get_slide_aois(self, deck_id: str, slide_id: int) -> list[dict[str, Any]]:
@@ -704,7 +737,10 @@ class AOIManager:
 
     def _ensure_slide_data(self, deck_id: str, slide_id: int) -> dict[str, Any]:
         key = self._slide_key(deck_id, slide_id)
-        if key not in self.manifest:
+        if (
+            key not in self.manifest
+            or self.manifest[key].get("auto_aoi_version") != AUTO_AOI_SCHEMA_VERSION
+        ):
             self.process_slide(deck_id, slide_id)
         return self.manifest[key]
 
@@ -749,7 +785,25 @@ class AOIManager:
 
     @staticmethod
     def _text_box_child(box: TextBox) -> dict[str, Any]:
-        return {"text": box.text, "bbox": box.bbox, "source": box.source, "confidence": box.confidence}
+        child: dict[str, Any] = {
+            "text": box.text,
+            "bbox": box.bbox,
+            "source": box.source,
+            "confidence": box.confidence,
+        }
+        optional = {
+            "block_id": box.block_id,
+            "line_id": box.line_id,
+            "block_bbox": box.block_bbox,
+            "font_size": box.font_size,
+            "font_family": box.font_family,
+            "font_flags": box.font_flags,
+            "direction": list(box.direction) if box.direction is not None else None,
+        }
+        child.update({key: value for key, value in optional.items() if value is not None})
+        if box.source == "pdf_text" or box.starts_bullet:
+            child["starts_bullet"] = box.starts_bullet
+        return child
 
     @staticmethod
     def _special_pdf_box_type(box: TextBox) -> str | None:
