@@ -612,6 +612,25 @@ class TestStreamlitAttentiveSlides(
             2,
         )
 
+    def test_live_binding_reloads_browser_when_aoi_signature_changes(self) -> None:
+        binding = self.function_source("_bind_main_live_resources")
+        signature = self.function_source("_active_aoi_signature")
+
+        self.assertIn("bound_aoi_signature", self.source)
+        self.assertIn("aoi_changed", binding)
+        self.assertIn("deck_changed or aoi_changed", binding)
+        self.assertEqual(binding.count("resources.provider.set_browser(browser)"), 1)
+        self.assertIn("resources.inbox.clear()", binding)
+        self.assertIn("resources.snapshots.clear()", binding)
+        self.assertIn("resources.ingress.observations.clear()", binding)
+        self.assertIn('"aoi_profile"', signature)
+        self.assertIn('"aoi_id"', signature)
+        self.assertIn('"bbox"', signature)
+        self.assertIn('"type"', signature)
+        self.assertIn('"text"', signature)
+        self.assertIn('"name"', signature)
+        self.assertIn("hashlib.sha256", signature)
+
     def test_live_fragment_runs_only_while_media_is_enabled(self) -> None:
         interaction = self.function_source("_render_manual_interaction")
 

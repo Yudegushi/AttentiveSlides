@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 
+import hashlib
 import json
 from io import BytesIO
 import os
@@ -157,6 +158,7 @@ class MainLiveResources:
     service: LiveIngressService
     bound_deck_id: str | None = None
     bound_slide_id: int | None = None
+    bound_aoi_signature: str | None = None
 
 
 @st.cache_resource
@@ -680,23 +682,39 @@ def _bind_main_live_resources(
     view: MainUIViewModel,
 ) -> None:
     """Bind the canonical browser before media can be armed."""
-    if resources.bound_deck_id != view.deck_id:
+    signature = _active_aoi_signature(view)
+    deck_changed = resources.bound_deck_id != view.deck_id
+    slide_changed = resources.bound_slide_id != view.active_slide_id
+    aoi_changed = (
+        not deck_changed
+        and not slide_changed
+        and getattr(resources, "bound_aoi_signature", None) != signature
+    )
+
+    if deck_changed or aoi_changed:
         resources.service.set_master_enabled(False)
         resources.service.reconcile_once()
         st.session_state["main_live_master_enabled"] = False
-        resources.provider.set_browser(browser)
+
+    # UploadedDeckWorkspace is intentionally recreated on each app rerun.
+    # Keep the cached live graph pointed at the current workspace/browser.
+    resources.provider.set_browser(browser)
+
+    if deck_changed or aoi_changed:
         resources.inbox.clear()
         resources.snapshots.clear()
         resources.ingress.observations.clear()
         resources.runtime.set_slide(view.active_slide_id)
         resources.bound_deck_id = view.deck_id
         resources.bound_slide_id = view.active_slide_id
+        resources.bound_aoi_signature = signature
         return
 
-    if resources.bound_slide_id != view.active_slide_id:
+    if slide_changed:
         resources.ingress.observations.clear()
         resources.runtime.set_slide(view.active_slide_id)
         resources.bound_slide_id = view.active_slide_id
+        resources.bound_aoi_signature = signature
 
 
 def _render_live_controls(
@@ -991,8 +1009,36 @@ def _render_llm_aoi_deck_batch(
     st.rerun()
 
 
+def _active_aoi_signature(view: MainUIViewModel) -> str:
+    payload = {
+        "deck_id": view.deck_id,
+        "slide_id": view.active_slide_id,
+        "aoi_profile": view.active_slide.aoi_profile,
+        "aois": sorted(
+            (
+                {
+                    "aoi_id": aoi.aoi_id,
+                    "bbox": list(aoi.bbox),
+                    "type": aoi.type,
+                    "text": aoi.text,
+                    "name": aoi.name,
+                }
+                for aoi in view.active_slide.aois
+            ),
+            key=lambda item: item["aoi_id"],
+        ),
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _sync_active_aoi_signature(view: MainUIViewModel) -> None:
-    signature = f"{view.deck_id}:{view.active_slide_id}:{view.active_slide.aoi_profile}"
+    signature = _active_aoi_signature(view)
     if st.session_state.get("main_active_aoi_signature") != signature:
         _reset_turn_state()
         st.session_state["main_active_aoi_signature"] = signature
