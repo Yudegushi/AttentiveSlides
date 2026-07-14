@@ -27,6 +27,7 @@ CROSS_BLOCK_GAP_MULTIPLIER = 1.80
 COLUMN_OVERLAP_RATIO = 0.25
 ALIGNMENT_LINE_HEIGHT_MULTIPLIER = 2.75
 DIRECTION_TOLERANCE = 0.05
+BODY_FONT_SAMPLE_RATIO = 0.70
 
 
 @dataclass(frozen=True)
@@ -89,13 +90,16 @@ def build_page_layout_profile(
         for line in lines
         if normalize_text(line.text) not in normalized_top | normalized_bottom
         and not _is_page_number(line)
+        and line.y_min < BOTTOM_MARGIN_BAND
     ]
-    sizes = [float(line.font_size) for line in body_candidates if line.font_size and line.font_size > 0]
+    sizes = sorted(float(line.font_size) for line in body_candidates if line.font_size and line.font_size > 0)
+    body_sample_size = max(1, int(len(sizes) * BODY_FONT_SAMPLE_RATIO)) if sizes else 0
+    body_sizes = sizes[:body_sample_size]
     heights = [line.height for line in body_candidates if line.height > 0]
     if not heights:
         heights = [line.height for line in lines if line.height > 0]
     return PageLayoutProfile(
-        median_font_size=float(median(sizes)) if sizes else 1.0,
+        median_font_size=float(median(body_sizes)) if body_sizes else 1.0,
         median_line_height=float(median(heights)) if heights else 0.03,
         repeated_top_text=normalized_top,
         repeated_bottom_text=normalized_bottom,

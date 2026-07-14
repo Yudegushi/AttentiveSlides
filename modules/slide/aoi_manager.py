@@ -127,7 +127,7 @@ class AOIManager:
         if pdf_text_boxes:
             try:
                 repeated_top_text, repeated_bottom_text = parser.extract_pdf_margin_profile(deck_id)
-            except (FileNotFoundError, ValueError):
+            except Exception:
                 pass
         image_text_boxes: list[TextBox] = []
         if allow_ocr:
@@ -435,16 +435,13 @@ class AOIManager:
         anchors = [anchor for anchor_id, anchor in grounding_by_id.items() if anchor_id in requested]
         if len(anchors) != len(anchor_ids) or not anchors:
             return None
-        if any(anchor.role in EXCLUDED_ROLES for anchor in anchors):
-            return None
-        if any(
-            anchor.source == "pdf_text_semantic" and anchor.role not in CONTENT_ROLES
-            for anchor in anchors
-        ):
+        if any(not self._is_content_grounding_aoi(anchor) for anchor in anchors):
             return None
         aoi.anchor_ids = [anchor.aoi_id for anchor in anchors]
         aoi.text = " ".join(anchor.text.strip() for anchor in anchors if anchor.text.strip())
         aoi.bbox = self._merged_aoi_bbox(anchors)
+        aoi.type = "text"
+        aoi.include_in_learning = True
         roles = {anchor.role for anchor in anchors if anchor.role}
         aoi.role = "list_item" if anchors[0].role == "list_item" else (
             next(iter(roles)) if len(roles) == 1 else "paragraph"
@@ -619,8 +616,7 @@ class AOIManager:
 
     @staticmethod
     def _same_aoi_category(first: AOI, second: AOI) -> bool:
-        visual = {"code", "diagram", "figure", "table", "formula"}
-        return (first.type in visual) == (second.type in visual)
+        return (first.type in VISUAL_AOI_TYPES) == (second.type in VISUAL_AOI_TYPES)
 
     @staticmethod
     def _bbox_iou(first: list[float], second: list[float]) -> float:
@@ -658,7 +654,6 @@ class AOIManager:
                 role=group.role,
             )
             for index, group in enumerate(groups, 1)
-            if self._bbox_area(group.bbox) >= 0.002
         ]
 
     def _excluded_text_group(self, group: TextGroup) -> dict[str, Any]:
@@ -705,9 +700,11 @@ class AOIManager:
                 "type": str(aoi.get("type", "")),
                 "role": str(aoi.get("role", "")),
                 "text": " ".join(str(aoi.get("text", "")).split()),
+                "line_count": len(aoi.get("children") or []),
             }
             for aoi in slide_data.get("aois", [])
             if aoi.get("source") in {"pdf_text_semantic", "ocr", "ocr_image"}
+            and self._is_content_grounding_aoi(self._aoi_from_dict(aoi))
         ]
         raw = json.dumps(anchors, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -736,11 +733,13 @@ class AOIManager:
             return slide_data
 
         rule_aois = [self._aoi_from_dict(item) for item in slide_data.get("aois", []) if item.get("source") == "rule"]
-        anchor_aois = [
-            self._aoi_from_dict(item)
-            for item in slide_data.get("aois", [])
-            if item.get("source") in {"pdf_text_semantic", "ocr", "ocr_image"}
-        ]
+        anchor_aois = []
+        for item in slide_data.get("aois", []):
+            if item.get("source") not in {"pdf_text_semantic", "ocr", "ocr_image"}:
+                continue
+            candidate = self._aoi_from_dict(item)
+            if self._is_content_grounding_aoi(candidate):
+                anchor_aois.append(candidate)
         try:
             llm_aois = self.reconcile_llm_aois(
                 self.build_llm_guided_aois(
@@ -765,6 +764,7 @@ class AOIManager:
                 })
                 self._save_manifest()
                 return current
+
         except Exception as exc:
             with self._lock:
                 current = self.manifest[key]
@@ -779,6 +779,14 @@ class AOIManager:
                     })
                     self._save_manifest()
                 return current
+
+    @staticmethod
+    def _is_content_grounding_aoi(aoi: AOI) -> bool:
+        if aoi.role in EXCLUDED_ROLES or aoi.type in {"title", "footer", "whole_slide"}:
+            return False
+        if aoi.source == "pdf_text_semantic":
+            return aoi.role in CONTENT_ROLES
+        return aoi.source in {"ocr", "ocr_image"}
 
     def get_llm_aoi_state(self, deck_id: str, slide_id: int) -> dict[str, Any]:
         configured = bool(self.llm_aoi_generator.is_configured())

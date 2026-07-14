@@ -249,6 +249,31 @@ class PDFParagraphGroupingTest(unittest.TestCase):
         self.assertEqual(result.content_groups[0].role, "paragraph")
         self.assertIn("Important term", result.content_groups[0].text)
 
+    def test_nonbold_title_on_sparse_slide_is_excluded(self) -> None:
+        lines = [
+            pdf_line("Sparse Slide Title", [0.10, 0.10, 0.80, 0.18], block_id=20, font_size=22.0),
+            pdf_line("Only body paragraph", [0.10, 0.36, 0.75, 0.42], block_id=21, font_size=16.0),
+            pdf_line("Page footer", [0.10, 0.91, 0.30, 0.94], block_id=23, font_size=9.0),
+        ]
+
+        result = group_pdf_text(lines)
+
+        self.assertEqual([group.text for group in result.content_groups], ["Only body paragraph"])
+        self.assertEqual(
+            [(group.role, group.text) for group in result.excluded_groups],
+            [("title", "Sparse Slide Title"), ("footer", "Page footer")],
+        )
+
+    def test_short_content_group_is_not_dropped(self) -> None:
+        line = pdf_line("OK", [0.10, 0.40, 0.15, 0.42], block_id=22, font_size=10.0)
+        with tempfile.TemporaryDirectory() as directory:
+            manager = AOIManager(directory)
+            aois = manager.build_pdf_semantic_aois([line])
+
+        self.assertEqual(len(aois), 1)
+        self.assertEqual(aois[0].text, "OK")
+        self.assertEqual(aois[0].role, "paragraph")
+
     def test_stale_auto_aoi_version_forces_reprocessing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manager = AOIManager(directory)

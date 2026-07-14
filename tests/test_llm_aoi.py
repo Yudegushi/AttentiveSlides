@@ -268,6 +268,25 @@ class LLMAOIManagerTest(unittest.TestCase):
         self.assertEqual(generator.last_text_aois[0]["role"], "paragraph")
         self.assertEqual(generator.last_text_aois[0]["line_count"], 1)
 
+    def test_generator_excludes_ocr_title_from_grounding(self):
+        generator = FakeLLMGenerator(result=[llm_item("Body paragraph")])
+        anchors = [
+            grounding_anchor("pdf_paragraph_1", "Body paragraph", [0.1, 0.3, 0.8, 0.4]),
+            AOI(
+                "ocr_title",
+                [0.1, 0.1, 0.8, 0.2],
+                "title",
+                "Slide title",
+                source="ocr",
+                children=[{"text": "Slide title", "bbox": [0.1, 0.1, 0.8, 0.2]}],
+            ),
+        ]
+        manager = self.seeded_manager(generator, anchors=anchors)
+
+        manager.process_llm_aoi("deck", 1, allow_ocr=False)
+
+        self.assertEqual([item["anchor_id"] for item in generator.last_text_aois], ["pdf_paragraph_1"])
+
     def test_timeout_and_malformed_output_fall_back_without_touching_aois(self):
         for generator in (
             FakeLLMGenerator(error=TimeoutError("  temporary   timeout  ")),
@@ -314,6 +333,18 @@ class LLMAOIManagerTest(unittest.TestCase):
         self.assertFalse(state["eligible"])
         self.assertEqual(profile, "deterministic")
         self.assertTrue(any(aoi["aoi_id"] == "whole_slide" for aoi in effective))
+
+    def test_anchor_line_count_changes_digest(self):
+        manager = self.seeded_manager(FakeLLMGenerator())
+        slide_data = manager.manifest["deck:1"]
+        original = manager._anchor_digest(slide_data)
+
+        slide_data["aois"][-1]["children"].append({
+            "text": "continuation",
+            "bbox": [0.2, 0.3, 0.4, 0.4],
+        })
+
+        self.assertNotEqual(manager._anchor_digest(slide_data), original)
 
     def test_effective_llm_always_contains_whole_slide(self):
         generator = FakeLLMGenerator(result=[llm_item("alpha beta gamma delta epsilon zeta eta theta")])
@@ -380,10 +411,12 @@ class LLMAOIProvenanceReconciliationTest(unittest.TestCase):
         grounding = [
             grounding_anchor("content", "Body", [0.10, 0.20, 0.60, 0.28]),
             grounding_anchor("heading", "Heading", [0.10, 0.10, 0.60, 0.16], role="heading"),
+            AOI("ocr_title", [0.10, 0.05, 0.70, 0.12], "title", "OCR title", source="ocr"),
         ]
         llm = [
             AOI("unknown", [], "text", "Unknown", source="llm_guided", anchor_ids=["missing"]),
             AOI("excluded", [], "text", "Heading", source="llm_guided", anchor_ids=["heading"]),
+            AOI("ocr-excluded", [], "text", "OCR title", source="llm_guided", anchor_ids=["ocr_title"]),
             AOI("visual", [0.70, 0.20, 0.90, 0.50], "diagram", "Flow", source="llm_guided"),
         ]
 
@@ -449,6 +482,28 @@ class LLMAOIProvenanceReconciliationTest(unittest.TestCase):
 
         self.assertEqual(result[0].bbox, [0.55, 0.25, 0.90, 0.70])
         self.assertEqual(result[0].type, "figure")
+
+    def test_anchored_title_type_is_canonicalized_to_text(self) -> None:
+        grounding = [grounding_anchor("a", "Body paragraph", [0.10, 0.20, 0.70, 0.30])]
+        model = AOI("model", [], "title", "Misclassified", source="llm_guided", anchor_ids=["a"])
+
+        result = self.manager.reconcile_llm_aois([model], grounding)
+
+        self.assertEqual(result[0].type, "text")
+        self.assertEqual(result[0].role, "paragraph")
+        self.assertEqual(result[0].text, "Body paragraph")
+
+    def test_mixed_visual_is_not_deduplicated_as_text(self) -> None:
+        grounding = [grounding_anchor("a", "Body paragraph", [0.10, 0.20, 0.70, 0.30])]
+        candidates = [
+            AOI("text", [], "text", "Body", source="llm_guided", anchor_ids=["a"]),
+            AOI("mixed", [0.10, 0.20, 0.70, 0.30], "mixed", "Panel", source="llm_guided"),
+        ]
+
+        result = self.manager.reconcile_llm_aois(candidates, grounding)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual({aoi.type for aoi in result}, {"text", "mixed"})
 
     def test_low_grounding_coverage_still_falls_back(self) -> None:
         grounding = [
