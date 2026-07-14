@@ -39,6 +39,7 @@ from modules.audio.voice_turn_detector import VoiceTurnDetector
 from modules.logging.interaction_logger import InteractionLogger
 from modules.slide.llm_aoi import sanitized_llm_error
 from modules.media import BrowserMediaSource
+from modules.media.browser_gaze_source import BrowserGazeSource
 from modules.media.live_ingress_service import LiveIngressService
 from modules.media.single_port_transport import FallbackMediaIngress
 
@@ -164,6 +165,7 @@ def build_main_live_resources(
     media_source = BrowserMediaSource()
     provider = ActiveDeckSlideProvider()
     snapshots = SensingSnapshotStore()
+    observations = BrowserGazeSource()
     sensing_worker = SensingWorker(
         media_source=media_source,
         slide_provider=provider,
@@ -197,6 +199,7 @@ def build_main_live_resources(
     collector = TurnContextCollector(
         slide_provider=provider,
         snapshot_store=snapshots,
+        browser_gaze_source=observations,
         aggregation_key="gaze_grid",
     )
     inbox = LatestProposalInbox()
@@ -218,6 +221,7 @@ def build_main_live_resources(
     )
     ingress = FallbackMediaIngress(
         media_source,
+        observations=observations,
         start_armed=False,
         coordinated_activation=True,
         media_stale_after_seconds=2.0,
@@ -680,12 +684,14 @@ def _bind_main_live_resources(
         resources.provider.set_browser(browser)
         resources.inbox.clear()
         resources.snapshots.clear()
+        resources.ingress.observations.clear()
         resources.runtime.set_slide(view.active_slide_id)
         resources.bound_deck_id = view.deck_id
         resources.bound_slide_id = view.active_slide_id
         return
 
     if resources.bound_slide_id != view.active_slide_id:
+        resources.ingress.observations.clear()
         resources.runtime.set_slide(view.active_slide_id)
         resources.bound_slide_id = view.active_slide_id
 
@@ -3831,7 +3837,19 @@ def _consume_live_proposal(
     )
     geometry = snapshot.geometry if snapshot is not None else None
 
-    if geometry is None:
+    if raw.gaze_source == "eyetheia_local":
+        proposal = (
+            raw
+            if geometry is not None
+            and raw.layout_revision == geometry.layout_revision
+            else replace(
+                raw,
+                predicted_aoi_id=None,
+                target_confidence=0.0,
+                alternatives=(),
+            )
+        )
+    elif geometry is None:
         proposal = replace(
             raw,
             predicted_aoi_id=None,
@@ -4015,11 +4033,13 @@ def _render_live_periodic(
             f"{type(exc).__name__}: {exc}"
         )
     session = resources.ingress.session_snapshot()
+    ingress_stats = resources.ingress.stats_payload()
     runtime_state = resources.runtime.controller.state.value
     st.caption(
         f"Live transport: {'armed' if session.armed else 'off'} · "
         f"Runtime: {runtime_state} · "
-        f"Media: {'ready' if session.video_fresh and session.audio_fresh else 'waiting'}"
+        f"Media: {'ready' if session.video_fresh and session.audio_fresh else 'waiting'} · "
+        f"Local gaze: {'ready' if ingress_stats['gaze_fresh'] else 'fallback'}"
     )
     _render_live_interaction(view)
     if st.session_state.pop("main_live_full_rerun_requested", False):

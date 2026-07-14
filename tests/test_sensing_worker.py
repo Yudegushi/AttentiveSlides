@@ -51,10 +51,12 @@ class FakeSlideProvider:
 class FakeExtractor:
     def __init__(self) -> None:
         self.values: list[int] = []
+        self.shapes: list[tuple[int, ...]] = []
         self.closed = 0
 
     def extract(self, frame):
         self.values.append(int(frame[0, 0, 0]))
+        self.shapes.append(frame.shape)
         return object()
 
     def close(self) -> None:
@@ -179,8 +181,10 @@ class SensingWorkerTest(unittest.TestCase):
         snapshot = self.store.latest_valid_for_slide(1)
 
         self.assertEqual(extractor.values, [2])
+        self.assertEqual(extractor.shapes, [(4, 4, 3)])
         self.assertEqual(snapshot.source_timestamp, 2.0)
         self.assertEqual(snapshot.frame.gaze_prediction.predicted_aoi_id, "target")
+        self.assertTrue(snapshot.frame.learning_state.face_detected)
         self.assertTrue(snapshot.manifest_identity)
         worker.set_slide(2)
         self.assertIsNone(self.store.latest_valid_for_slide(1))

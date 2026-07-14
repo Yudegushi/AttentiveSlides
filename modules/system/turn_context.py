@@ -7,7 +7,9 @@ import hashlib
 import json
 
 from modules.common.schemas import GazePrediction, LearningState
+from modules.media.browser_gaze_source import BrowserGazeSource
 from modules.system.adapters import SensingFrame, SlideFrame, SlideProvider
+from modules.system.point_gaze import aggregate_point_gaze
 from modules.system.sensing_snapshot_store import SensingSnapshotStore
 
 
@@ -26,6 +28,8 @@ class FrozenTurnContext:
 class AggregatedSensing:
     frame: SensingFrame
     evidence: list[str]
+    gaze_source: str = "cloud_grid"
+    layout_revision: int = -1
 
 
 def manifest_identity_for_frame(frame: SlideFrame) -> str:
@@ -59,6 +63,7 @@ class TurnContextCollector:
         minimum_dwell_seconds: float = 0.15,
         max_sample_dwell_seconds: float = 0.5,
         aggregation_key: str = "aoi_id",
+        browser_gaze_source: BrowserGazeSource | None = None,
     ) -> None:
         if sensing_lookback_seconds < 0:
             raise ValueError("sensing_lookback_seconds must be non-negative")
@@ -72,6 +77,7 @@ class TurnContextCollector:
         self.minimum_dwell_seconds = float(minimum_dwell_seconds)
         self.max_sample_dwell_seconds = float(max_sample_dwell_seconds)
         self.aggregation_key = aggregation_key
+        self.browser_gaze_source = browser_gaze_source
 
     def freeze_start(self, *, slide_id: int, speech_started_at: float) -> FrozenTurnContext:
         frame = self.slide_provider.get_slide_frame(slide_id)
@@ -106,13 +112,57 @@ class TurnContextCollector:
             start_processed_at=context.sensing_window_start,
             end_processed_at=context.speech_ended_at,
         )
-        valid = [
+        matching_snapshots = [
             snapshot
             for snapshot in snapshots
             if snapshot.is_valid
             and snapshot.invalid_reason is None
             and snapshot.manifest_identity == context.manifest_identity
-            and snapshot.frame.gaze_prediction.gaze_grid != "unknown"
+        ]
+        matching_snapshots.sort(key=lambda snapshot: snapshot.processed_at)
+        if self.browser_gaze_source is not None:
+            frame = self.slide_provider.get_slide_frame(context.slide_id)
+            if manifest_identity_for_frame(frame) == context.manifest_identity:
+                point = aggregate_point_gaze(
+                    self.browser_gaze_source.gaze_in_window(
+                        start_received_at=context.sensing_window_start,
+                        end_received_at=context.speech_ended_at,
+                    ),
+                    frame.aois,
+                    speech_ended_at=context.speech_ended_at,
+                    minimum_dwell_seconds=self.minimum_dwell_seconds,
+                    max_sample_dwell_seconds=self.max_sample_dwell_seconds,
+                )
+                if point is not None:
+                    gaze = GazePrediction(
+                        slide_id=context.slide_id,
+                        gaze_grid="point",
+                        predicted_aoi_id=point.predicted_aoi_id,
+                        confidence=point.target_confidence,
+                        stable_duration_sec=point.stable_duration_sec,
+                        alternative_targets=list(point.alternatives),
+                    )
+                    learning = (
+                        matching_snapshots[-1].frame.learning_state
+                        if matching_snapshots
+                        else LearningState(
+                            face_detected=False,
+                            screen_facing_score=0.0,
+                        )
+                    )
+                    return AggregatedSensing(
+                        frame=SensingFrame(
+                            gaze_prediction=gaze,
+                            learning_state=learning,
+                        ),
+                        evidence=list(point.evidence),
+                        gaze_source="eyetheia_local",
+                        layout_revision=point.layout_revision,
+                    )
+        valid = [
+            snapshot
+            for snapshot in matching_snapshots
+            if snapshot.frame.gaze_prediction.gaze_grid != "unknown"
             and (
                 self.aggregation_key == "gaze_grid"
                 or snapshot.frame.gaze_prediction.predicted_aoi_id

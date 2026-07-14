@@ -36,6 +36,7 @@ class LiveInteractionProposal:
     target_confidence: float = 0.0
     alternatives: tuple[TargetCandidate, ...] = ()
     original_speech_transcript: str = ""
+    gaze_source: str = "cloud_grid"
 
 
 @dataclass(frozen=True)
@@ -294,19 +295,33 @@ class ProposalTurnRunner:
                 pending_confirmation=False,
                 error=audio_result.error or audio_result.status,
             )
-        gaze = self.context_collector.aggregate(context).frame.gaze_prediction
+        aggregated = self.context_collector.aggregate(context)
+        gaze = aggregated.frame.gaze_prediction
         transcript = audio_result.transcript.text
         self.inbox.publish(
             LiveInteractionProposal(
                 interaction_id=self.id_factory(),
                 deck_id=context.deck_id,
                 slide_id=context.slide_id,
-                layout_revision=-1,
+                layout_revision=aggregated.layout_revision,
                 transcript=transcript,
                 gaze_grid=gaze.gaze_grid,
                 gaze_confidence=gaze.confidence,
                 stable_duration_sec=gaze.stable_duration_sec,
+                predicted_aoi_id=gaze.predicted_aoi_id,
+                target_confidence=(
+                    gaze.confidence if gaze.predicted_aoi_id else 0.0
+                ),
+                alternatives=tuple(
+                    TargetCandidate(
+                        aoi_id=str(item["aoi_id"]),
+                        score=float(item["score"]),
+                        evidence=("local EyeTheia dwell",),
+                    )
+                    for item in gaze.alternative_targets
+                ),
                 original_speech_transcript=transcript,
+                gaze_source=aggregated.gaze_source,
             )
         )
         return ProposalTurnOutcome(pending_confirmation=False)

@@ -316,6 +316,61 @@ class ProposalTurnRunnerTest(unittest.TestCase):
         self.assertEqual(proposal.transcript, "What is this?")
         self.assertEqual(proposal.gaze_grid, "middle_left")
         self.assertEqual(proposal.layout_revision, -1)
+        self.assertEqual(proposal.gaze_source, "cloud_grid")
+
+    def test_local_point_provenance_and_resolved_target_are_preserved(self):
+        from modules.system.live_ui_bridge import (
+            LatestProposalInbox,
+            ProposalTurnRunner,
+        )
+
+        gaze = GazePrediction(
+            slide_id=2,
+            gaze_grid="point",
+            predicted_aoi_id="right",
+            confidence=0.82,
+            stable_duration_sec=0.4,
+            alternative_targets=[
+                {"aoi_id": "right", "score": 0.75},
+                {"aoi_id": "left", "score": 0.25},
+            ],
+        )
+        collector = SimpleNamespace(
+            aggregate=lambda _context: AggregatedSensing(
+                frame=SensingFrame(gaze, LearningState()),
+                evidence=["local dwell"],
+                gaze_source="eyetheia_local",
+                layout_revision=7,
+            )
+        )
+        inbox = LatestProposalInbox()
+        runner = ProposalTurnRunner(
+            context_collector=collector,
+            inbox=inbox,
+            id_factory=lambda: "interaction-local",
+        )
+        audio = SimpleNamespace(
+            status="completed",
+            transcript=Transcript("Explain this"),
+            turn=SimpleNamespace(started_at=1.0, ended_at=2.0),
+            error=None,
+        )
+
+        runner.run(audio, SimpleNamespace(deck_id="deck-a", slide_id=2))
+        proposal = inbox.pop()
+
+        self.assertEqual(proposal.gaze_source, "eyetheia_local")
+        self.assertEqual(proposal.layout_revision, 7)
+        self.assertEqual(proposal.predicted_aoi_id, "right")
+        self.assertEqual(proposal.target_confidence, 0.82)
+        self.assertEqual(
+            [candidate.aoi_id for candidate in proposal.alternatives],
+            ["right", "left"],
+        )
+        self.assertEqual(
+            proposal.alternatives[0].evidence,
+            ("local EyeTheia dwell",),
+        )
 
     def test_grid_passthrough_uses_grid_as_temporary_member_key(self):
         from modules.system.live_ui_bridge import map_gaze_grid_only

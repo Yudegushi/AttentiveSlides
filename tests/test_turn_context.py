@@ -1,6 +1,7 @@
 import unittest
 
 from modules.common.schemas import AOI, GazePrediction, LearningState
+from modules.media.browser_gaze_source import BrowserGazeSource
 from modules.system.adapters import SensingFrame, SlideFrame
 from modules.system.sensing_snapshot_store import SensingSnapshot, SensingSnapshotStore
 from modules.system.turn_context import TurnContextCollector
@@ -23,7 +24,13 @@ class FakeSlideProvider:
         )
 
 
-def frame(slide_id, target, confidence=0.8, grid="middle_center"):
+def frame(
+    slide_id,
+    target,
+    confidence=0.8,
+    grid="middle_center",
+    learning_state=None,
+):
     return SensingFrame(
         gaze_prediction=GazePrediction(
             slide_id=slide_id,
@@ -32,8 +39,47 @@ def frame(slide_id, target, confidence=0.8, grid="middle_center"):
             confidence=confidence,
             stable_duration_sec=0.2,
         ),
-        learning_state=LearningState(),
+        learning_state=learning_state or LearningState(),
     )
+
+
+class FakeClock:
+    def __init__(self, value=0.0):
+        self.value = value
+
+    def __call__(self):
+        return self.value
+
+
+def geometry_payload():
+    return {
+        "deck_id": "deck-live",
+        "slide_id": 2,
+        "layout_revision": 9,
+        "browser_timestamp_ms": 1000.0,
+        "viewport_width": 1000,
+        "viewport_height": 800,
+        "device_pixel_ratio": 1,
+        "slide_rect": {"x1": 0, "y1": 0, "x2": 1000, "y2": 800},
+        "aoi_rects": {
+            "alpha": {"x1": 100, "y1": 100, "x2": 400, "y2": 400},
+            "beta": {"x1": 500, "y1": 100, "x2": 800, "y2": 400},
+        },
+    }
+
+
+def point_payload(sequence=1, x=200.0):
+    return {
+        "sequence": sequence,
+        "browser_timestamp_ms": 1200.0 + sequence,
+        "x_css": x,
+        "y_css": 200.0,
+        "viewport_width": 1000,
+        "viewport_height": 800,
+        "valid": True,
+        "face_detected": True,
+        "source": "eyetheia_local",
+    }
 
 
 class TurnContextCollectorTest(unittest.TestCase):
@@ -56,6 +102,7 @@ class TurnContextCollectorTest(unittest.TestCase):
         grid="middle_center",
         valid=True,
         manifest=True,
+        learning_state=None,
     ):
         self.store.put(
             SensingSnapshot(
@@ -63,7 +110,13 @@ class TurnContextCollectorTest(unittest.TestCase):
                 source_timestamp=processed_at,
                 source_timestamp_clock="browser_performance_seconds",
                 processed_at=processed_at,
-                frame=frame(context.slide_id, target, confidence, grid=grid),
+                frame=frame(
+                    context.slide_id,
+                    target,
+                    confidence,
+                    grid=grid,
+                    learning_state=learning_state,
+                ),
                 is_valid=valid,
                 invalid_reason=None if valid else "no_face",
                 manifest_identity=context.manifest_identity if manifest else None,
@@ -159,6 +212,79 @@ class TurnContextCollectorTest(unittest.TestCase):
         self.assertEqual(gaze.gaze_grid, "middle_left")
         self.assertIsNone(gaze.predicted_aoi_id)
         self.assertGreater(gaze.confidence, 0.5)
+
+    def test_local_point_dwell_wins_and_keeps_latest_cloud_learning_state(self):
+        clock = FakeClock(10.0)
+        observations = BrowserGazeSource(clock=clock)
+        observations.accept_geometry(geometry_payload())
+        observations.accept_gaze(point_payload(sequence=1, x=200))
+        clock.value = 10.3
+        observations.accept_gaze(point_payload(sequence=2, x=200))
+        collector = TurnContextCollector(
+            slide_provider=FakeSlideProvider(),
+            snapshot_store=self.store,
+            browser_gaze_source=observations,
+            aggregation_key="gaze_grid",
+        )
+        context = collector.freeze_end(
+            collector.freeze_start(slide_id=2, speech_started_at=10.0),
+            speech_ended_at=10.5,
+            current_slide_id=2,
+        )
+        learning = LearningState(head_down=True, fatigue_signal_score=0.7)
+        self.snapshot(
+            context,
+            10.1,
+            "temporary-grid-key",
+            grid="middle_right",
+            learning_state=learning,
+        )
+
+        aggregated = collector.aggregate(context)
+
+        self.assertEqual(aggregated.gaze_source, "eyetheia_local")
+        self.assertEqual(aggregated.layout_revision, 9)
+        self.assertEqual(
+            aggregated.frame.gaze_prediction.predicted_aoi_id,
+            "alpha",
+        )
+        self.assertEqual(aggregated.frame.gaze_prediction.gaze_grid, "point")
+        self.assertEqual(aggregated.frame.learning_state, learning)
+
+    def test_insufficient_point_evidence_preserves_exact_grid_result(self):
+        clock = FakeClock(10.45)
+        observations = BrowserGazeSource(clock=clock)
+        observations.accept_geometry(geometry_payload())
+        observations.accept_gaze(point_payload())
+        point_collector = TurnContextCollector(
+            slide_provider=FakeSlideProvider(),
+            snapshot_store=self.store,
+            browser_gaze_source=observations,
+            aggregation_key="gaze_grid",
+        )
+        grid_collector = TurnContextCollector(
+            slide_provider=FakeSlideProvider(),
+            snapshot_store=self.store,
+            aggregation_key="gaze_grid",
+        )
+        context = point_collector.freeze_end(
+            point_collector.freeze_start(slide_id=2, speech_started_at=10.0),
+            speech_ended_at=10.5,
+            current_slide_id=2,
+        )
+        self.snapshot(
+            context,
+            10.0,
+            "temporary-grid-key",
+            confidence=0.9,
+            grid="middle_left",
+        )
+
+        fallback = point_collector.aggregate(context)
+        expected = grid_collector.aggregate(context)
+
+        self.assertEqual(fallback.gaze_source, "cloud_grid")
+        self.assertEqual(fallback, expected)
 
 
 if __name__ == "__main__":

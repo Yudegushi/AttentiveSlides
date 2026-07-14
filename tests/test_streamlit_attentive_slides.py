@@ -538,6 +538,9 @@ class TestStreamlitAttentiveSlides(
         self.assertNotIn("LiveTurnRunner", source)
         self.assertNotIn("LiveTutorAdapter", source)
         self.assertNotIn("InteractionLogger", source)
+        self.assertEqual(source.count("BrowserGazeSource()"), 1)
+        self.assertIn("browser_gaze_source=observations", source)
+        self.assertIn("observations=observations", source)
 
     def test_capture_is_outside_periodic_fragment(self) -> None:
         controls = self.function_source("_render_live_controls")
@@ -559,6 +562,24 @@ class TestStreamlitAttentiveSlides(
         self.assertIn("session_snapshot", periodic)
         self.assertIn("controller.state.value", periodic)
         self.assertIn("Media:", periodic)
+        self.assertIn("Local gaze:", periodic)
+        self.assertIn("gaze_fresh", periodic)
+
+    def test_live_proposal_uses_point_revision_or_latest_grid_geometry(self) -> None:
+        consume = self.function_source("_consume_live_proposal")
+
+        self.assertIn('raw.gaze_source == "eyetheia_local"', consume)
+        self.assertIn("raw.layout_revision == geometry.layout_revision", consume)
+        self.assertIn("resolve_grid_target", consume)
+        self.assertIn("latest_geometry_for", consume)
+
+    def test_deck_and_slide_binding_clear_browser_observations(self) -> None:
+        binding = self.function_source("_bind_main_live_resources")
+
+        self.assertEqual(
+            binding.count("resources.ingress.observations.clear()"),
+            2,
+        )
 
     def test_live_fragment_runs_only_while_media_is_enabled(self) -> None:
         interaction = self.function_source("_render_manual_interaction")
