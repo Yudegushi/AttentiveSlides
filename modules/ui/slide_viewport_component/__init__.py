@@ -23,6 +23,7 @@ def render_slide_viewport(
     layout_revision: int,
     drawing_enabled: bool,
     show_aoi_overlay: bool,
+    display_width_percent: int,
     key: str,
 ) -> dict[str, object] | None:
     if os.environ.get("ATTENTIVE_DISABLE_CANVAS_FOR_APPTEST") == "1":
@@ -36,6 +37,7 @@ def render_slide_viewport(
         f"data:{mime_type};base64,"
         + base64.b64encode(image_path.read_bytes()).decode("ascii")
     )
+    bounded_width = max(50, min(100, int(display_width_percent)))
     value: Any = _component()(
         deck_id=deck_id,
         slide_id=slide.slide_id,
@@ -51,6 +53,7 @@ def render_slide_viewport(
         ],
         drawing_enabled=bool(drawing_enabled),
         show_aoi_overlay=bool(show_aoi_overlay),
+        display_width_percent=bounded_width,
         default=None,
         key=key,
     )

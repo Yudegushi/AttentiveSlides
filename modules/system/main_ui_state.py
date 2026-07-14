@@ -94,6 +94,16 @@ class MainUIViewModel:
 
 
 
+def normalize_main_slide_width_percent(value: object) -> int:
+    """Clamp and snap the persisted slide width preference."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 100
+    snapped = int(round(numeric / 5.0) * 5)
+    return max(50, min(100, snapped))
+
+
 def build_main_turn_defaults() -> dict[str, Any]:
     """Return fresh defaults for one manual tutoring turn."""
     return {

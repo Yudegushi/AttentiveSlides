@@ -7,7 +7,7 @@
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
     #root { width: 100%; }
-    #slide { position: relative; width: 100%; line-height: 0; user-select: none; }
+    #slide { position: relative; width: 100%; margin-inline: auto; line-height: 0; user-select: none; }
     #slide img { display: block; width: 100%; height: auto; border-radius: 12px; }
     #overlay { position: absolute; inset: 0; pointer-events: none; }
     .aoi { position: absolute; border: 2px solid rgba(15, 118, 110, .72); background: rgba(45, 212, 191, .10); }
@@ -265,6 +265,9 @@
         slide = document.createElement("div");
         slide.id = "slide";
         slide.className = args.drawing_enabled ? "drawing" : "";
+        const requestedWidth = Number(args.display_width_percent);
+        const displayWidth = Math.max(50, Math.min(100, Number.isFinite(requestedWidth) ? requestedWidth : 100));
+        slide.style.width = `${displayWidth}%`;
         image = document.createElement("img");
         image.alt = `Slide ${args.slide_id}`;
         image.draggable = false;

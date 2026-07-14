@@ -77,6 +77,16 @@ def make_slide_payload(
 
 
 class TestMainUIState(unittest.TestCase):
+    def test_slide_width_is_clamped_and_snapped(self) -> None:
+        from modules.system.main_ui_state import (
+            normalize_main_slide_width_percent,
+        )
+
+        self.assertEqual(normalize_main_slide_width_percent(None), 100)
+        self.assertEqual(normalize_main_slide_width_percent(49), 50)
+        self.assertEqual(normalize_main_slide_width_percent(73), 75)
+        self.assertEqual(normalize_main_slide_width_percent(101), 100)
+
     def test_main_interaction_log_is_exactly_once(self) -> None:
         logged: list[str] = []
         payloads: list[dict] = []
@@ -526,6 +536,7 @@ class TestMainUIState(unittest.TestCase):
             },
             "main_active_slide_id": 5,
             "main_cloud_text_allowed": False,
+            "main_slide_width_percent": 75,
         }
 
         reset_main_turn_state(state)
@@ -545,6 +556,11 @@ class TestMainUIState(unittest.TestCase):
 
         self.assertFalse(
             state["main_cloud_text_allowed"]
+        )
+
+        self.assertEqual(
+            state["main_slide_width_percent"],
+            75,
         )
 
 

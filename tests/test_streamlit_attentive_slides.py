@@ -359,6 +359,45 @@ class TestStreamlitAttentiveSlides(
         self.assertNotIn("st_canvas", self.source)
         self.assertNotIn("streamlit_drawable_canvas", self.source)
 
+        slider_calls = [
+            node
+            for node in ast.walk(function)
+            if (
+                isinstance(node, ast.Call)
+                and dotted_name(node.func).split(".")[-1] == "slider"
+            )
+        ]
+        self.assertEqual(len(slider_calls), 1)
+        slider = slider_calls[0]
+        self.assertEqual(constant_string(slider.args[0]), "Slide size")
+        self.assertEqual(keyword_node(slider, "min_value").value, 50)
+        self.assertEqual(keyword_node(slider, "max_value").value, 100)
+        self.assertEqual(keyword_node(slider, "step").value, 5)
+        self.assertEqual(
+            keyword_string(slider, "key"),
+            "main_slide_width_percent",
+        )
+
+        statement_calls = [
+            {
+                dotted_name(node.func).split(".")[-1]
+                for node in ast.walk(statement)
+                if isinstance(node, ast.Call)
+            }
+            for statement in function.body
+        ]
+        slider_statement = next(
+            index
+            for index, names in enumerate(statement_calls)
+            if "slider" in names
+        )
+        render_statement = next(
+            index
+            for index, names in enumerate(statement_calls)
+            if "render_slide_viewport" in names
+        )
+        self.assertEqual(render_statement, slider_statement + 1)
+
     def test_production_live_graph_has_no_second_tutor_path(self) -> None:
         source = self.function_source("build_main_live_resources")
 

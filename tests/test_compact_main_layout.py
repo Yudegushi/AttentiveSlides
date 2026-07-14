@@ -221,12 +221,15 @@ class TestCompactMainLayout(
     def test_viewport_component_replaces_region_sliders(
         self,
     ) -> None:
+        function = self.functions[
+            "_render_slide_workspace"
+        ]
         calls = self.calls_of(
             "_render_slide_workspace"
         )
 
         slider_calls = [
-            call.lineno
+            call
             for call in calls
             if (
                 dotted_name(
@@ -237,9 +240,43 @@ class TestCompactMainLayout(
         ]
 
         self.assertEqual(
-            slider_calls,
-            [],
+            len(slider_calls),
+            1,
         )
+        slider = slider_calls[0]
+        self.assertEqual(slider.args[0].value, "Slide size")
+        keywords = {
+            keyword.arg: keyword.value.value
+            for keyword in slider.keywords
+            if (
+                keyword.arg is not None
+                and isinstance(keyword.value, ast.Constant)
+            )
+        }
+        self.assertEqual(keywords["min_value"], 50)
+        self.assertEqual(keywords["max_value"], 100)
+        self.assertEqual(keywords["step"], 5)
+        self.assertEqual(keywords["key"], "main_slide_width_percent")
+
+        statement_calls = [
+            {
+                dotted_name(node.func).split(".")[-1]
+                for node in ast.walk(statement)
+                if isinstance(node, ast.Call)
+            }
+            for statement in function.body
+        ]
+        slider_statement = next(
+            index
+            for index, names in enumerate(statement_calls)
+            if "slider" in names
+        )
+        render_statement = next(
+            index
+            for index, names in enumerate(statement_calls)
+            if "render_slide_viewport" in names
+        )
+        self.assertEqual(render_statement, slider_statement + 1)
 
         self.assertIn(
             "render_slide_viewport",

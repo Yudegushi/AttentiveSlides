@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
+import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from modules.system.main_ui_state import MainUISlide
 
@@ -108,14 +109,53 @@ class SlideViewportComponentContractTest(unittest.TestCase):
                 layout_revision=0,
                 drawing_enabled=False,
                 show_aoi_overlay=False,
+                display_width_percent=100,
                 key="test-viewport",
             )
 
         self.assertIsNone(value)
 
+    def test_display_width_is_passed_to_declared_component(self):
+        from modules.ui.slide_viewport_component import render_slide_viewport
+
+        declared_component = Mock(return_value={"status": "ok"})
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "slide.png"
+            image_path.write_bytes(b"png")
+            slide = MainUISlide(
+                slide_id=1,
+                slide_text="slide",
+                neighbor_slide_text="",
+                aois=(),
+                image_path=str(image_path),
+            )
+            with patch(
+                "modules.ui.slide_viewport_component._component",
+                return_value=declared_component,
+            ):
+                value = render_slide_viewport(
+                    deck_id="deck-a",
+                    slide=slide,
+                    layout_revision=0,
+                    drawing_enabled=False,
+                    show_aoi_overlay=False,
+                    display_width_percent=75,
+                    key="test-viewport",
+                )
+
+        self.assertEqual(value, {"status": "ok"})
+        self.assertEqual(
+            declared_component.call_args.kwargs["display_width_percent"],
+            75,
+        )
+
     def test_static_component_uses_parent_viewport_protocol(self):
         component = self.component_source()
 
+        self.assertIn("margin-inline: auto", component)
+        self.assertIn("display_width_percent", component)
+        self.assertIn("slide.style.width", component)
+        self.assertIn("image.getBoundingClientRect()", component)
         self.assertIn("window.frameElement.getBoundingClientRect()", component)
         self.assertIn("window.parent.innerWidth", component)
         self.assertIn("ResizeObserver", component)
@@ -174,6 +214,17 @@ class SlideViewportComponentContractTest(unittest.TestCase):
         self.assertIn("!preserveManualBBox", component)
         self.assertIn("lastRequestedRevision = requestedRevision", component)
         self.assertIn("showManualBBox(manualBBox)", component)
+
+        identity_start = component.index(
+            "const requestedRevision = Number(nextArgs.layout_revision)"
+        )
+        identity_end = component.index("args = nextArgs", identity_start)
+        reset_identity = component[identity_start:identity_end]
+        self.assertIn("args.deck_id", reset_identity)
+        self.assertIn("args.slide_id", reset_identity)
+        self.assertIn("nextArgs.drawing_enabled", reset_identity)
+        self.assertIn("requestedRevision", reset_identity)
+        self.assertNotIn("display_width_percent", reset_identity)
 
     def test_layout_listeners_use_one_trailing_debounced_report(self):
         component = self.component_source()

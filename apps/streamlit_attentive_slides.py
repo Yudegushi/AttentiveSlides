@@ -72,6 +72,7 @@ from modules.system.main_ui_state import (
     build_main_live_defaults,
     build_main_turn_defaults,
     build_main_ui_view_model,
+    normalize_main_slide_width_percent,
     reset_main_conversation_state,
     reset_main_live_turn_state,
     reset_main_turn_state,
@@ -382,6 +383,7 @@ def _initialize_global_state() -> None:
         "main_cloud_text_allowed": True,
         "main_show_aoi_overlay": True,
         "main_canvas_revision": 0,
+        "main_slide_width_percent": 100,
         "main_selection_matches": [],
         "main_selection_text": "",
         "main_selection_error": None,
@@ -463,6 +465,12 @@ def _normalized_range(
 
 def _normalize_widget_state() -> None:
     """Normalize persisted state before widgets are instantiated."""
+    st.session_state[
+        "main_slide_width_percent"
+    ] = normalize_main_slide_width_percent(
+        st.session_state.get("main_slide_width_percent")
+    )
+
     boolean_defaults = {
         "main_cloud_text_allowed": True,
         "main_history_enabled": True,
@@ -1837,6 +1845,17 @@ def _render_slide_workspace(
     if not drawing_enabled:
         _set_whole_slide_target(view)
 
+    st.slider(
+        "Slide size",
+        min_value=50,
+        max_value=100,
+        step=5,
+        key="main_slide_width_percent",
+        help=(
+            "Resize the displayed slide while preserving normalized AOI "
+            "geometry."
+        ),
+    )
     payload = render_slide_viewport(
         deck_id=view.deck_id,
         slide=view.active_slide,
@@ -1849,6 +1868,9 @@ def _render_slide_workspace(
         drawing_enabled=drawing_enabled,
         show_aoi_overlay=bool(
             st.session_state["main_show_aoi_overlay"]
+        ),
+        display_width_percent=int(
+            st.session_state["main_slide_width_percent"]
         ),
         key=(
             "main_slide_viewport_"
