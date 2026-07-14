@@ -13,11 +13,12 @@ from pathlib import Path
 from typing import Any
 
 
-PROMPT_SCHEMA_VERSION = "attentive-llm-aoi-v1"
+PROMPT_SCHEMA_VERSION = "attentive-llm-aoi-v2"
 ALLOWED_AOI_TYPES = {
     "title", "text", "figure", "diagram", "table", "formula", "code",
     "caption", "footer", "axis_label", "mixed", "whole_slide",
 }
+TEXT_AOI_TYPES = frozenset({"title", "text", "caption", "footer", "axis_label"})
 
 
 def sanitized_llm_error(error: Exception) -> str:
@@ -117,12 +118,21 @@ class LLMAOIGenerator:
     @staticmethod
     def _prompt(slide_text: str, rule_aois: list[dict[str, Any]], text_aois: list[dict[str, Any]]) -> str:
         return (
-            "Generate one flat semantic AOI list. The image is visual truth; PDF/OCR AOIs are anchors; "
-            "rule AOIs are coarse hints. Never return parents, children, containers, duplicates, or invented text. "
-            "Keep each complete sentence/list item and each code/table/diagram/formula/image panel together. "
-            "Allowed types: title,text,figure,diagram,table,formula,code,caption,footer,axis_label,mixed. "
-            "Return {\"aois\":[{\"aoi_id\":\"llm_aoi_1\",\"bbox\":[0.1,0.1,0.5,0.3],"
-            "\"type\":\"text\",\"text\":\"...\",\"confidence\":0.85}]}.\n"
+            "Generate one flat semantic AOI list. The image is visual truth; paragraph anchors are text provenance; "
+            "rule AOIs are coarse visual hints. Never return parents, children, containers, duplicates, or invented text. "
+            "One visual paragraph or one list item equals one text AOI. "
+            "Rendered line wrapping is never an AOI boundary. "
+            "Keep multiple complete sentences together when they share one visual paragraph. "
+            "Do not return titles, headings, headers, footers, or page numbers. "
+            "Every text-like AOI must return anchor_ids. "
+            "Visual AOIs without text anchors may return bbox. "
+            "Allowed types: text,figure,diagram,table,formula,code,caption,axis_label,mixed. "
+            "Positive example: three rendered lines belonging to one paragraph return one text AOI with all relevant anchor_ids. "
+            "Forbidden example: do not return three line-level AOIs for those same three wrapped lines. "
+            "Return {\"aois\":[{\"aoi_id\":\"llm_aoi_1\",\"type\":\"text\","
+            "\"anchor_ids\":[\"pdf_paragraph_1\"],\"text\":\"...\",\"confidence\":0.85},"
+            "{\"aoi_id\":\"llm_aoi_2\",\"type\":\"diagram\",\"bbox\":[0.1,0.1,0.5,0.3],"
+            "\"text\":\"\",\"confidence\":0.85}]}.\n"
             f"Slide text:\n{slide_text[:5000]}\nRule AOIs:\n{json.dumps(rule_aois, ensure_ascii=False)}\n"
             f"Grounding AOIs:\n{json.dumps(text_aois, ensure_ascii=False)}"
         )
@@ -201,24 +211,36 @@ class LLMAOIGenerator:
     def _validate_aois(self, aois: list[Any]) -> list[dict[str, Any]]:
         validated = []
         for item in aois:
-            if not isinstance(item, dict) or not self._valid_bbox(item.get("bbox")):
+            if not isinstance(item, dict):
                 continue
             aoi_type = str(item.get("type", "mixed")).strip().lower()
             if aoi_type not in ALLOWED_AOI_TYPES:
                 aoi_type = "mixed"
+            anchor_ids = list(dict.fromkeys(
+                str(value).strip()
+                for value in (item.get("anchor_ids") or [])
+                if str(value).strip()
+            ))
+            bbox_is_valid = self._valid_bbox(item.get("bbox"))
+            if not bbox_is_valid and not (aoi_type in TEXT_AOI_TYPES and anchor_ids):
+                continue
             try:
                 confidence = max(0.0, min(1.0, float(item.get("confidence", item.get("group_confidence", 0.7)))))
             except (TypeError, ValueError):
                 confidence = 0.7
-            validated.append({
+            validated_item = {
                 "aoi_id": str(item.get("aoi_id", "")),
-                "bbox": [float(value) for value in item["bbox"]],
                 "type": aoi_type,
                 "text": str(item.get("text", "")).strip(),
                 "source": "llm_guided",
                 "group_confidence": round(confidence, 3),
                 "include_in_learning": aoi_type != "footer",
-            })
+            }
+            if bbox_is_valid:
+                validated_item["bbox"] = [float(value) for value in item["bbox"]]
+            if anchor_ids:
+                validated_item["anchor_ids"] = anchor_ids
+            validated.append(validated_item)
         if not validated:
             raise ValueError("LLM AOI response contained no valid AOIs")
         return self._dedupe_and_renumber(validated)
@@ -228,10 +250,11 @@ class LLMAOIGenerator:
         unique, seen = [], set()
         for aoi in aois:
             normalized = " ".join(re.sub(r"[^\w]+", " ", str(aoi.get("text", "")).casefold()).split())
-            if normalized and normalized in seen:
+            identity = (normalized, tuple(aoi.get("anchor_ids", [])))
+            if normalized and identity in seen:
                 continue
             if normalized:
-                seen.add(normalized)
+                seen.add(identity)
             unique.append(aoi)
         for index, aoi in enumerate(unique, 1):
             aoi["aoi_id"] = f"llm_aoi_{index}"

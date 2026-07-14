@@ -37,6 +37,7 @@ class AOI:
     children: list[dict[str, Any]] | None = None
     include_in_learning: bool = True
     role: str | None = None
+    anchor_ids: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -333,26 +334,43 @@ class AOIManager:
         raw = self.llm_aoi_generator.generate(
             image_path,
             slide_text,
-            [self._llm_prompt_aoi(aoi) for aoi in rule_aois],
+            [self._llm_prompt_aoi(aoi, grounding=False) for aoi in rule_aois],
             [self._llm_prompt_aoi(aoi) for aoi in text_aois],
         )
         aois: list[AOI] = []
         for item in raw:
             bbox = [float(value) for value in item.get("bbox", [])]
-            self._validate_bbox(bbox)
+            aoi_type = str(item.get("type", "mixed"))
+            anchor_ids = list(dict.fromkeys(
+                str(value).strip()
+                for value in (item.get("anchor_ids") or [])
+                if str(value).strip()
+            ))
+            anchored_text = aoi_type in {"title", "text", "caption", "footer", "axis_label"} and bool(anchor_ids)
+            if not anchored_text:
+                self._validate_bbox(bbox)
             aois.append(AOI(
                 str(item.get("aoi_id", "")),
                 bbox,
-                str(item.get("type", "mixed")),
+                aoi_type,
                 str(item.get("text", "")),
                 source="llm_guided",
                 group_confidence=float(item.get("group_confidence", 0.7)),
                 include_in_learning=bool(item.get("include_in_learning", True)),
+                anchor_ids=anchor_ids or None,
             ))
         return aois
 
     @staticmethod
-    def _llm_prompt_aoi(aoi: AOI) -> dict[str, Any]:
+    def _llm_prompt_aoi(aoi: AOI, *, grounding: bool = True) -> dict[str, Any]:
+        if grounding:
+            return {
+                "anchor_id": aoi.aoi_id,
+                "role": aoi.role or aoi.type,
+                "text": aoi.text,
+                "bbox": [float(value) for value in aoi.bbox],
+                "line_count": len(aoi.children or []),
+            }
         return {
             "aoi_id": aoi.aoi_id,
             "bbox": [float(value) for value in aoi.bbox],
@@ -656,6 +674,7 @@ class AOIManager:
             children=item.get("children"),
             include_in_learning=bool(item.get("include_in_learning", True)),
             role=item.get("role"),
+            anchor_ids=list(item.get("anchor_ids") or []) or None,
         )
 
     def get_slide_aois(self, deck_id: str, slide_id: int) -> list[dict[str, Any]]:

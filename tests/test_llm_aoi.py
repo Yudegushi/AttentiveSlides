@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,7 +9,12 @@ import unittest
 from unittest.mock import patch
 
 from modules.slide.aoi_manager import AOI, AOIManager, SlideAOIData
-from modules.slide.llm_aoi import LLMAOIConfig, LLMAOIGenerator, sanitized_llm_error
+from modules.slide.llm_aoi import (
+    PROMPT_SCHEMA_VERSION,
+    LLMAOIConfig,
+    LLMAOIGenerator,
+    sanitized_llm_error,
+)
 
 
 PNG = (
@@ -44,8 +50,8 @@ class FakeLLMGenerator:
         return list(self.result)
 
 
-def llm_item(text="alpha beta gamma delta", *, aoi_type="text", bbox=None):
-    return {
+def llm_item(text="alpha beta gamma delta", *, aoi_type="text", bbox=None, anchor_ids=None):
+    item = {
         "aoi_id": "anything",
         "bbox": bbox or [0.1, 0.2, 0.8, 0.4],
         "type": aoi_type,
@@ -54,6 +60,11 @@ def llm_item(text="alpha beta gamma delta", *, aoi_type="text", bbox=None):
         "group_confidence": 0.9,
         "include_in_learning": True,
     }
+    if anchor_ids is not None:
+        item["anchor_ids"] = anchor_ids
+    elif aoi_type in {"title", "text", "caption", "footer", "axis_label"}:
+        item["anchor_ids"] = ["pdf_paragraph_1"]
+    return item
 
 
 class LLMAOIGeneratorValidationTest(unittest.TestCase):
@@ -84,6 +95,63 @@ class LLMAOIGeneratorValidationTest(unittest.TestCase):
         self.assertEqual(result[0]["group_confidence"], 0.8)
 
 
+class LLMAOIPromptV2Test(unittest.TestCase):
+    def prompt(self) -> str:
+        return LLMAOIGenerator._prompt("slide text", [], [])
+
+    def test_prompt_defines_visual_paragraph_not_sentence_or_line(self) -> None:
+        prompt = self.prompt()
+        self.assertIn("One visual paragraph or one list item equals one text AOI.", prompt)
+        self.assertIn("Rendered line wrapping is never an AOI boundary.", prompt)
+        self.assertIn("Keep multiple complete sentences together when they share one visual paragraph.", prompt)
+        self.assertIn("three rendered lines", prompt)
+        self.assertIn("do not return three line-level AOIs", prompt)
+
+    def test_prompt_excludes_non_content_roles(self) -> None:
+        self.assertIn("Do not return titles, headings, headers, footers, or page numbers.", self.prompt())
+
+    def test_prompt_requires_anchor_ids_for_text_aois(self) -> None:
+        prompt = self.prompt()
+        self.assertIn("Every text-like AOI must return anchor_ids.", prompt)
+        self.assertIn("Visual AOIs without text anchors may return bbox.", prompt)
+
+    def test_validation_preserves_clean_anchor_ids(self) -> None:
+        result = LLMAOIGenerator()._validate_aois([
+            {
+                "type": "text",
+                "text": "Paragraph",
+                "anchor_ids": [" pdf_paragraph_1 ", "", "pdf_paragraph_1", "pdf_paragraph_2"],
+            }
+        ])
+        self.assertEqual(result[0]["anchor_ids"], ["pdf_paragraph_1", "pdf_paragraph_2"])
+
+    def test_prompt_schema_version_invalidates_v1_profile(self) -> None:
+        generator = LLMAOIGenerator(LLMAOIConfig(model="fake", max_image_side=1280))
+        anchor_digest = "anchor-digest"
+        v1_payload = {
+            "model": "fake",
+            "prompt_schema": "attentive-llm-aoi-v1",
+            "max_image_side": 1280,
+            "anchor_digest": anchor_digest,
+        }
+        v1_profile = hashlib.sha256(
+            json.dumps(v1_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(PROMPT_SCHEMA_VERSION, "attentive-llm-aoi-v2")
+        self.assertNotEqual(generator.profile(anchor_digest), v1_profile)
+
+    def test_anchored_text_without_bbox_is_valid(self) -> None:
+        result = LLMAOIGenerator()._validate_aois([
+            {"type": "text", "text": "Paragraph", "anchor_ids": ["pdf_paragraph_1"]}
+        ])
+        self.assertNotIn("bbox", result[0])
+        self.assertEqual(result[0]["anchor_ids"], ["pdf_paragraph_1"])
+
+    def test_visual_item_without_bbox_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no valid AOIs"):
+            LLMAOIGenerator()._validate_aois([{"type": "diagram", "text": "Flow"}])
+
+
 class LLMAOIManagerTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -99,12 +167,13 @@ class LLMAOIManagerTest(unittest.TestCase):
         manager = AOIManager(str(self.root), llm_aoi_generator=generator)
         anchor_aois = anchors or [
             AOI(
-                "pdf_semantic_block_1",
+                "pdf_paragraph_1",
                 [0.1, 0.2, 0.8, 0.4],
                 "text",
                 "alpha beta gamma delta epsilon zeta eta theta",
                 source="pdf_text_semantic",
                 children=[{"text": "alpha", "bbox": [0.1, 0.2, 0.2, 0.3]}],
+                role="paragraph",
             )
         ]
         manager.save_slide_data(
@@ -154,14 +223,17 @@ class LLMAOIManagerTest(unittest.TestCase):
         self.assertIsNotNone(generator.last_text_aois)
         self.assertEqual(
             set(generator.last_text_aois[0]),
-            {"aoi_id", "bbox", "type", "text", "source"},
+            {"anchor_id", "role", "text", "bbox", "line_count"},
         )
         self.assertNotIn("children", generator.last_text_aois[0])
+        self.assertEqual(generator.last_text_aois[0]["anchor_id"], "pdf_paragraph_1")
+        self.assertEqual(generator.last_text_aois[0]["role"], "paragraph")
+        self.assertEqual(generator.last_text_aois[0]["line_count"], 1)
 
     def test_timeout_and_malformed_output_fall_back_without_touching_aois(self):
         for generator in (
             FakeLLMGenerator(error=TimeoutError("  temporary   timeout  ")),
-            FakeLLMGenerator(result=[llm_item(bbox=[0.8, 0.2, 0.1, 0.4])]),
+            FakeLLMGenerator(result=[llm_item("visual", aoi_type="diagram", bbox=[0.8, 0.2, 0.1, 0.4])]),
         ):
             with self.subTest(generator=generator):
                 manager = self.seeded_manager(generator)
