@@ -113,7 +113,22 @@
       line-height: 1.35;
       white-space: pre-wrap;
     }
-  </style>
+  
+    .ptt-button {
+      display: inline-flex !important;
+      flex: 0 0 auto !important;
+      width: auto !important;
+      min-width: 7.25rem;
+      max-width: 9.5rem;
+      min-height: 2.25rem;
+      padding: 0.4rem 0.8rem;
+      align-items: center;
+      justify-content: center;
+      justify-self: start;
+      white-space: nowrap;
+    }
+
+</style>
 </head>
 
 <body>
@@ -898,9 +913,9 @@
     root.innerHTML = `
       <button
         id="holdButton"
-        class="voice-button"
+        class="voice-button ptt-button"
         disabled
-      >
+       data-testid="hold-to-ask-button">
         Microphone is off
       </button>
 

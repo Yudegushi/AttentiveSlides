@@ -833,20 +833,135 @@ def run_intent_scenario() -> dict[str, Any]:
 
 
 def run_reset_scenario() -> dict[str, Any]:
+    """Verify target confirmation cancellation.
+
+    The scenario name remains ``reset`` for supervisor compatibility,
+    but the removed Reset current turn button is no longer expected.
+    """
+
     app, completed = create_app()
 
     for index in range(4):
-        require_widget(
+        confirm_button = require_widget(
             app,
             "button",
-            "main_reset_turn_button",
-        ).click()
+            "main_confirm_button",
+        )
+
+        if bool(
+            getattr(
+                confirm_button,
+                "disabled",
+                False,
+            )
+        ):
+            raise AssertionError(
+                "Confirm target is disabled "
+                f"before iteration {index}."
+            )
+
+        confirm_button.click()
 
         run_step(
             app,
             completed,
-            f"reset_turn_{index}",
+            f"confirm_target_{index}",
         )
+
+        if not bool(
+            session_state_value(
+                app,
+                "main_confirmed",
+                False,
+            )
+        ):
+            raise AssertionError(
+                "Confirm target did not set "
+                "main_confirmed=True."
+            )
+
+        confirmed_target = (
+            session_state_value(
+                app,
+                "main_confirmed_target",
+                None,
+            )
+        )
+
+        if not confirmed_target:
+            raise AssertionError(
+                "Confirm target did not store "
+                "main_confirmed_target."
+            )
+
+        cancel_button = require_widget(
+            app,
+            "button",
+            (
+                "main_cancel_"
+                "confirmation_button"
+            ),
+        )
+
+        if bool(
+            getattr(
+                cancel_button,
+                "disabled",
+                False,
+            )
+        ):
+            raise AssertionError(
+                "Cancel confirmation is "
+                f"disabled after iteration {index}."
+            )
+
+        cancel_button.click()
+
+        run_step(
+            app,
+            completed,
+            f"cancel_confirmation_{index}",
+        )
+
+        if bool(
+            session_state_value(
+                app,
+                "main_confirmed",
+                False,
+            )
+        ):
+            raise AssertionError(
+                "Cancel confirmation did not "
+                "clear main_confirmed."
+            )
+
+        expected_none = (
+            "main_confirmed_target",
+            "main_confirmation_source",
+            "main_confirmed_aoi_id",
+            "main_corrected_from_aoi_id",
+            "main_confirmed_interaction",
+            "main_tutor_result",
+            "main_tutor_context",
+            (
+                "main_last_generated_"
+                "interaction_id"
+            ),
+        )
+
+        for key in expected_none:
+            value = session_state_value(
+                app,
+                key,
+                None,
+            )
+
+            if value is not None:
+                raise AssertionError(
+                    "Cancel confirmation did "
+                    f"not clear {key!r}: "
+                    f"{value!r}"
+                )
 
     clear_conversation = get_widget(
         app,
@@ -896,33 +1011,47 @@ def run_reset_scenario() -> dict[str, Any]:
             "next_slide",
         )
 
-        previous_button = get_widget(
-            app,
-            "button",
-            "main_previous_slide_button",
+    previous_button = get_widget(
+        app,
+        "button",
+        "main_previous_slide_button",
+    )
+
+    if (
+        previous_button is not None
+        and not bool(
+            getattr(
+                previous_button,
+                "disabled",
+                False,
+            )
         )
+    ):
+        previous_button.click()
 
-        if (
-            previous_button is not None
-            and not bool(
-                getattr(
-                    previous_button,
-                    "disabled",
-                    False,
-                )
-            )
-        ):
-            previous_button.click()
-
-            run_step(
-                app,
-                completed,
-                "previous_slide",
-            )
+        run_step(
+            app,
+            completed,
+            "previous_slide",
+        )
 
     return {
         "completed_steps": completed,
         "final_state": {
+            "confirmed": bool(
+                session_state_value(
+                    app,
+                    "main_confirmed",
+                    False,
+                )
+            ),
+            "confirmed_target": (
+                session_state_value(
+                    app,
+                    "main_confirmed_target",
+                    None,
+                )
+            ),
             "conversation_turn_count": len(
                 app.session_state[
                     "main_conversation_turns"

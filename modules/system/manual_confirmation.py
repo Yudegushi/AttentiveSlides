@@ -158,6 +158,66 @@ class ConfirmedManualInteraction:
         }
 
 
+@dataclass(frozen=True)
+class ConfirmedTargetSelection:
+    """Explicitly confirmed slide target, independent of intent."""
+
+    deck_id: str
+    slide_id: int
+    target_scope: str
+    target_source: str
+    bbox: (
+        tuple[
+            float,
+            float,
+            float,
+            float,
+        ]
+        | None
+    )
+    selected_target: ConfirmationTargetOption
+    target_options: tuple[
+        ConfirmationTargetOption,
+        ...,
+    ]
+    proposed_aoi_id: str | None
+    corrected: bool
+    confirmed_context: str
+    confirmation_source: str
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+        return {
+            "deck_id": self.deck_id,
+            "slide_id": self.slide_id,
+            "target_scope": self.target_scope,
+            "target_source": self.target_source,
+            "bbox": (
+                list(self.bbox)
+                if self.bbox is not None
+                else None
+            ),
+            "selected_target": (
+                self.selected_target.to_dict()
+            ),
+            "target_options": [
+                option.to_dict()
+                for option in self.target_options
+            ],
+            "proposed_aoi_id": (
+                self.proposed_aoi_id
+            ),
+            "corrected": self.corrected,
+            "confirmed_context": (
+                self.confirmed_context
+            ),
+            "confirmation_source": (
+                self.confirmation_source
+            ),
+        }
+
+
 def normalize_manual_target_scope(
     value: str,
 ) -> str:
@@ -321,12 +381,425 @@ def build_manual_confirmation_preview(
     )
 
 
+
+
+def _confirmation_target_option_from_dict(
+    payload: Mapping[str, Any],
+) -> ConfirmationTargetOption:
+    score = payload.get(
+        "score"
+    )
+
+    return ConfirmationTargetOption(
+        aoi_id=str(
+            payload["aoi_id"]
+        ),
+        label=str(
+            payload["label"]
+        ),
+        source=str(
+            payload["source"]
+        ),
+        text=str(
+            payload.get(
+                "text",
+                "",
+            )
+        ),
+        score=(
+            None
+            if score is None
+            else float(score)
+        ),
+        is_proposed=bool(
+            payload.get(
+                "is_proposed",
+                False,
+            )
+        ),
+    )
+
+
+def confirmed_target_selection_from_dict(
+    payload: Mapping[str, Any],
+) -> ConfirmedTargetSelection:
+    """Restore a target stored in Streamlit session state."""
+
+    selected_target = (
+        _confirmation_target_option_from_dict(
+            payload[
+                "selected_target"
+            ]
+        )
+    )
+
+    target_options = tuple(
+        _confirmation_target_option_from_dict(
+            item
+        )
+        for item in payload.get(
+            "target_options",
+            [],
+        )
+    )
+
+    bbox = _normalize_optional_bbox(
+        payload.get(
+            "bbox"
+        )
+    )
+
+    return ConfirmedTargetSelection(
+        deck_id=str(
+            payload["deck_id"]
+        ),
+        slide_id=int(
+            payload["slide_id"]
+        ),
+        target_scope=str(
+            payload["target_scope"]
+        ),
+        target_source=str(
+            payload["target_source"]
+        ),
+        bbox=bbox,
+        selected_target=selected_target,
+        target_options=target_options,
+        proposed_aoi_id=(
+            None
+            if payload.get(
+                "proposed_aoi_id"
+            )
+            is None
+            else str(
+                payload[
+                    "proposed_aoi_id"
+                ]
+            )
+        ),
+        corrected=bool(
+            payload.get(
+                "corrected",
+                False,
+            )
+        ),
+        confirmed_context=str(
+            payload.get(
+                "confirmed_context",
+                "",
+            )
+        ),
+        confirmation_source=str(
+            payload.get(
+                "confirmation_source",
+                (
+                    "explicit_user_"
+                    "confirmation"
+                ),
+            )
+        ),
+    )
+
+
+def assess_target_confirmation(
+    preview: ManualConfirmationPreview,
+    *,
+    selected_target_id: str,
+) -> ConfirmationAssessment:
+    """Assess only the target; intent is not required."""
+
+    try:
+        option = preview.get_target_option(
+            selected_target_id
+        )
+
+    except ValueError:
+        return ConfirmationAssessment(
+            ready=False,
+            status="blocked",
+            message=(
+                "Select an available target."
+            ),
+        )
+
+    if (
+        option.source
+        == "manual_mapping"
+        and preview.bbox is None
+    ):
+        return ConfirmationAssessment(
+            ready=False,
+            status="blocked",
+            message=(
+                "Select a region before confirming."
+            ),
+        )
+
+    if not option.text.strip():
+        return ConfirmationAssessment(
+            ready=False,
+            status="blocked",
+            message=(
+                "The selected target has no usable "
+                "text context. Adjust the region or "
+                "select the whole slide."
+            ),
+        )
+
+    corrected = (
+        selected_target_id
+        != preview.proposed_aoi_id
+    )
+
+    if corrected:
+        warning = (
+            "The selected target differs from "
+            "the initially proposed target."
+        )
+
+        return ConfirmationAssessment(
+            ready=True,
+            status="warning",
+            message=warning,
+            warnings=(
+                warning,
+            ),
+        )
+
+    return ConfirmationAssessment(
+        ready=True,
+        status="ready",
+        message=(
+            "The selected target is ready "
+            "for confirmation."
+        ),
+    )
+
+
+def confirm_target_selection(
+    preview: ManualConfirmationPreview,
+    *,
+    selected_target_id: str,
+) -> ConfirmedTargetSelection:
+    """Confirm a target without requiring an intent."""
+
+    assessment = assess_target_confirmation(
+        preview,
+        selected_target_id=(
+            selected_target_id
+        ),
+    )
+
+    if not assessment.ready:
+        raise ValueError(
+            assessment.message
+        )
+
+    option = preview.get_target_option(
+        selected_target_id
+    )
+
+    corrected = (
+        selected_target_id
+        != preview.proposed_aoi_id
+    )
+
+    confirmation_source = (
+        "manual_correction"
+        if corrected
+        else (
+            "explicit_user_"
+            "confirmation"
+        )
+    )
+
+    return ConfirmedTargetSelection(
+        deck_id=preview.deck_id,
+        slide_id=preview.slide_id,
+        target_scope=preview.target_scope,
+        target_source=preview.target_source,
+        bbox=preview.bbox,
+        selected_target=option,
+        target_options=(
+            preview.target_options
+        ),
+        proposed_aoi_id=(
+            preview.proposed_aoi_id
+        ),
+        corrected=corrected,
+        confirmed_context=option.text,
+        confirmation_source=(
+            confirmation_source
+        ),
+    )
+
+
+def bind_confirmed_target_to_intent(
+    confirmed_target: ConfirmedTargetSelection,
+    *,
+    intent_resolution: ManualIntentResolution,
+    interaction_id: str,
+) -> ConfirmedManualInteraction:
+    """Bind an intent only when the request is submitted."""
+
+    if not interaction_id.strip():
+        raise ValueError(
+            "interaction_id must not be blank."
+        )
+
+    if not intent_resolution.recognized:
+        raise ValueError(
+            "The intent is unknown and "
+            "cannot be submitted."
+        )
+
+    option = (
+        confirmed_target.selected_target
+    )
+
+    if option.source == "whole_slide":
+        target = TargetInput(
+            source="whole_slide",
+            slide_id=(
+                confirmed_target.slide_id
+            ),
+            selected_aoi_id=(
+                "whole_slide"
+            ),
+        )
+
+    else:
+        if confirmed_target.bbox is None:
+            raise ValueError(
+                "Manual rectangle bbox "
+                "is unavailable."
+            )
+
+        alternatives = tuple(
+            TargetCandidate(
+                aoi_id=current.aoi_id,
+                score=(
+                    _candidate_score(
+                        current
+                    )
+                ),
+                evidence=(
+                    (
+                        "manual rectangle "
+                        "AOI mapping"
+                    ),
+                ),
+            )
+            for current
+            in confirmed_target.target_options
+            if (
+                current.source
+                == "manual_mapping"
+            )
+        )
+
+        target = TargetInput(
+            source="manual_rectangle",
+            slide_id=(
+                confirmed_target.slide_id
+            ),
+            bbox=confirmed_target.bbox,
+            selected_aoi_id=(
+                option.aoi_id
+            ),
+            alternatives=alternatives,
+        )
+
+    confirmation = ConfirmationInput(
+        confirmed=True,
+        source=(
+            confirmed_target
+            .confirmation_source
+        ),
+        confirmed_aoi_id=(
+            option.aoi_id
+        ),
+        corrected_from_aoi_id=(
+            confirmed_target
+            .proposed_aoi_id
+            if confirmed_target.corrected
+            else None
+        ),
+    )
+
+    interaction = InteractionInput(
+        interaction_id=interaction_id,
+        deck_id=confirmed_target.deck_id,
+        slide_id=(
+            confirmed_target.slide_id
+        ),
+        mode="manual",
+        target=target,
+        intent=(
+            intent_resolution.intent_input
+        ),
+        confirmation=confirmation,
+        metadata={
+            "privacy_mode": (
+                "camera_and_microphone_optional"
+            ),
+            (
+                "target_source_before_"
+                "confirmation"
+            ): confirmed_target.target_source,
+            "confirmed_context": (
+                confirmed_target
+                .confirmed_context
+            ),
+            "intent_source": (
+                intent_resolution
+                .intent_input
+                .source
+            ),
+            (
+                "confirmation_schema_"
+                "version"
+            ): "2.0",
+            "confirmation_scope": (
+                "target_only"
+            ),
+        },
+    )
+
+    return ConfirmedManualInteraction(
+        interaction=interaction,
+        selected_target=option,
+        proposed_aoi_id=(
+            confirmed_target
+            .proposed_aoi_id
+        ),
+        corrected=(
+            confirmed_target.corrected
+        ),
+        confirmed_context=(
+            confirmed_target
+            .confirmed_context
+        ),
+    )
 def assess_manual_confirmation(
     preview: ManualConfirmationPreview,
     *,
     selected_target_id: str,
 ) -> ConfirmationAssessment:
-    """Assess the selected target before confirmation."""
+    """Backward-compatible target-plus-intent assessment."""
+
+    target_assessment = (
+        assess_target_confirmation(
+            preview,
+            selected_target_id=(
+                selected_target_id
+            ),
+        )
+    )
+
+    if not target_assessment.ready:
+        return target_assessment
+
     resolution = preview.intent_resolution
 
     if resolution is None:
@@ -344,48 +817,14 @@ def assess_manual_confirmation(
             ready=False,
             status="blocked",
             message=(
-                "The intent is unknown and cannot "
-                "be confirmed."
+                "The intent is unknown and "
+                "cannot be confirmed."
             ),
         )
 
-    try:
-        option = preview.get_target_option(
-            selected_target_id
-        )
-    except ValueError:
-        return ConfirmationAssessment(
-            ready=False,
-            status="blocked",
-            message=(
-                "Select an available target."
-            ),
-        )
-
-    if (
-        option.source == "manual_mapping"
-        and preview.bbox is None
-    ):
-        return ConfirmationAssessment(
-            ready=False,
-            status="blocked",
-            message=(
-                "The manual rectangle is missing."
-            ),
-        )
-
-    if not option.text.strip():
-        return ConfirmationAssessment(
-            ready=False,
-            status="blocked",
-            message=(
-                "The selected target has no usable "
-                "text context. Select Whole slide "
-                "or adjust the region."
-            ),
-        )
-
-    warnings: list[str] = []
+    warnings = list(
+        target_assessment.warnings
+    )
 
     if (
         resolution.intent == "compare"
@@ -394,26 +833,17 @@ def assess_manual_confirmation(
                 current
                 for current
                 in preview.target_options
-                if current.source
-                == "manual_mapping"
+                if (
+                    current.source
+                    == "manual_mapping"
+                )
             ]
         )
         < 2
     ):
         warnings.append(
-            "Compare currently has fewer than "
-            "two mapped regions."
-        )
-
-    corrected = (
-        selected_target_id
-        != preview.proposed_aoi_id
-    )
-
-    if corrected:
-        warnings.append(
-            "The confirmed target differs from "
-            "the initially proposed target."
+            "Compare currently has fewer "
+            "than two mapped regions."
         )
 
     if warnings:
@@ -421,18 +851,21 @@ def assess_manual_confirmation(
             ready=True,
             status="warning",
             message=(
-                "The interaction can be confirmed, "
-                "but review the warnings."
+                "The interaction can be "
+                "submitted, but review "
+                "the warnings."
             ),
-            warnings=tuple(warnings),
+            warnings=tuple(
+                warnings
+            ),
         )
 
     return ConfirmationAssessment(
         ready=True,
         status="ready",
         message=(
-            "Target, intent, and context are ready "
-            "for explicit confirmation."
+            "Target and intent are ready "
+            "for submission."
         ),
     )
 
@@ -443,15 +876,13 @@ def confirm_manual_interaction(
     selected_target_id: str,
     interaction_id: str,
 ) -> ConfirmedManualInteraction:
-    """Create the unified confirmed InteractionInput."""
-    if not interaction_id.strip():
-        raise ValueError(
-            "interaction_id must not be blank."
-        )
+    """Backward-compatible combined helper."""
 
     assessment = assess_manual_confirmation(
         preview,
-        selected_target_id=selected_target_id,
+        selected_target_id=(
+            selected_target_id
+        ),
     )
 
     if not assessment.ready:
@@ -466,106 +897,19 @@ def confirm_manual_interaction(
             "Intent resolution is unavailable."
         )
 
-    option = preview.get_target_option(
-        selected_target_id
-    )
-
-    corrected = (
-        selected_target_id
-        != preview.proposed_aoi_id
-    )
-
-    if option.source == "whole_slide":
-        target = TargetInput(
-            source="whole_slide",
-            slide_id=preview.slide_id,
-            selected_aoi_id="whole_slide",
-        )
-
-    else:
-        if preview.bbox is None:
-            raise ValueError(
-                "Manual rectangle bbox is unavailable."
-            )
-
-        alternatives = tuple(
-            TargetCandidate(
-                aoi_id=current.aoi_id,
-                score=_candidate_score(
-                    current
-                ),
-                evidence=(
-                    "manual rectangle AOI mapping",
-                ),
-            )
-            for current
-            in preview.target_options
-            if current.source
-            == "manual_mapping"
-        )
-
-        target = TargetInput(
-            source="manual_rectangle",
-            slide_id=preview.slide_id,
-            bbox=preview.bbox,
-            selected_aoi_id=(
+    confirmed_target = (
+        confirm_target_selection(
+            preview,
+            selected_target_id=(
                 selected_target_id
             ),
-            alternatives=alternatives,
         )
-
-    confirmation_source = (
-        "manual_correction"
-        if corrected
-        else "explicit_user_confirmation"
     )
 
-    confirmation = ConfirmationInput(
-        confirmed=True,
-        source=confirmation_source,
-        confirmed_aoi_id=(
-            selected_target_id
-        ),
-        corrected_from_aoi_id=(
-            preview.proposed_aoi_id
-            if corrected
-            else None
-        ),
-    )
-
-    interaction = InteractionInput(
+    return bind_confirmed_target_to_intent(
+        confirmed_target,
+        intent_resolution=resolution,
         interaction_id=interaction_id,
-        deck_id=preview.deck_id,
-        slide_id=preview.slide_id,
-        mode="manual",
-        target=target,
-        intent=resolution.intent_input,
-        confirmation=confirmation,
-        metadata={
-            "privacy_mode": (
-                "camera_and_microphone_disabled"
-            ),
-            "target_source_before_confirmation": (
-                preview.target_source
-            ),
-            "confirmed_context": option.text,
-            "intent_source": (
-                resolution.intent_input.source
-            ),
-            "confirmation_schema_version": (
-                "1.0"
-            ),
-        },
-    )
-
-    return ConfirmedManualInteraction(
-        interaction=interaction,
-        selected_target=option,
-        proposed_aoi_id=(
-            preview.proposed_aoi_id
-        ),
-        corrected=corrected,
-        confirmed_context=option.text,
     )
 
 

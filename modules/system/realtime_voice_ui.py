@@ -123,71 +123,309 @@ def _extract_view_value(
     return default
 
 
-def update_realtime_grounding(
-    view: Any = None,
+# BEGIN CONFIRMED TARGET REALTIME RESULT
+
+def _confirmed_target_payload(
+) -> dict[str, Any] | None:
+    """Return a usable confirmed target from session state."""
+
+    payload = st.session_state.get(
+        "main_confirmed_target"
+    )
+
+    if not isinstance(
+        payload,
+        dict,
+    ):
+        return None
+
+    selected_target = payload.get(
+        "selected_target"
+    )
+
+    if not isinstance(
+        selected_target,
+        dict,
+    ):
+        return None
+
+    confirmed_context = str(
+        payload.get(
+            "confirmed_context",
+            selected_target.get(
+                "text",
+                "",
+            ),
+        )
+    ).strip()
+
+    if not confirmed_context:
+        return None
+
+    return payload
+
+
+def _render_realtime_voice_result_body(
 ) -> None:
-    """Update the next realtime turn with current slide/AOI context."""
+    """Render the latest PTT transcript and answer."""
+
+    try:
+        raw_snapshot = (
+            get_realtime_voice_controller()
+            .snapshot()
+        )
+
+    except Exception as exc:
+        st.session_state[
+            "main_realtime_error"
+        ] = (
+            f"{type(exc).__name__}: "
+            f"{exc}"
+        )
+
+        st.warning(
+            "Realtime voice result "
+            "is temporarily unavailable."
+        )
+        return
+
+    if isinstance(
+        raw_snapshot,
+        dict,
+    ):
+        snapshot = dict(
+            raw_snapshot
+        )
+
+    elif hasattr(
+        raw_snapshot,
+        "to_dict",
+    ):
+        snapshot = dict(
+            raw_snapshot.to_dict()
+        )
+
+    else:
+        snapshot = dict(
+            vars(
+                raw_snapshot
+            )
+        )
+
+    state_mapping = {
+        "main_realtime_turn_id": (
+            "turn_id"
+        ),
+        "main_realtime_user_transcript": (
+            "latest_user_transcript"
+        ),
+        "main_realtime_answer_text": (
+            "latest_answer_text"
+        ),
+        "main_realtime_error": (
+            "latest_error"
+        ),
+        "main_realtime_rejection_reason": (
+            "latest_rejection_reason"
+        ),
+        "main_realtime_state": (
+            "voice_state"
+        ),
+        "main_realtime_speaker_enabled": (
+            "speaker_enabled"
+        ),
+    }
+
+    for session_key, snapshot_key in (
+        state_mapping.items()
+    ):
+        if snapshot_key in snapshot:
+            st.session_state[
+                session_key
+            ] = snapshot.get(
+                snapshot_key
+            )
+
+    transcript = str(
+        snapshot.get(
+            "latest_user_transcript",
+            st.session_state.get(
+                "main_realtime_user_transcript",
+                "",
+            ),
+        )
+        or ""
+    ).strip()
+
+    answer = str(
+        snapshot.get(
+            "latest_answer_text",
+            st.session_state.get(
+                "main_realtime_answer_text",
+                "",
+            ),
+        )
+        or ""
+    ).strip()
+
+    rejection = snapshot.get(
+        "latest_rejection_reason",
+        st.session_state.get(
+            "main_realtime_rejection_reason"
+        ),
+    )
+
+    error = snapshot.get(
+        "latest_error",
+        st.session_state.get(
+            "main_realtime_error"
+        ),
+    )
+
+    if transcript:
+        st.caption(
+            "Voice transcript: "
+            + transcript
+        )
+
+    if answer:
+        st.markdown(
+            answer
+        )
+
+        st.caption(
+            "Answer source: "
+            "Qwen Realtime"
+        )
+
+    if rejection:
+        st.caption(
+            "Ignored voice input: "
+            + str(
+                rejection
+            )
+        )
+
+    if error:
+        st.warning(
+            str(
+                error
+            )
+        )
+
+
+def render_realtime_voice_result(
+) -> None:
+    """Render PTT output in the shared Tutor response box."""
 
     if _disabled_for_test():
         _set_apptest_defaults()
         return
 
-    controller = (
-        get_realtime_voice_controller()
+    if _confirmed_target_payload() is None:
+        return
+
+    _render_realtime_voice_result_body()
+
+
+if hasattr(
+    st,
+    "fragment",
+):
+    render_realtime_voice_result = (
+        st.fragment(
+            run_every=0.5
+        )(
+            render_realtime_voice_result
+        )
+    )
+
+# END CONFIRMED TARGET REALTIME RESULT
+
+def update_realtime_grounding(
+    view: Any = None,
+) -> None:
+    """Ground realtime turns in the explicitly confirmed target."""
+
+    if _disabled_for_test():
+        _set_apptest_defaults()
+        return
+
+    confirmed = (
+        _confirmed_target_payload()
+    )
+
+    if confirmed is None:
+        return
+
+    selected_target = confirmed.get(
+        "selected_target",
+        {},
     )
 
     slide_number = int(
-        _extract_view_value(
-            view,
-            (
-                "slide_number",
-                "current_slide_number",
-                "main_current_slide_number",
-            ),
+        confirmed.get(
+            "slide_id",
             1,
         )
     )
 
-    slide_text = str(
-        _extract_view_value(
+    slide_text = ""
+
+    if view is not None:
+        active_slide = getattr(
             view,
-            (
-                "slide_text",
-                "current_slide_text",
-                "main_current_slide_text",
-            ),
-            "",
+            "active_slide",
+            None,
         )
-    )
+
+        if active_slide is not None:
+            slide_text = str(
+                getattr(
+                    active_slide,
+                    "slide_text",
+                    "",
+                )
+                or ""
+            )
+
+    if not slide_text:
+        slide_text = str(
+            _extract_view_value(
+                view,
+                (
+                    "slide_text",
+                    "current_slide_text",
+                    "main_current_slide_text",
+                ),
+                "",
+            )
+        )
 
     region_text = str(
-        _extract_view_value(
-            view,
-            (
-                "selected_region_text",
-                "manual_region_text",
-                "main_selected_region_text",
+        confirmed.get(
+            "confirmed_context",
+            selected_target.get(
+                "text",
+                "",
             ),
-            "",
+        )
+    ).strip()
+
+    target_scope = str(
+        confirmed.get(
+            "target_scope",
+            "Manual region",
         )
     )
 
-    target_scope = str(
-        _extract_view_value(
-            view,
-            (
-                "target_scope",
-                "main_target_scope",
-            ),
-            "Whole slide",
-        )
+    controller = (
+        get_realtime_voice_controller()
     )
 
     controller.update_context(
         RealtimeTutorContext(
-            slide_number=(
-                slide_number
-            ),
+            slide_number=slide_number,
             slide_text=slide_text,
             selected_region_text=(
                 region_text
@@ -195,6 +433,8 @@ def update_realtime_grounding(
             target_scope=target_scope,
         )
     )
+
+
 
 
 def render_sidebar_device_controls(
@@ -372,18 +612,21 @@ else:
 def render_grounded_tutor_voice(
     view: Any = None,
 ) -> None:
-    """Render push-to-talk inside Grounded Tutor."""
+    """Render compact push-to-talk for the confirmed target."""
 
     if _disabled_for_test():
         _set_apptest_defaults()
         return
 
+    if _confirmed_target_payload() is None:
+        st.caption(
+            "Confirm a target in Step 1 "
+            "to enable Hold to ask."
+        )
+        return
+
     update_realtime_grounding(
         view
-    )
-
-    st.markdown(
-        "**Voice question**"
     )
 
     controller = (
@@ -394,20 +637,27 @@ def render_grounded_tutor_voice(
         controller.capture_url(
             view="ptt"
         ),
-        height=145,
+        height=82,
         scrolling=False,
     )
 
-    _render_realtime_result()
+
 
 
 def render_continuous_voice_panel(
     view: Any = None,
 ) -> None:
-    """Render continuous dialogue and speaker controls."""
+    """Render continuous conversation for the confirmed target."""
 
     if _disabled_for_test():
         _set_apptest_defaults()
+        return
+
+    if _confirmed_target_payload() is None:
+        st.caption(
+            "Confirm a target in Step 1 "
+            "to enable continuous conversation."
+        )
         return
 
     update_realtime_grounding(
@@ -419,8 +669,9 @@ def render_continuous_voice_panel(
     )
 
     st.caption(
-        "Each voice turn uses a fresh provider "
-        "session and is not added to conversation history."
+        "Each voice turn uses the confirmed "
+        "target and is not added to "
+        "conversation history."
     )
 
     controller = (
@@ -434,6 +685,8 @@ def render_continuous_voice_panel(
         height=145,
         scrolling=False,
     )
+
+
 
 
 def render_realtime_voice_xai(

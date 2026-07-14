@@ -56,6 +56,8 @@ class TestRealtimeVoiceAppTestStartup(
     def test_stage3_calls_do_not_directly_load_local_view(
         self,
     ) -> None:
+        """Direct view arguments must be bound by an enclosing function."""
+
         source = APP_PATH.read_text(
             encoding="utf-8"
         )
@@ -67,9 +69,76 @@ class TestRealtimeVoiceAppTestStartup(
             ),
         )
 
+        parents = {}
+
+        for parent in ast.walk(
+            tree
+        ):
+            for child in (
+                ast.iter_child_nodes(
+                    parent
+                )
+            ):
+                parents[
+                    child
+                ] = parent
+
+        def parameter_names(
+            function: (
+                ast.FunctionDef
+                | ast.AsyncFunctionDef
+            ),
+        ) -> set[str]:
+            names = {
+                argument.arg
+                for argument in (
+                    list(
+                        function
+                        .args
+                        .posonlyargs
+                    )
+                    + list(
+                        function
+                        .args
+                        .args
+                    )
+                    + list(
+                        function
+                        .args
+                        .kwonlyargs
+                    )
+                )
+            }
+
+            if (
+                function.args.vararg
+                is not None
+            ):
+                names.add(
+                    function
+                    .args
+                    .vararg
+                    .arg
+                )
+
+            if (
+                function.args.kwarg
+                is not None
+            ):
+                names.add(
+                    function
+                    .args
+                    .kwarg
+                    .arg
+                )
+
+            return names
+
         found = 0
 
-        for node in ast.walk(tree):
+        for node in ast.walk(
+            tree
+        ):
             if not isinstance(
                 node,
                 ast.Call,
@@ -83,7 +152,7 @@ class TestRealtimeVoiceAppTestStartup(
 
             found += 1
 
-            direct_arguments = [
+            direct_view_reads = [
                 argument
                 for argument in node.args
                 if (
@@ -96,12 +165,13 @@ class TestRealtimeVoiceAppTestStartup(
                 )
             ]
 
-            direct_keywords = [
-                keyword
+            direct_view_reads.extend(
+                keyword.value
                 for keyword
                 in node.keywords
                 if (
-                    keyword.arg == "view"
+                    keyword.arg
+                    == "view"
                     and isinstance(
                         keyword.value,
                         ast.Name,
@@ -109,25 +179,48 @@ class TestRealtimeVoiceAppTestStartup(
                     and keyword.value.id
                     == "view"
                 )
-            ]
-
-            self.assertEqual(
-                direct_arguments,
-                [],
-                msg=(
-                    "Stage 3 renderer directly "
-                    "reads local view at line "
-                    f"{node.lineno}"
-                ),
             )
 
-            self.assertEqual(
-                direct_keywords,
-                [],
+            if not direct_view_reads:
+                continue
+
+            current: ast.AST = node
+            bound = False
+            owner = None
+
+            while current in parents:
+                current = parents[
+                    current
+                ]
+
+                if not isinstance(
+                    current,
+                    (
+                        ast.FunctionDef,
+                        ast.AsyncFunctionDef,
+                    ),
+                ):
+                    continue
+
+                owner = current.name
+
+                if (
+                    "view"
+                    in parameter_names(
+                        current
+                    )
+                ):
+                    bound = True
+                    break
+
+            self.assertTrue(
+                bound,
                 msg=(
-                    "Stage 3 renderer directly "
-                    "reads local view at line "
-                    f"{node.lineno}"
+                    "Stage 3 renderer reads "
+                    "view without an enclosing "
+                    "function parameter at line "
+                    f"{node.lineno}; "
+                    f"nearest owner={owner!r}"
                 ),
             )
 

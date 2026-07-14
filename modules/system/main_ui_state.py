@@ -117,6 +117,7 @@ def build_main_turn_defaults() -> dict[str, Any]:
         "main_confirmed_aoi_id": None,
         "main_corrected_from_aoi_id": None,
         "main_confirmed_interaction": None,
+        "main_confirmed_target": None,
         "main_confirmation_error": None,
         "main_confirmed": False,
         "main_tutor_result": None,

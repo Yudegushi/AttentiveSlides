@@ -67,6 +67,10 @@ from modules.system.manual_confirmation import (
     assess_manual_confirmation,
     build_manual_confirmation_preview,
     confirm_manual_interaction,
+    assess_target_confirmation,
+    bind_confirmed_target_to_intent,
+    confirmed_target_selection_from_dict,
+    confirm_target_selection,
 )
 from modules.system.manual_intent import (
     QUICK_INTENT_ACTIONS,
@@ -89,6 +93,7 @@ from modules.system.realtime_voice_ui import (
     render_grounded_tutor_voice,
     render_realtime_voice_xai,
     render_sidebar_device_controls,
+    render_realtime_voice_result,
 )
 
 
@@ -1131,7 +1136,8 @@ def _render_target_column(
         == "Manual region"
     ):
         st.caption(
-            "Drag directly on the slide to draw one rectangular target."
+            "Drag directly on the slide "
+            "to draw one rectangular target."
         )
 
         st.button(
@@ -1154,20 +1160,27 @@ def _render_target_column(
         view
     )
 
+    _render_confirmation_panel(
+        view
+    )
+
+
+
 
 
 def _render_intent_column(
     view: MainUIViewModel,
 ) -> None:
+    """Render manual and push-to-talk Tutor controls."""
+
     st.markdown(
-        "### 2. Ask"
+        "### 2. Tutor"
     )
 
     _render_quick_intent_actions()
 
-    
     st.text_area(
-        "Typed command",
+        "Typed request",
         key="main_typed_command",
         height=110,
         placeholder=(
@@ -1182,9 +1195,9 @@ def _render_intent_column(
     ].strip()
 
     target_ready = bool(
-        st.session_state[
-            "main_manual_bbox"
-        ]
+        st.session_state.get(
+            "main_confirmed_target"
+        )
     )
 
     resolution = (
@@ -1209,32 +1222,45 @@ def _render_intent_column(
                 "main_intent_error"
             ]
         )
+
     elif not command:
         st.caption(
-            "Choose a Quick action or type a command."
+            "Choose a Quick action, type a "
+            "request, or use Hold to ask."
         )
+
     elif resolution is None:
         st.info(
             assessment.message
         )
+
     elif not resolution.recognized:
         st.error(
             assessment.message
         )
+
     elif assessment.status == "warning":
         st.warning(
             assessment.message
         )
+
     else:
         st.success(
             "Intent recognized: "
             f"{resolution.intent_result.intent}"
         )
 
-    _render_confirmation_panel(
-        view,
-        resolution,
+    render_grounded_tutor_voice(
+        view=view
     )
+
+    _render_tutor_generation_panel(
+        view
+    )
+
+    _render_tutor_output()
+
+
 
 
 @contextmanager
@@ -1266,23 +1292,17 @@ def _render_xai_drawer() -> None:
 def _render_answer_column(
     view: MainUIViewModel,
 ) -> None:
+    """Render only continuous conversation."""
+
     st.markdown(
-        "### 3. Tutor answer"
+        "### 3. Tutor"
     )
 
-    _render_tutor_generation_panel(
-        view
+    render_continuous_voice_panel(
+        view=view
     )
-    _render_tutor_result()
-    render_continuous_voice_panel(view=locals().get("view"))
-    _render_xai_drawer()
 
-    st.button(
-        "Reset current turn",
-        width="stretch",
-        key="main_reset_turn_button",
-        on_click=_reset_turn_state,
-    )
+
 
 def _render_header(
     view: MainUIViewModel,
@@ -1295,7 +1315,6 @@ def _render_header(
         "Select a slide region, state your learning goal, "
         "and receive a grounded tutor response."
     )
-    render_grounded_tutor_voice(view=locals().get("view"))
 
 
 
@@ -1391,41 +1410,35 @@ def _reset_turn_state() -> None:
 
 
 def _invalidate_confirmation() -> None:
-    """Invalidate confirmation and any generated answer."""
+    """Invalidate target confirmation and dependent requests."""
+
     st.session_state[
         "main_confirmed"
     ] = False
+
     st.session_state[
         "main_confirmation_source"
     ] = None
+
     st.session_state[
         "main_confirmed_aoi_id"
     ] = None
+
     st.session_state[
         "main_corrected_from_aoi_id"
     ] = None
+
     st.session_state[
-        "main_confirmed_interaction"
-    ] = None
-    st.session_state[
-        "main_confirmation_error"
-    ] = None
-    st.session_state[
-        "main_tutor_result"
-    ] = None
-    st.session_state[
-        "main_tutor_context"
+        "main_confirmed_target"
     ] = None
 
     st.session_state[
-        "main_last_generated_interaction_id"
+        "main_confirmation_error"
     ] = None
-    st.session_state[
-        "main_tutor_error"
-    ] = None
-    st.session_state[
-        "main_xai_result"
-    ] = None
+
+    _invalidate_request_state()
+
+
 
 
 
@@ -1645,15 +1658,17 @@ def _render_manual_canvas(
                 slide,
             )
 
-        canvas_width = min(
-            1400,
-            max(
-                720,
-                display_image.width,
+        canvas_width = max(
+            320,
+            min(
+                900,
+                int(
+                    display_image.width
+                ),
             ),
         )
         canvas_height = max(
-            420,
+            1,
             round(
                 canvas_width
                 * display_image.height
@@ -1845,7 +1860,8 @@ def _set_whole_slide_target(
 
 
 def _on_typed_command_change() -> None:
-    """Mark manually edited text as typed-text input."""
+    """Update the request without invalidating its target."""
+
     command = st.session_state[
         "main_typed_command"
     ].strip()
@@ -1857,24 +1873,30 @@ def _on_typed_command_change() -> None:
         if command
         else None
     )
+
     st.session_state[
         "main_explicit_intent"
     ] = None
+
     st.session_state[
         "main_intent_result"
     ] = None
+
     st.session_state[
         "main_intent_error"
     ] = None
 
-    _invalidate_confirmation()
+    _invalidate_request_state()
+
+
 
 
 def _apply_quick_intent(
     intent_name: str,
     command: str,
 ) -> None:
-    """Apply an explicit learner-selected intent."""
+    """Apply a quick request without invalidating the target."""
+
     if (
         st.session_state.get(
             "main_typed_command"
@@ -1911,7 +1933,9 @@ def _apply_quick_intent(
         "main_intent_error"
     ] = None
 
-    _invalidate_confirmation()
+    _invalidate_request_state()
+
+
 
 
 def _resolve_current_intent(
@@ -2059,9 +2083,23 @@ def _switch_to_whole_slide() -> None:
 
 def _render_confirmation_panel(
     view: MainUIViewModel,
-    resolution: ManualIntentResolution | None,
 ) -> None:
-    """Render a compact user-facing confirmation step."""
+    """Confirm only the selected target in Step 1."""
+
+    if (
+        st.session_state[
+            "main_target_scope"
+        ]
+        == "Manual region"
+        and not st.session_state.get(
+            "main_manual_bbox"
+        )
+    ):
+        st.info(
+            "Select a region before confirming."
+        )
+        return
+
     try:
         preview = build_manual_confirmation_preview(
             deck_id=view.deck_id,
@@ -2071,11 +2109,9 @@ def _render_confirmation_panel(
                     "main_target_scope"
                 ]
             ),
-            bbox=(
-                st.session_state[
-                    "main_manual_bbox"
-                ]
-            ),
+            bbox=st.session_state[
+                "main_manual_bbox"
+            ],
             selected_aoi_ids=(
                 st.session_state[
                     "main_selected_aoi_ids"
@@ -2090,12 +2126,12 @@ def _render_confirmation_panel(
                 view.active_slide.slide_text
             ),
             aois=view.active_slide.aois,
-            intent_resolution=resolution,
+            intent_resolution=None,
         )
 
     except Exception as exc:
         st.error(
-            "Unable to prepare confirmation: "
+            "Unable to prepare target confirmation: "
             f"{type(exc).__name__}: {exc}"
         )
         return
@@ -2106,7 +2142,7 @@ def _render_confirmation_panel(
 
     if not option_ids:
         st.info(
-            "Select a target and command before confirming."
+            "Select a region before confirming."
         )
         return
 
@@ -2139,132 +2175,172 @@ def _render_confirmation_panel(
         on_change=_invalidate_confirmation,
     )
 
-    assessment = assess_manual_confirmation(
+    assessment = assess_target_confirmation(
         preview,
-        selected_target_id=selected_target_id,
+        selected_target_id=(
+            selected_target_id
+        ),
     )
 
     if assessment.status == "blocked":
         st.error(
             assessment.message
         )
+
     elif assessment.status == "warning":
         st.warning(
             assessment.message
         )
+
     else:
         st.caption(
             assessment.message
         )
 
-    confirm_column, whole_column, cancel_column = (
-        st.columns(3)
+    confirmed_payload = (
+        st.session_state.get(
+            "main_confirmed_target"
+        )
+        or {}
     )
 
-    confirm_clicked = confirm_column.button(
-        "Confirm target and intent",
-        type="primary",
-        disabled=(
-            not assessment.ready
-            or (
-                st.session_state[
-                    "main_confirmed"
-                ]
-                and st.session_state.get(
-                    "main_confirmed_aoi_id"
-                )
-                == selected_target_id
-            )
-        ),
-        width="stretch",
-        key="main_confirm_button",
+    confirmed_option = (
+        confirmed_payload.get(
+            "selected_target",
+            {},
+        )
+        if isinstance(
+            confirmed_payload,
+            dict,
+        )
+        else {}
     )
 
-    whole_column.button(
-        "Use whole slide",
-        disabled=(
-            selected_target_id
-            == "whole_slide"
-        ),
-        width="stretch",
-        key="main_use_whole_slide_button",
-        on_click=_switch_to_whole_slide,
-    )
-
-    cancel_column.button(
-        "Cancel confirmation",
-        disabled=not st.session_state[
+    already_confirmed = bool(
+        st.session_state.get(
             "main_confirmed"
-        ],
-        width="stretch",
-        key="main_cancel_confirmation_button",
-        on_click=_invalidate_confirmation,
+        )
+        and confirmed_option.get(
+            "aoi_id"
+        )
+        == selected_target_id
     )
 
-    if confirm_clicked:
+    confirm_column, cancel_column = (
+        st.columns(2)
+    )
+
+    def _confirm_selected_target() -> None:
+        """Confirm the selected target before the next rerun."""
+
+        current_target_id = st.session_state.get(
+            "main_confirmation_target_choice"
+        )
+
         try:
-            confirmed = confirm_manual_interaction(
-                preview,
-                selected_target_id=(
-                    selected_target_id
-                ),
-                interaction_id=(
-                    "manual_"
-                    + uuid.uuid4().hex
-                ),
+            confirmed_target = (
+                confirm_target_selection(
+                    preview,
+                    selected_target_id=(
+                        current_target_id
+                    ),
+                )
             )
 
         except Exception as exc:
             _invalidate_confirmation()
+
             st.session_state[
                 "main_confirmation_error"
             ] = (
-                f"{type(exc).__name__}: {exc}"
+                f"{type(exc).__name__}: "
+                f"{exc}"
             )
 
-        else:
-            interaction = confirmed.interaction
+            return
 
-            st.session_state[
-                "main_confirmed"
-            ] = True
-            st.session_state[
-                "main_confirmation_source"
-            ] = interaction.confirmation.source
-            st.session_state[
-                "main_confirmed_aoi_id"
-            ] = (
-                interaction.confirmation
-                .confirmed_aoi_id
-            )
-            st.session_state[
-                "main_corrected_from_aoi_id"
-            ] = (
-                interaction.confirmation
-                .corrected_from_aoi_id
-            )
-            st.session_state[
-                "main_confirmed_interaction"
-            ] = confirmed.to_dict()
-            st.session_state[
-                "main_confirmation_error"
-            ] = None
+        _invalidate_request_state()
 
-    if st.session_state[
+        st.session_state[
+            "main_confirmed_target"
+        ] = confirmed_target.to_dict()
+
+        st.session_state[
+            "main_confirmed"
+        ] = True
+
+        st.session_state[
+            "main_confirmation_source"
+        ] = (
+            confirmed_target
+            .confirmation_source
+        )
+
+        st.session_state[
+            "main_confirmed_aoi_id"
+        ] = (
+            confirmed_target
+            .selected_target
+            .aoi_id
+        )
+
+        st.session_state[
+            "main_corrected_from_aoi_id"
+        ] = (
+            confirmed_target.proposed_aoi_id
+            if confirmed_target.corrected
+            else None
+        )
+
+        st.session_state[
+            "main_confirmation_error"
+        ] = None
+
+    confirm_column.button(
+        "Confirm target",
+        type="primary",
+        disabled=(
+            not assessment.ready
+            or already_confirmed
+        ),
+        width="stretch",
+        key="main_confirm_button",
+        on_click=_confirm_selected_target,
+    )
+
+    cancel_column.button(
+        "Cancel confirmation",
+        disabled=(
+            not st.session_state.get(
+                "main_confirmed",
+                False,
+            )
+        ),
+        width="stretch",
+        key=(
+            "main_cancel_"
+            "confirmation_button"
+        ),
+        on_click=_invalidate_confirmation,
+    )
+
+    if st.session_state.get(
         "main_confirmation_error"
-    ]:
+    ):
         st.error(
             st.session_state[
                 "main_confirmation_error"
             ]
         )
 
-    if st.session_state[
+    if st.session_state.get(
         "main_confirmed"
-    ]:
+    ):
         st.success(
-            "Target and intent confirmed."
+            "Target confirmed."
         )
+
+
 
 
 
@@ -2281,7 +2357,8 @@ def _clear_conversation() -> None:
 
 
 def _start_follow_up() -> None:
-    """Start a new confirmed turn while preserving the target."""
+    """Clear the request while preserving target confirmation."""
+
     st.session_state[
         "main_typed_command"
     ] = ""
@@ -2302,7 +2379,9 @@ def _start_follow_up() -> None:
         "main_intent_error"
     ] = None
 
-    _invalidate_confirmation()
+    _invalidate_request_state()
+
+
 
 
 def _record_completed_turn(
@@ -2582,10 +2661,42 @@ def _render_conversation_history(
 def _render_tutor_generation_panel(
     view: MainUIViewModel,
 ) -> None:
-    """Render explicit grounded generation with history gates."""
-    st.markdown(
-        "#### Grounded tutor"
+    """Submit a typed or quick-action request."""
+
+    resolution = (
+        _resolve_current_intent()
     )
+
+    candidate = None
+    candidate_payload = None
+    interaction_id = ""
+
+    try:
+        candidate = (
+            _build_current_confirmed_interaction(
+                view,
+                resolution,
+            )
+        )
+
+    except Exception as exc:
+        st.session_state[
+            "main_tutor_error"
+        ] = (
+            f"{type(exc).__name__}: "
+            f"{exc}"
+        )
+
+    if candidate is not None:
+        candidate_payload = (
+            candidate.to_dict()
+        )
+
+        interaction_id = (
+            candidate
+            .interaction
+            .interaction_id
+        )
 
     api_configured = bool(
         os.environ.get(
@@ -2593,91 +2704,112 @@ def _render_tutor_generation_panel(
         )
     )
 
-    assessment = assess_tutor_generation(
-        st.session_state[
-            "main_confirmed_interaction"
-        ],
-        cloud_text_allowed=(
-            st.session_state[
-                "main_cloud_text_allowed"
-            ]
-        ),
-        api_configured=api_configured,
-    )
+    ready = False
 
-    if assessment.ready:
-        st.success(
-            assessment.message
-        )
-    elif (
-        assessment.code
-        == "cloud_permission_required"
-    ):
-        st.warning(
-            assessment.message
-        )
-    elif (
-        assessment.code
-        == "api_not_configured"
-    ):
-        st.error(
-            assessment.message
-        )
+    if candidate_payload is None:
+        if not st.session_state.get(
+            "main_confirmed_target"
+        ):
+            st.info(
+                "Confirm a target in Step 1 "
+                "before sending a request."
+            )
+
+        elif not st.session_state[
+            "main_typed_command"
+        ].strip():
+            st.caption(
+                "Choose a Quick action or "
+                "type a request."
+            )
+
+        elif (
+            resolution is not None
+            and not resolution.recognized
+        ):
+            st.error(
+                "The request intent "
+                "is not recognized."
+            )
+
     else:
-        st.info(
-            assessment.message
+        assessment = assess_tutor_generation(
+            candidate_payload,
+            cloud_text_allowed=(
+                st.session_state[
+                    "main_cloud_text_allowed"
+                ]
+            ),
+            api_configured=api_configured,
         )
 
-    confirmed_wrapper = (
-        st.session_state.get(
-            "main_confirmed_interaction"
-        )
-        or {}
-    )
+        ready = assessment.ready
 
-    confirmed_interaction = (
-        confirmed_wrapper.get(
-            "interaction",
-            {},
-        )
-    )
+        if assessment.ready:
+            st.success(
+                assessment.message
+            )
 
-    current_interaction_id = str(
-        confirmed_interaction.get(
-            "interaction_id",
-            "",
-        )
-    )
+        elif (
+            assessment.code
+            == "cloud_permission_required"
+        ):
+            st.warning(
+                assessment.message
+            )
+
+        elif (
+            assessment.code
+            == "api_not_configured"
+        ):
+            st.error(
+                assessment.message
+            )
+
+        else:
+            st.info(
+                assessment.message
+            )
 
     already_generated = bool(
-        current_interaction_id
+        interaction_id
         and st.session_state.get(
-            "main_last_generated_interaction_id"
+            (
+                "main_last_generated_"
+                "interaction_id"
+            )
         )
-        == current_interaction_id
+        == interaction_id
         and st.session_state.get(
             "main_tutor_result"
         )
     )
 
-    generate_clicked = st.button(
-        "Generate grounded answer",
+    send_clicked = st.button(
+        "Send request",
         type="primary",
         disabled=(
-            not assessment.ready
+            not ready
             or already_generated
         ),
         width="stretch",
         key="main_generate_answer_button",
         help=(
-            "Change the target or command "
+            "Change the target or request "
             "to create a new turn."
             if already_generated
             else None
         ),
     )
 
-    if generate_clicked:
+    if (
+        send_clicked
+        and candidate_payload is not None
+    ):
+        st.session_state[
+            "main_confirmed_interaction"
+        ] = candidate_payload
+
         st.session_state[
             "main_tutor_error"
         ] = None
@@ -2703,9 +2835,7 @@ def _render_tutor_generation_panel(
 
                 generation = (
                     generate_main_tutor_response(
-                        st.session_state[
-                            "main_confirmed_interaction"
-                        ],
+                        candidate_payload,
                         slide=view.active_slide,
                         agent=agent,
                         cloud_text_allowed=(
@@ -2773,6 +2903,13 @@ def _render_tutor_generation_panel(
                 "main_tutor_error"
             ] = None
 
+            st.session_state[
+                (
+                    "main_last_generated_"
+                    "interaction_id"
+                )
+            ] = interaction_id
+
             try:
                 _record_completed_turn(
                     tutor_payload=(
@@ -2787,48 +2924,42 @@ def _render_tutor_generation_panel(
                 st.session_state[
                     "main_conversation_error"
                 ] = (
-                    "Tutor answer succeeded, but "
-                    "conversation recording failed: "
-                    f"{type(exc).__name__}: {exc}"
+                    "Tutor answer succeeded, "
+                    "but conversation recording "
+                    "failed: "
+                    f"{type(exc).__name__}: "
+                    f"{exc}"
                 )
 
-    if st.session_state[
+    if st.session_state.get(
         "main_tutor_error"
-    ]:
+    ):
         st.error(
             st.session_state[
                 "main_tutor_error"
             ]
         )
 
-    if st.session_state[
+    if st.session_state.get(
         "main_conversation_error"
-    ]:
+    ):
         st.warning(
             st.session_state[
                 "main_conversation_error"
             ]
         )
 
-    if st.session_state[
-        "main_tutor_result"
-    ]:
-        st.success(
-            "A validated tutor response "
-            "is shown below."
-        )
+
 
 
 def _render_tutor_result() -> None:
-    """Render the learner-facing answer without developer diagnostics."""
+    """Render the manual answer in the shared output box."""
+
     result = st.session_state[
         "main_tutor_result"
     ]
 
     if result is None:
-        st.info(
-            "Confirm the request and generate an answer."
-        )
         return
 
     st.markdown(
@@ -2875,12 +3006,7 @@ def _render_tutor_result() -> None:
         ),
     )
 
-    st.button(
-        "Start follow-up",
-        width="stretch",
-        key="main_start_follow_up_button",
-        on_click=_start_follow_up,
-    )
+
 
 
 
@@ -3402,6 +3528,138 @@ def _draw_aoi_overlay(
 
     return result
 
+
+
+def _invalidate_request_state() -> None:
+    """Clear one request while preserving target confirmation."""
+
+    st.session_state[
+        "main_confirmed_interaction"
+    ] = None
+
+    st.session_state[
+        "main_tutor_result"
+    ] = None
+
+    st.session_state[
+        "main_tutor_context"
+    ] = None
+
+    st.session_state[
+        (
+            "main_last_generated_"
+            "interaction_id"
+        )
+    ] = None
+
+    st.session_state[
+        "main_tutor_error"
+    ] = None
+
+    st.session_state[
+        "main_xai_result"
+    ] = None
+
+    st.session_state[
+        "main_conversation_error"
+    ] = None
+
+
+def _build_current_confirmed_interaction(
+    view: MainUIViewModel,
+    resolution: ManualIntentResolution | None,
+):
+    """Bind target and intent only when preparing submission."""
+
+    payload = st.session_state.get(
+        "main_confirmed_target"
+    )
+
+    if (
+        not payload
+        or resolution is None
+        or not resolution.recognized
+    ):
+        return None
+
+    confirmed_target = (
+        confirmed_target_selection_from_dict(
+            payload
+        )
+    )
+
+    if (
+        confirmed_target.deck_id
+        != view.deck_id
+        or confirmed_target.slide_id
+        != view.active_slide_id
+    ):
+        raise ValueError(
+            "The confirmed target belongs "
+            "to a different slide."
+        )
+
+    signature = json.dumps(
+        {
+            "target": (
+                confirmed_target.to_dict()
+            ),
+            "intent": resolution.to_dict(),
+            "command": (
+                st.session_state[
+                    "main_typed_command"
+                ].strip()
+            ),
+        },
+        sort_keys=True,
+        ensure_ascii=True,
+    )
+
+    interaction_id = (
+        "manual_"
+        + uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            signature,
+        ).hex
+    )
+
+    return bind_confirmed_target_to_intent(
+        confirmed_target,
+        intent_resolution=resolution,
+        interaction_id=interaction_id,
+    )
+
+
+def _render_tutor_output() -> None:
+    """Render manual and voice answers in one output box."""
+
+    with st.container(
+        border=True
+    ):
+        st.markdown(
+            "#### Tutor response"
+        )
+
+        if (
+            st.session_state.get(
+                "main_tutor_result"
+            )
+            is None
+            and not str(
+                st.session_state.get(
+                    "main_realtime_answer_text",
+                    "",
+                )
+            ).strip()
+        ):
+            st.caption(
+                "The tutor response "
+                "will appear here."
+            )
+
+        _render_tutor_result()
+
+        render_realtime_voice_result()
 
 if __name__ == "__main__":
     main()
