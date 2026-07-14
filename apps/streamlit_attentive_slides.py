@@ -135,7 +135,8 @@ BUILT_IN_MANIFEST_PATH = (
 RUNTIME_DATA_DIR = Path(
     os.environ.get(
         "ATTENTIVE_RUNTIME_DATA_DIR",
-        "/root/autodl-tmp/project_data/runtime/attentive_slides",
+        Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+        / "attentive_slides",
     )
 )
 

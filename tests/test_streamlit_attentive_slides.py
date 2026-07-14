@@ -126,10 +126,19 @@ class TestStreamlitAttentiveSlides(
             '"ATTENTIVE_RUNTIME_DATA_DIR"',
             self.source,
         )
+
+    def test_runtime_data_dir_defaults_to_xdg_user_data(
+        self,
+    ) -> None:
         self.assertIn(
-            '"/root/autodl-tmp/project_data/runtime/attentive_slides"',
+            '"XDG_DATA_HOME"',
             self.source,
         )
+        self.assertIn(
+            'Path.home() / ".local" / "share"',
+            self.source,
+        )
+        self.assertNotIn("/root/autodl-tmp", self.source)
 
     def test_single_main_title(
         self,
