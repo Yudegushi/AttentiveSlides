@@ -21,6 +21,14 @@ class TextBox:
     bbox: list[float]
     confidence: float
     source: str
+    block_id: int | None = None
+    line_id: int | None = None
+    block_bbox: list[float] | None = None
+    font_size: float | None = None
+    font_family: str | None = None
+    font_flags: int | None = None
+    direction: tuple[float, float] | None = None
+    starts_bullet: bool = False
 
     @property
     def x_min(self) -> float:

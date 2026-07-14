@@ -4,9 +4,13 @@ PDF loading, metadata management, slide rendering, and embedded text extraction.
 from __future__ import annotations
 
 import json
+import math
+import re
 import shutil
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
+from functools import lru_cache
 from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
@@ -20,6 +24,155 @@ except ImportError as exc:
     ) from exc
 
 from .ocr import TextBox, clamp
+
+
+BULLET_PREFIXES = ("•", "❒", "▪", "◦", "‣", "–", "—")
+NUMBERED_LIST_PATTERN = re.compile(r"^\s*\d+[.)](?:\s|$)")
+
+
+def _normalized_bbox(
+    bbox: list[float] | tuple[float, ...],
+    page_width: float,
+    page_height: float,
+) -> list[float]:
+    x1, y1, x2, y2 = (float(value) for value in bbox)
+    return [
+        clamp(x1 / page_width),
+        clamp(y1 / page_height),
+        clamp(x2 / page_width),
+        clamp(y2 / page_height),
+    ]
+
+
+def _dominant_text_span(spans: list[dict[str, Any]]) -> dict[str, Any] | None:
+    candidates = [
+        span
+        for span in spans
+        if str(span.get("text", "")).strip()
+        and "dingbat" not in str(span.get("font", "")).casefold()
+        and not str(span.get("text", "")).strip().startswith(BULLET_PREFIXES)
+    ]
+    if not candidates:
+        candidates = [span for span in spans if str(span.get("text", "")).strip()]
+    return max(
+        candidates,
+        key=lambda span: len(str(span.get("text", "")).strip()),
+        default=None,
+    )
+
+
+def _starts_list_marker(text: str) -> bool:
+    stripped = text.lstrip()
+    return stripped.startswith(BULLET_PREFIXES) or bool(NUMBERED_LIST_PATTERN.match(text))
+
+
+def _line_bbox(line: dict[str, Any], spans: list[dict[str, Any]]) -> list[float] | tuple[float, ...] | None:
+    bbox = line.get("bbox")
+    if bbox and len(bbox) == 4:
+        return bbox
+    span_boxes = [span.get("bbox") for span in spans if span.get("bbox") and len(span["bbox"]) == 4]
+    if not span_boxes:
+        return None
+    return [
+        min(float(item[0]) for item in span_boxes),
+        min(float(item[1]) for item in span_boxes),
+        max(float(item[2]) for item in span_boxes),
+        max(float(item[3]) for item in span_boxes),
+    ]
+
+
+def _extract_pdf_text_boxes_from_page_dict(
+    page_dict: dict[str, Any],
+    page_width: float,
+    page_height: float,
+) -> list[TextBox]:
+    boxes: list[TextBox] = []
+    for block_index, block in enumerate(page_dict.get("blocks", [])):
+        if block.get("type") != 0:
+            continue
+        block_bbox = block.get("bbox")
+        normalized_block_bbox = (
+            _normalized_bbox(block_bbox, page_width, page_height)
+            if block_bbox and len(block_bbox) == 4
+            else None
+        )
+        for line_index, line in enumerate(block.get("lines", [])):
+            spans = list(line.get("spans", []))
+            text_parts = [" ".join(str(span.get("text", "")).split()) for span in spans]
+            text = " ".join(part for part in text_parts if part).strip()
+            bbox = _line_bbox(line, spans)
+            if not text or bbox is None:
+                continue
+            line_bbox = _normalized_bbox(bbox, page_width, page_height)
+            if line_bbox[2] <= line_bbox[0] or line_bbox[3] <= line_bbox[1]:
+                continue
+            dominant = _dominant_text_span(spans)
+            direction = line.get("dir", (1.0, 0.0))
+            boxes.append(
+                TextBox(
+                    text=text,
+                    bbox=line_bbox,
+                    confidence=1.0,
+                    source="pdf_text",
+                    block_id=int(block.get("number", block_index)),
+                    line_id=line_index,
+                    block_bbox=normalized_block_bbox,
+                    font_size=float(dominant.get("size", 0.0)) if dominant else None,
+                    font_family=str(dominant.get("font", "")) if dominant else None,
+                    font_flags=int(dominant.get("flags", 0)) if dominant else None,
+                    direction=tuple(float(value) for value in direction),
+                    starts_bullet=_starts_list_marker(text),
+                )
+            )
+    return sorted(boxes, key=lambda box: (box.y_min, box.x_min))
+
+
+def _normalized_margin_text(text: str) -> str:
+    return " ".join(text.casefold().split())
+
+
+@lru_cache(maxsize=16)
+def _scan_pdf_margin_profile(
+    resolved_pdf_path: str,
+    modification_time_ns: int,
+) -> tuple[frozenset[str], frozenset[str]]:
+    del modification_time_ns
+    document = fitz.open(resolved_pdf_path)
+    top_counts: Counter[str] = Counter()
+    bottom_counts: Counter[str] = Counter()
+    try:
+        for page in document:
+            page_height = float(page.rect.height)
+            page_top: set[str] = set()
+            page_bottom: set[str] = set()
+            for block in page.get_text("dict").get("blocks", []):
+                if block.get("type") != 0:
+                    continue
+                for line in block.get("lines", []):
+                    spans = list(line.get("spans", []))
+                    text = " ".join(
+                        " ".join(str(span.get("text", "")).split())
+                        for span in spans
+                        if str(span.get("text", "")).strip()
+                    ).strip()
+                    bbox = _line_bbox(line, spans)
+                    normalized = _normalized_margin_text(text)
+                    if not normalized or bbox is None:
+                        continue
+                    y_min, y_max = float(bbox[1]) / page_height, float(bbox[3]) / page_height
+                    if y_max <= 0.12:
+                        page_top.add(normalized)
+                    if y_min >= 0.88:
+                        page_bottom.add(normalized)
+            top_counts.update(page_top)
+            bottom_counts.update(page_bottom)
+        threshold = max(2, math.ceil(document.page_count * 0.30))
+        return (
+            frozenset(text for text, count in top_counts.items() if count >= threshold),
+            frozenset(text for text, count in bottom_counts.items() if count >= threshold),
+        )
+    finally:
+        document.close()
 
 
 class SlideParser:
@@ -118,44 +271,24 @@ class SlideParser:
 
         pdf_path = Path(str(deck_info["pdf_path"]))
         document = fitz.open(str(pdf_path))
-        boxes: list[TextBox] = []
         try:
             page = document.load_page(slide_id - 1)
             page_width = float(page.rect.width)
             page_height = float(page.rect.height)
             page_dict = page.get_text("dict")
-
-            for block in page_dict.get("blocks", []):
-                if block.get("type") != 0:
-                    continue
-                for line in block.get("lines", []):
-                    spans = []
-                    for span in line.get("spans", []):
-                        text = " ".join(str(span.get("text", "")).split())
-                        bbox = span.get("bbox")
-                        if text and bbox:
-                            spans.append((text, bbox))
-                    if not spans:
-                        continue
-
-                    text = " ".join(item[0] for item in spans)
-                    x_min = min(float(item[1][0]) for item in spans)
-                    y_min = min(float(item[1][1]) for item in spans)
-                    x_max = max(float(item[1][2]) for item in spans)
-                    y_max = max(float(item[1][3]) for item in spans)
-                    bbox = [
-                        clamp(x_min / page_width),
-                        clamp(y_min / page_height),
-                        clamp(x_max / page_width),
-                        clamp(y_max / page_height),
-                    ]
-                    if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
-                        continue
-                    boxes.append(TextBox(text=text, bbox=bbox, confidence=1.0, source="pdf_text"))
+            boxes = _extract_pdf_text_boxes_from_page_dict(page_dict, page_width, page_height)
         finally:
             document.close()
+        return boxes
 
-        return sorted(boxes, key=lambda box: (box.y_min, box.x_min))
+    def extract_pdf_margin_profile(self, deck_id: str) -> tuple[frozenset[str], frozenset[str]]:
+        deck_info = self.metadata.get(deck_id)
+        if deck_info is None:
+            raise ValueError(f"Unknown deck_id: {deck_id}")
+        pdf_path = Path(str(deck_info["pdf_path"])).expanduser().resolve()
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"Stored PDF is missing: {pdf_path}")
+        return _scan_pdf_margin_profile(str(pdf_path), pdf_path.stat().st_mtime_ns)
 
     def extract_pdf_image_boxes(self, deck_id: str, slide_id: int) -> list[list[float]]:
         deck_info = self.metadata.get(deck_id)
