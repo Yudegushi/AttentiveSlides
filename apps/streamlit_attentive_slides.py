@@ -130,9 +130,10 @@ BUILT_IN_MANIFEST_PATH = (
 )
 
 RUNTIME_DATA_DIR = Path(
-    "/root/autodl-tmp/"
-    "project_data/runtime/"
-    "attentive_slides"
+    os.environ.get(
+        "ATTENTIVE_RUNTIME_DATA_DIR",
+        "/root/autodl-tmp/project_data/runtime/attentive_slides",
+    )
 )
 
 MAIN_INTERACTION_LOG_PATH = (

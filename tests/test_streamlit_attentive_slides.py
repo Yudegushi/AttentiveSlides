@@ -119,6 +119,18 @@ class TestStreamlitAttentiveSlides(
             self.functions,
         )
 
+    def test_runtime_data_dir_is_environment_configurable(
+        self,
+    ) -> None:
+        self.assertIn(
+            '"ATTENTIVE_RUNTIME_DATA_DIR"',
+            self.source,
+        )
+        self.assertIn(
+            '"/root/autodl-tmp/project_data/runtime/attentive_slides"',
+            self.source,
+        )
+
     def test_single_main_title(
         self,
     ) -> None:
