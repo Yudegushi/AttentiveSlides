@@ -1,4 +1,5 @@
 from io import BytesIO
+from pathlib import Path
 import unittest
 import warnings
 
@@ -193,6 +194,74 @@ class SinglePortTransportTest(unittest.TestCase):
         self.assertEqual(stats["gaze_rejections"], 0)
         self.assertEqual(stats["geometry_slide_id"], 2)
         self.assertEqual(stats["geometry_layout_revision"], 7)
+
+
+class LocalEyeTheiaCaptureContractTest(unittest.TestCase):
+    @staticmethod
+    def component_source() -> str:
+        return Path(
+            "modules/media/live_capture_component/index.html"
+        ).read_text(encoding="utf-8")
+
+    def test_reuses_one_native_camera_without_changing_cloud_encoding(self):
+        component = self.component_source()
+
+        self.assertEqual(
+            component.count("navigator.mediaDevices.getUserMedia"),
+            1,
+        )
+        self.assertIn("width: { ideal: 1280 }", component)
+        self.assertIn("height: { ideal: 720 }", component)
+        self.assertIn("frameRate: { ideal: 30, max: 30 }", component)
+        self.assertIn("canvas.width = 320", component)
+        self.assertIn('}, "image/jpeg", 0.65)', component)
+        self.assertIn("}, 200)", component)
+        self.assertIn("let videoInFlight = false", component)
+        self.assertIn("let audioInFlight = false", component)
+
+    def test_packs_native_frames_for_loopback_eyetheia(self):
+        component = self.component_source()
+
+        self.assertIn(
+            "@mediapipe/face_mesh@0.4.1633559619/face_mesh.js",
+            component,
+        )
+        self.assertIn(
+            'const EYETHEIA_URL = "ws://127.0.0.1:8001/ws/predict_gaze"',
+            component,
+        )
+        self.assertIn("view.setUint32(0, metadata.length, false)", component)
+        self.assertIn("window.top.innerWidth", component)
+        self.assertIn("window.top.innerHeight", component)
+        self.assertNotIn("window.innerWidth", component)
+        self.assertNotIn("window.innerHeight", component)
+        self.assertIn("faces[0].length === 478", component)
+        self.assertIn("eyeTheiaCanvas.width = preview.videoWidth", component)
+        self.assertIn('}, "image/jpeg", 0.9)', component)
+        self.assertIn("eyeTheiaSocket.bufferedAmount > 1_000_000", component)
+
+    def test_gaze_upload_is_latest_only_and_local_errors_do_not_stop_capture(self):
+        component = self.component_source()
+
+        self.assertIn('fetch("/attentive-media/gaze"', component)
+        self.assertIn('headers: headers({ "Content-Type": "application/json" })', component)
+        self.assertIn("let latestGaze = null", component)
+        self.assertIn("let gazeInFlight = false", component)
+        self.assertIn("200 - (performance.now() - lastGazeUploadAt)", component)
+        self.assertIn('source: "eyetheia_local"', component)
+        self.assertIn('type: "reset_filter"', component)
+        self.assertIn('message.type === "screen_ack"', component)
+        self.assertIn('message.type === "filter_reset"', component)
+
+        failure_start = component.index("function handleLocalGazeFailure")
+        failure_end = component.index(
+            "function scheduleEyeTheiaReconnect",
+            failure_start,
+        )
+        self.assertNotIn(
+            "stopCapture",
+            component[failure_start:failure_end],
+        )
 
 
 class BrowserObservationRouteTest(unittest.IsolatedAsyncioTestCase):

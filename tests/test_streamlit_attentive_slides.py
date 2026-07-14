@@ -546,6 +546,13 @@ class TestStreamlitAttentiveSlides(
         self.assertIn('st.iframe("/capture"', controls)
         self.assertNotIn("iframe", periodic)
 
+    def test_main_live_resources_serve_the_formal_capture_component(self) -> None:
+        source = self.function_source("build_main_live_resources")
+
+        self.assertIn('"live_capture_component"', source)
+        self.assertIn('"index.html"', source)
+        self.assertIn("capture_html=capture_html", source)
+
     def test_periodic_fragment_refreshes_live_transport_status(self) -> None:
         periodic = self.function_source("_render_live_periodic")
 

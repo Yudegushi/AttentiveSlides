@@ -35,7 +35,15 @@ class StreamlitLiveSurfaceTest(unittest.TestCase):
             with self.subTest(expected=expected):
                 self.assertIn(expected, component)
         self.assertNotIn("http://", component)
-        self.assertNotIn("https://", component)
+        pinned_face_mesh = (
+            "https://cdn.jsdelivr.net/npm/@mediapipe/"
+            "face_mesh@0.4.1633559619"
+        )
+        self.assertIn(pinned_face_mesh + "/face_mesh.js", component)
+        self.assertNotIn(
+            "https://",
+            component.replace(pinned_face_mesh, ""),
+        )
         self.assertNotIn('"/media/', component)
         self.assertNotIn('id="start"', component)
         self.assertNotIn('id="stop"', component)
