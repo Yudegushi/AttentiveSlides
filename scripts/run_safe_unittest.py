@@ -12,6 +12,11 @@ import json
 import os
 
 os.environ.setdefault(
+    "ATTENTIVE_DISABLE_REALTIME_VOICE_FOR_APPTEST",
+    "1",
+)
+
+os.environ.setdefault(
     "ATTENTIVE_DISABLE_MICROPHONE_FOR_APPTEST",
     "1",
 )

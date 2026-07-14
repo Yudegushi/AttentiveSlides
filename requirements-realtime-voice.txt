@@ -1,0 +1,3 @@
+dashscope>=1.25.17,<2.0
+websockets>=14,<16
+aiohttp>=3.9,<4.0

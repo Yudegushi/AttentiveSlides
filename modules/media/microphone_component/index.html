@@ -2,100 +2,248 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+
   <meta
     name="viewport"
     content="width=device-width, initial-scale=1"
   >
+
   <style>
+    :root {
+      color-scheme: light dark;
+      font-family:
+        Inter,
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
     body {
-      font-family: system-ui, sans-serif;
+      width: 100%;
       margin: 0;
-      padding: 0.55rem;
+      padding: 0.25rem;
+      overflow-x: hidden;
       background: transparent;
     }
 
     button {
-      padding: 0.45rem 0.75rem;
-      margin-right: 0.4rem;
+      width: 100%;
+      min-height: 2.35rem;
+      border: 1px solid rgba(128, 128, 128, 0.45);
+      border-radius: 0.5rem;
       cursor: pointer;
+      font: inherit;
+      font-weight: 600;
     }
 
-    #status {
-      margin: 0.5rem 0 0;
-      font-size: 0.88rem;
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
     }
 
-    #stats {
-      margin-top: 0.3rem;
-      font-size: 0.75rem;
-      opacity: 0.75;
+    .grid {
+      display: grid;
+      width: 100%;
+      grid-template-columns:
+        repeat(2, minmax(0, 1fr));
+      gap: 0.45rem;
+    }
+
+    .card {
+      min-width: 0;
+      min-height: 4rem;
+      padding: 0.5rem;
+      border: 1px solid rgba(128, 128, 128, 0.25);
+      border-radius: 0.55rem;
+    }
+
+    .label {
+      margin-bottom: 0.25rem;
+      font-size: 0.68rem;
+      letter-spacing: 0.04em;
+      opacity: 0.7;
+    }
+
+    .value {
+      font-size: 0.92rem;
+      font-weight: 700;
+    }
+
+    .status {
+      margin-top: 0.45rem;
+      font-size: 0.77rem;
+      line-height: 1.35;
+      opacity: 0.8;
+    }
+
+    .voice-button {
+      min-height: 3rem;
+      user-select: none;
+      touch-action: none;
+    }
+
+    .continuous-controls {
+      display: grid;
+      grid-template-columns:
+        minmax(0, 2fr)
+        minmax(7rem, 1fr);
+      gap: 0.45rem;
+    }
+
+    .speaker-on {
+      outline: 2px solid currentColor;
+    }
+
+    .recording {
+      outline: 2px solid currentColor;
+    }
+
+    .answer {
+      margin-top: 0.45rem;
+      max-height: 4.8rem;
+      overflow: auto;
+      font-size: 0.78rem;
+      line-height: 1.35;
+      white-space: pre-wrap;
     }
   </style>
 </head>
+
 <body>
-  <button id="start">
-    Start microphone
-  </button>
-
-  <button
-    id="stop"
-    disabled
-  >
-    Stop
-  </button>
-
-  <div id="status">
-    Microphone is off.
-  </div>
-
-  <div id="stats"></div>
+  <main id="root"></main>
 
 <script>
 (() => {
-  const sessionId =
-    globalThis.crypto?.randomUUID?.()
-    ?? `${Date.now()}-${Math.random()}`;
+  "use strict";
 
-  const startButton =
-    document.getElementById("start");
+  const params =
+    new URLSearchParams(
+      window.location.search
+    );
 
-  const stopButton =
-    document.getElementById("stop");
+  const view =
+    params.get("view") || "device";
 
-  const status =
-    document.getElementById("status");
+  const SESSION_KEY =
+    "attentive_realtime_voice_session";
 
-  const stats =
-    document.getElementById("stats");
+  let sessionId =
+    window.localStorage.getItem(
+      SESSION_KEY
+    );
 
-  let stream = null;
-  let audioContext = null;
-  let sourceNode = null;
+  if (!sessionId) {
+    sessionId =
+      globalThis.crypto
+        ?.randomUUID?.()
+      ?? `${Date.now()}-${Math.random()}`;
+
+    window.localStorage.setItem(
+      SESSION_KEY,
+      sessionId,
+    );
+  }
+
+  const root =
+    document.getElementById("root");
+
+  let mediaStream = null;
+  let inputContext = null;
+  let inputSource = null;
   let processor = null;
   let silentGain = null;
-  let heartbeatTimer = null;
-  let statsTimer = null;
-  let running = false;
-  let chunkInFlight = false;
-  let clientDrops = 0;
 
-  function headers(extra = {}) {
+  let heartbeatTimer = null;
+  let stateTimer = null;
+
+  let chunkInFlight = false;
+  let localDrops = 0;
+  let suppressInput = false;
+
+  let eventSocket = null;
+  let outputContext = null;
+  let playbackCursor = 0;
+  let speakerEnabled = false;
+
+  function requestHeaders(
+    extra = {},
+  ) {
     return {
-      "X-Attentive-Audio-Session":
+      "X-Attentive-Voice-Session":
         sessionId,
       ...extra,
     };
   }
 
-  async function requireOk(response) {
+  async function requestJson(
+    url,
+    options = {},
+  ) {
+    const response =
+      await fetch(
+        url,
+        options,
+      );
+
     if (!response.ok) {
-      const text = await response.text();
+      const text =
+        await response.text();
+
       throw new Error(
-        text || `HTTP ${response.status}`
+        text
+        || `HTTP ${response.status}`
       );
     }
 
-    return response;
+    return response.json();
+  }
+
+  async function postJson(
+    url,
+    payload = {},
+  ) {
+    return requestJson(
+      url,
+      {
+        method: "POST",
+        headers: requestHeaders({
+          "Content-Type":
+            "application/json",
+        }),
+        body: JSON.stringify(
+          payload
+        ),
+      },
+    );
+  }
+
+  async function readState() {
+    return requestJson(
+      "/voice/state",
+      {
+        headers:
+          requestHeaders(),
+      },
+    );
+  }
+
+  function stateLabel(state) {
+    return String(
+      state || "off"
+    )
+      .replaceAll("_", " ")
+      .replace(
+        /\b\w/g,
+        (letter) =>
+          letter.toUpperCase()
+      );
   }
 
   function downsampleToS16(
@@ -104,196 +252,115 @@
   ) {
     const targetRate = 16000;
 
-    const count = Math.max(
-      1,
-      Math.floor(
-        input.length
-        * targetRate
-        / sourceRate
-      ),
-    );
+    const outputLength =
+      Math.max(
+        1,
+        Math.floor(
+          input.length
+          * targetRate
+          / sourceRate
+        ),
+      );
 
     const output =
-      new Int16Array(count);
+      new Int16Array(
+        outputLength
+      );
 
     for (
       let index = 0;
-      index < count;
+      index < outputLength;
       index += 1
     ) {
-      const sourceIndex = Math.min(
-        input.length - 1,
-        Math.floor(
-          index
-          * sourceRate
-          / targetRate
-        ),
-      );
-
-      const sample = Math.max(
-        -1,
+      const sourceIndex =
         Math.min(
-          1,
-          input[sourceIndex],
-        ),
-      );
+          input.length - 1,
+          Math.floor(
+            index
+            * sourceRate
+            / targetRate
+          ),
+        );
+
+      const sample =
+        Math.max(
+          -1,
+          Math.min(
+            1,
+            input[sourceIndex],
+          ),
+        );
 
       output[index] =
-        Math.round(sample * 32767);
+        Math.round(
+          sample * 32767
+        );
     }
 
     return output;
   }
 
-  function beginAudioPump() {
-    audioContext =
-      new AudioContext();
-
-    sourceNode =
-      audioContext
-      .createMediaStreamSource(stream);
-
-    processor =
-      audioContext
-      .createScriptProcessor(
-        4096,
-        1,
-        1,
-      );
-
-    silentGain =
-      audioContext.createGain();
-
-    silentGain.gain.value = 0;
-
-    processor.onaudioprocess =
-      (event) => {
-        if (!running) {
-          return;
-        }
-
-        if (chunkInFlight) {
-          clientDrops += 1;
-          return;
-        }
-
-        const pcm = downsampleToS16(
-          event.inputBuffer
-            .getChannelData(0),
-          audioContext.sampleRate,
-        );
-
-        chunkInFlight = true;
-
-        fetch(
-          "/audio/chunk",
-          {
-            method: "POST",
-            headers: headers({
-              "Content-Type":
-                "audio/L16",
-              "X-Audio-Timestamp":
-                String(
-                  performance.now()
-                  / 1000
-                ),
-              "X-Audio-Sample-Rate":
-                "16000",
-              "X-Audio-Channels":
-                "1",
-            }),
-            body: pcm.buffer,
-          },
-        )
-          .then(requireOk)
-          .catch((error) => {
-            status.textContent =
-              `Audio transport error: `
-              + error.message;
-          })
-          .finally(() => {
-            chunkInFlight = false;
-          });
-      };
-
-    sourceNode.connect(
-      processor
-    );
-
-    processor.connect(
-      silentGain
-    );
-
-    silentGain.connect(
-      audioContext.destination
-    );
-  }
-
-  function beginHeartbeat() {
-    heartbeatTimer =
-      window.setInterval(
-        () => {
-          if (!running) {
-            return;
-          }
-
-          fetch(
-            "/audio/heartbeat",
-            {
-              method: "POST",
-              headers: headers(),
-            },
-          )
-            .then(requireOk)
-            .catch(() => {
-              stopCapture(false);
-            });
-        },
-        1000,
-      );
-  }
-
-  async function refreshStats() {
-    try {
-      const response =
-        await fetch("/audio/stats");
-
-      const payload =
-        await response.json();
-
-      stats.textContent =
-        `server chunks: `
-        + `${payload.accepted_chunks}; `
-        + `queue: `
-        + `${payload.queue_depth}; `
-        + `client drops: `
-        + `${clientDrops}`;
-
-      if (
-        running
-        && !payload.source_running
-      ) {
-        await stopCapture(false);
-
-        status.textContent =
-          "Server released the microphone "
-          + "session.";
-      }
-    } catch (error) {
-      stats.textContent =
-        `Stats unavailable: `
-        + error.message;
-    }
-  }
-
-  async function startCapture() {
-    if (running) {
+  async function sendAudio(
+    pcm,
+  ) {
+    if (
+      chunkInFlight
+      || suppressInput
+    ) {
+      localDrops += 1;
       return;
     }
 
+    chunkInFlight = true;
+
     try {
-      stream =
-        await navigator.mediaDevices
+      const response =
+        await fetch(
+          "/voice/audio",
+          {
+            method: "POST",
+            headers:
+              requestHeaders({
+                "Content-Type":
+                  "audio/L16",
+                "X-Audio-Sample-Rate":
+                  "16000",
+                "X-Audio-Channels":
+                  "1",
+                "X-Audio-Timestamp":
+                  String(
+                    performance.now()
+                    / 1000
+                  ),
+              }),
+            body: pcm.buffer,
+          },
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          await response.text()
+        );
+      }
+
+    } catch (error) {
+      console.error(
+        "Audio upload failed:",
+        error
+      );
+
+    } finally {
+      chunkInFlight = false;
+    }
+  }
+
+  async function startAudioPump() {
+    if (mediaStream) {
+      return;
+    }
+
+    mediaStream =
+      await navigator.mediaDevices
         .getUserMedia({
           video: false,
           audio: {
@@ -304,55 +371,81 @@
           },
         });
 
-      if (
-        !stream.getAudioTracks().length
-      ) {
-        throw new Error(
-          "No microphone track returned."
-        );
-      }
-
-      await requireOk(
-        await fetch(
-          "/audio/start",
-          {
-            method: "POST",
-            headers: headers(),
-          },
-        ),
+    if (
+      !mediaStream
+        .getAudioTracks()
+        .length
+    ) {
+      throw new Error(
+        "No microphone track was returned."
       );
-
-      running = true;
-
-      beginAudioPump();
-
-      await audioContext.resume();
-
-      beginHeartbeat();
-
-      startButton.disabled = true;
-      stopButton.disabled = false;
-
-      status.textContent =
-        "Listening. Audio remains local "
-        + "to the application runtime.";
-    } catch (error) {
-      status.textContent =
-        `Microphone did not start: `
-        + error.message;
-
-      await stopCapture(true);
     }
+
+    inputContext =
+      new AudioContext();
+
+    inputSource =
+      inputContext
+        .createMediaStreamSource(
+          mediaStream
+        );
+
+    processor =
+      inputContext
+        .createScriptProcessor(
+          4096,
+          1,
+          1,
+        );
+
+    silentGain =
+      inputContext.createGain();
+
+    silentGain.gain.value = 0;
+
+    processor.onaudioprocess =
+      (event) => {
+        if (!mediaStream) {
+          return;
+        }
+
+        const pcm =
+          downsampleToS16(
+            event.inputBuffer
+              .getChannelData(0),
+            inputContext.sampleRate,
+          );
+
+        sendAudio(pcm);
+      };
+
+    inputSource.connect(
+      processor
+    );
+
+    processor.connect(
+      silentGain
+    );
+
+    silentGain.connect(
+      inputContext.destination
+    );
+
+    await inputContext.resume();
+
+    heartbeatTimer =
+      window.setInterval(
+        () => {
+          postJson(
+            "/voice/heartbeat",
+            {}
+          ).catch(() => {});
+        },
+        1000,
+      );
   }
 
-  async function stopCapture(
-    notifyServer,
-  ) {
-    const wasRunning =
-      Boolean(running || stream);
-
-    running = false;
-
+  async function stopAudioPump() {
     window.clearInterval(
       heartbeatTimer
     );
@@ -361,10 +454,12 @@
 
     if (processor) {
       processor.disconnect();
+      processor.onaudioprocess =
+        null;
     }
 
-    if (sourceNode) {
-      sourceNode.disconnect();
+    if (inputSource) {
+      inputSource.disconnect();
     }
 
     if (silentGain) {
@@ -372,89 +467,958 @@
     }
 
     processor = null;
-    sourceNode = null;
+    inputSource = null;
     silentGain = null;
 
-    if (audioContext) {
-      await audioContext
+    if (inputContext) {
+      await inputContext
         .close()
         .catch(() => {});
     }
 
-    audioContext = null;
+    inputContext = null;
 
-    if (stream) {
-      stream
+    if (mediaStream) {
+      mediaStream
         .getTracks()
         .forEach(
-          (track) => track.stop()
+          (track) =>
+            track.stop()
         );
     }
 
-    stream = null;
-
-    startButton.disabled = false;
-    stopButton.disabled = true;
-
-    if (
-      notifyServer
-      && wasRunning
-    ) {
-      await fetch(
-        "/audio/stop",
-        {
-          method: "POST",
-          headers: headers(),
-        },
-      ).catch(() => {});
-    }
-
-    status.textContent =
-      "Microphone is off.";
+    mediaStream = null;
   }
 
-  startButton.addEventListener(
-    "click",
-    startCapture,
-  );
+  function pcm16ToFloat32(
+    arrayBuffer,
+  ) {
+    const input =
+      new Int16Array(
+        arrayBuffer
+      );
 
-  stopButton.addEventListener(
-    "click",
-    () => stopCapture(true),
-  );
+    const output =
+      new Float32Array(
+        input.length
+      );
+
+    for (
+      let index = 0;
+      index < input.length;
+      index += 1
+    ) {
+      output[index] =
+        input[index] / 32768;
+    }
+
+    return output;
+  }
+
+  async function prepareSpeaker() {
+    if (!outputContext) {
+      outputContext =
+        new AudioContext({
+          sampleRate: 24000,
+        });
+    }
+
+    await outputContext.resume();
+  }
+
+  function enqueueSpeakerAudio(
+    arrayBuffer,
+  ) {
+    if (!outputContext) {
+      return;
+    }
+
+    const samples =
+      pcm16ToFloat32(
+        arrayBuffer
+      );
+
+    const audioBuffer =
+      outputContext
+        .createBuffer(
+          1,
+          samples.length,
+          24000,
+        );
+
+    audioBuffer.copyToChannel(
+      samples,
+      0,
+    );
+
+    const source =
+      outputContext
+        .createBufferSource();
+
+    source.buffer =
+      audioBuffer;
+
+    source.connect(
+      outputContext.destination
+    );
+
+    const startAt =
+      Math.max(
+        outputContext
+          .currentTime
+          + 0.02,
+        playbackCursor,
+      );
+
+    source.start(
+      startAt
+    );
+
+    playbackCursor =
+      startAt
+      + audioBuffer.duration;
+  }
+
+  function clearPlayback() {
+    playbackCursor = 0;
+
+    if (outputContext) {
+      outputContext
+        .close()
+        .catch(() => {});
+
+      outputContext = null;
+    }
+  }
+
+  function eventSocketUrl() {
+    const protocol =
+      window.location.protocol
+      === "https:"
+        ? "wss:"
+        : "ws:";
+
+    return (
+      `${protocol}//`
+      + window.location.host
+      + "/voice/events"
+      + `?session=${encodeURIComponent(
+          sessionId
+        )}`
+    );
+  }
+
+  function openEventSocket(
+    onMessage,
+  ) {
+    if (
+      eventSocket
+      && (
+        eventSocket.readyState
+        === WebSocket.OPEN
+        || eventSocket.readyState
+        === WebSocket.CONNECTING
+      )
+    ) {
+      return;
+    }
+
+    eventSocket =
+      new WebSocket(
+        eventSocketUrl()
+      );
+
+    eventSocket.binaryType =
+      "arraybuffer";
+
+    eventSocket.onmessage =
+      (event) => {
+        if (
+          event.data
+          instanceof ArrayBuffer
+        ) {
+          if (speakerEnabled) {
+            enqueueSpeakerAudio(
+              event.data
+            );
+          }
+
+          return;
+        }
+
+        try {
+          onMessage(
+            JSON.parse(
+              event.data
+            )
+          );
+
+        } catch (error) {
+          console.error(
+            "Invalid voice event:",
+            error
+          );
+        }
+      };
+  }
+
+  function renderDeviceView() {
+    root.innerHTML = `
+      <div
+        class="grid"
+        data-testid="system-status-grid"
+        data-columns="2"
+        data-rows="2"
+        data-items="4"
+      >
+        <div class="card">
+          <div class="label">MODE</div>
+          <div
+            class="value"
+            id="modeValue"
+          >
+            Manual
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="label">
+            CLOUD TUTOR
+          </div>
+          <div
+            class="value"
+            id="cloudValue"
+          >
+            Checking
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="label">
+            CAMERA
+          </div>
+          <button id="cameraButton">
+            Off
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="label">
+            MICROPHONE
+          </div>
+          <button id="microphoneButton">
+            Off
+          </button>
+        </div>
+      </div>
+
+      <div
+        class="status"
+        id="deviceStatus"
+      >
+        Loading device state…
+      </div>
+    `;
+
+    const modeValue =
+      document.getElementById(
+        "modeValue"
+      );
+
+    const cloudValue =
+      document.getElementById(
+        "cloudValue"
+      );
+
+    const cameraButton =
+      document.getElementById(
+        "cameraButton"
+      );
+
+    const microphoneButton =
+      document.getElementById(
+        "microphoneButton"
+      );
+
+    const deviceStatus =
+      document.getElementById(
+        "deviceStatus"
+      );
+
+    cameraButton.addEventListener(
+      "click",
+      async () => {
+        cameraButton.disabled =
+          true;
+
+        try {
+          await postJson(
+            "/voice/device/camera/toggle"
+          );
+
+        } finally {
+          cameraButton.disabled =
+            false;
+        }
+      },
+    );
+
+    microphoneButton
+      .addEventListener(
+        "click",
+        async () => {
+          microphoneButton.disabled =
+            true;
+
+          try {
+            const state =
+              await readState();
+
+            if (
+              state.microphone_enabled
+            ) {
+              await stopAudioPump();
+
+              await postJson(
+                "/voice/device/microphone",
+                {
+                  enabled: false,
+                  permission:
+                    "unknown",
+                },
+              );
+
+            } else {
+              try {
+                await startAudioPump();
+
+                await postJson(
+                  "/voice/device/microphone",
+                  {
+                    enabled: true,
+                    permission:
+                      "granted",
+                  },
+                );
+
+              } catch (error) {
+                await stopAudioPump();
+
+                await postJson(
+                  "/voice/device/microphone",
+                  {
+                    enabled: false,
+                    permission:
+                      "denied",
+                  },
+                );
+
+                deviceStatus
+                  .textContent =
+                  `Microphone permission `
+                  + `failed: `
+                  + error.message;
+              }
+            }
+
+          } finally {
+            microphoneButton.disabled =
+              false;
+          }
+        },
+      );
+
+    async function refresh() {
+      try {
+        const state =
+          await readState();
+
+        modeValue.textContent =
+          state.interaction_mode
+          === "hybrid"
+            ? "Hybrid"
+            : "Manual";
+
+        cameraButton.textContent =
+          state.camera_enabled
+            ? "On"
+            : "Off";
+
+        microphoneButton
+          .textContent =
+          state.microphone_enabled
+            ? "On"
+            : "Off";
+
+        cloudValue.textContent =
+          state.cloud_tutor_available
+            ? "Available"
+            : "Offline";
+
+        suppressInput =
+          Boolean(
+            state.suppress_input
+          );
+
+        deviceStatus.textContent =
+          state.microphone_enabled
+            ? (
+                `Microphone granted · `
+                + `${state.voice_state}`
+              )
+            : (
+                `Microphone `
+                + `${state.microphone_permission}`
+              );
+
+        if (
+          !state.microphone_enabled
+          && mediaStream
+        ) {
+          await stopAudioPump();
+        }
+
+      } catch (error) {
+        deviceStatus.textContent =
+          `Device state unavailable: `
+          + error.message;
+      }
+    }
+
+    stateTimer =
+      window.setInterval(
+        refresh,
+        500,
+      );
+
+    refresh();
+  }
+
+  function renderPushToTalkView() {
+    root.innerHTML = `
+      <button
+        id="holdButton"
+        class="voice-button"
+        disabled
+      >
+        Microphone is off
+      </button>
+
+      <div
+        class="status"
+        id="pttStatus"
+      >
+        Enable Microphone in the sidebar.
+      </div>
+
+      <div
+        class="answer"
+        id="pttAnswer"
+      ></div>
+    `;
+
+    const holdButton =
+      document.getElementById(
+        "holdButton"
+      );
+
+    const status =
+      document.getElementById(
+        "pttStatus"
+      );
+
+    const answer =
+      document.getElementById(
+        "pttAnswer"
+      );
+
+    let recording = false;
+    let activePointer = null;
+
+    async function startRecording(
+      event,
+    ) {
+      event.preventDefault();
+
+      const state =
+        await readState();
+
+      if (
+        !state.microphone_enabled
+        || state.microphone_permission
+          !== "granted"
+        || state.continuous_enabled
+      ) {
+        return;
+      }
+
+      activePointer =
+        event.pointerId;
+
+      holdButton.setPointerCapture(
+        activePointer
+      );
+
+      await postJson(
+        "/voice/ptt/start"
+      );
+
+      recording = true;
+
+      holdButton.classList.add(
+        "recording"
+      );
+
+      holdButton.textContent =
+        "Recording… release to ask";
+    }
+
+    async function stopRecording(
+      event,
+    ) {
+      if (!recording) {
+        return;
+      }
+
+      event?.preventDefault?.();
+
+      recording = false;
+
+      holdButton.classList.remove(
+        "recording"
+      );
+
+      await postJson(
+        "/voice/ptt/stop"
+      );
+
+      holdButton.textContent =
+        "Processing…";
+    }
+
+    holdButton.addEventListener(
+      "pointerdown",
+      (event) => {
+        startRecording(
+          event
+        ).catch(
+          (error) => {
+            status.textContent =
+              error.message;
+          },
+        );
+      },
+    );
+
+    for (
+      const eventName
+      of [
+        "pointerup",
+        "pointercancel",
+        "lostpointercapture",
+      ]
+    ) {
+      holdButton.addEventListener(
+        eventName,
+        (event) => {
+          stopRecording(
+            event
+          ).catch(
+            (error) => {
+              status.textContent =
+                error.message;
+            },
+          );
+        },
+      );
+    }
+
+    openEventSocket(
+      (message) => {
+        if (
+          message.type
+          === "answer.text.delta"
+        ) {
+          answer.textContent =
+            message.text || "";
+        }
+
+        if (
+          message.type
+          === "turn.rejected"
+        ) {
+          status.textContent =
+            `Ignored: `
+            + message.reason;
+        }
+      },
+    );
+
+    async function refresh() {
+      try {
+        const state =
+          await readState();
+
+        const enabled =
+          state.microphone_enabled
+          && state
+            .microphone_permission
+            === "granted"
+          && !state
+            .continuous_enabled
+          && ![
+            "responding",
+            "playing",
+            "transcribing",
+          ].includes(
+            state.voice_state
+          );
+
+        holdButton.disabled =
+          !enabled;
+
+        if (!recording) {
+          holdButton.textContent =
+            enabled
+              ? "Hold to ask"
+              : (
+                  state
+                    .continuous_enabled
+                    ? (
+                        "Continuous mode "
+                        + "is active"
+                      )
+                    : (
+                        "Microphone "
+                        + "is unavailable"
+                      )
+                );
+        }
+
+        status.textContent =
+          stateLabel(
+            state.voice_state
+          );
+
+        if (
+          state.latest_answer_text
+        ) {
+          answer.textContent =
+            state
+              .latest_answer_text;
+        }
+
+      } catch (error) {
+        status.textContent =
+          error.message;
+      }
+    }
+
+    stateTimer =
+      window.setInterval(
+        refresh,
+        400,
+      );
+
+    refresh();
+  }
+
+  function renderContinuousView() {
+    root.innerHTML = `
+      <div class="continuous-controls">
+        <button
+          id="continuousButton"
+          class="voice-button"
+          disabled
+        >
+          Start continuous conversation
+        </button>
+
+        <button
+          id="speakerButton"
+          class="voice-button"
+          disabled
+        >
+          Speaker Off
+        </button>
+      </div>
+
+      <div
+        class="status"
+        id="continuousStatus"
+      >
+        Enable Microphone in the sidebar.
+      </div>
+
+      <div
+        class="answer"
+        id="continuousAnswer"
+      ></div>
+    `;
+
+    const button =
+      document.getElementById(
+        "continuousButton"
+      );
+
+    const speakerButton =
+      document.getElementById(
+        "speakerButton"
+      );
+
+    const status =
+      document.getElementById(
+        "continuousStatus"
+      );
+
+    const answer =
+      document.getElementById(
+        "continuousAnswer"
+      );
+
+    openEventSocket(
+      (message) => {
+        if (
+          message.type
+          === "answer.text.delta"
+        ) {
+          answer.textContent =
+            message.text || "";
+        }
+
+        if (
+          message.type
+          === "playback.clear"
+        ) {
+          clearPlayback();
+        }
+
+        if (
+          message.type
+          === "turn.rejected"
+        ) {
+          status.textContent =
+            `Ignored: `
+            + message.reason;
+        }
+      },
+    );
+
+    button.addEventListener(
+      "click",
+      async () => {
+        button.disabled =
+          true;
+
+        try {
+          const state =
+            await readState();
+
+          if (
+            state.continuous_enabled
+          ) {
+            await postJson(
+              "/voice/continuous/stop"
+            );
+
+            clearPlayback();
+
+          } else {
+            if (
+              state.speaker_enabled
+            ) {
+              await prepareSpeaker();
+            }
+
+            openEventSocket(
+              () => {}
+            );
+
+            await postJson(
+              "/voice/continuous/start"
+            );
+          }
+
+        } finally {
+          button.disabled =
+            false;
+        }
+      },
+    );
+
+    speakerButton.addEventListener(
+      "click",
+      async () => {
+        speakerButton.disabled =
+          true;
+
+        try {
+          const state =
+            await readState();
+
+          if (
+            state.speaker_enabled
+          ) {
+            await postJson(
+              "/voice/device/speaker",
+              {
+                enabled: false,
+              },
+            );
+
+            speakerEnabled = false;
+
+            speakerButton
+              .classList.remove(
+                "speaker-on"
+              );
+
+            clearPlayback();
+
+          } else {
+            /*
+             * AudioContext.resume() runs
+             * directly inside the user's
+             * click gesture to satisfy
+             * browser autoplay policy.
+             */
+            await prepareSpeaker();
+
+            await postJson(
+              "/voice/device/speaker",
+              {
+                enabled: true,
+              },
+            );
+
+            speakerEnabled = true;
+
+            speakerButton
+              .classList.add(
+                "speaker-on"
+              );
+          }
+
+        } catch (error) {
+          status.textContent =
+            `Speaker error: `
+            + error.message;
+
+        } finally {
+          speakerButton.disabled =
+            false;
+        }
+      },
+    );
+
+    async function refresh() {
+      try {
+        const state =
+          await readState();
+
+        const available =
+          state.microphone_enabled
+          && state
+            .microphone_permission
+            === "granted";
+
+        button.disabled =
+          !available;
+
+        speakerButton.disabled =
+          !available;
+
+        speakerEnabled = Boolean(
+          state.speaker_enabled
+        );
+
+        speakerButton.textContent =
+          speakerEnabled
+            ? "Speaker On"
+            : "Speaker Off";
+
+        speakerButton.classList.toggle(
+          "speaker-on",
+          speakerEnabled,
+        );
+
+        button.textContent =
+          state.continuous_enabled
+            ? (
+                "Stop continuous "
+                + "conversation"
+              )
+            : (
+                "Start continuous "
+                + "conversation"
+              );
+
+        status.textContent =
+          stateLabel(
+            state.voice_state
+          );
+
+        if (
+          state.latest_answer_text
+        ) {
+          answer.textContent =
+            state
+              .latest_answer_text;
+        }
+
+      } catch (error) {
+        status.textContent =
+          error.message;
+      }
+    }
+
+    stateTimer =
+      window.setInterval(
+        refresh,
+        400,
+      );
+
+    refresh();
+  }
+
+  if (view === "ptt") {
+    renderPushToTalkView();
+
+  } else if (
+    view === "continuous"
+  ) {
+    renderContinuousView();
+
+  } else {
+    renderDeviceView();
+  }
 
   window.addEventListener(
     "pagehide",
     () => {
-      if (stream) {
-        stream
-          .getTracks()
-          .forEach(
-            (track) => track.stop()
-          );
+      window.clearInterval(
+        stateTimer
+      );
+
+      if (eventSocket) {
+        eventSocket.close();
       }
 
-      fetch(
-        `/audio/stop?session=${
-          encodeURIComponent(
-            sessionId
-          )
-        }`,
-        {
-          method: "POST",
-          keepalive: true,
-        },
-      ).catch(() => {});
+      clearPlayback();
+
+      if (
+        view === "device"
+        && mediaStream
+      ) {
+        mediaStream
+          .getTracks()
+          .forEach(
+            (track) =>
+              track.stop()
+          );
+      }
     },
   );
-
-  statsTimer =
-    window.setInterval(
-      refreshStats,
-      1000,
-    );
-
-  refreshStats();
 })();
 </script>
 </body>

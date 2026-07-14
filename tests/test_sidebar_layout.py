@@ -261,53 +261,88 @@ class TestSidebarLayout(
     def test_system_status_has_two_rows(
         self,
     ) -> None:
-        column_calls = []
+        """Stage 3 delegates the 2x2 status grid to the browser component."""
 
-        for node in ast.walk(
-            self.tree
-        ):
-            if not isinstance(
-                node,
-                ast.Call,
-            ):
-                continue
+        from pathlib import Path
 
-            if dotted_name(
-                node.func
-            ) != "st.sidebar.columns":
-                continue
-
-            if not node.args:
-                continue
-
-            argument = node.args[0]
-
-            if (
-                isinstance(
-                    argument,
-                    ast.Constant,
-                )
-                and argument.value == 2
-            ):
-                column_calls.append(
-                    node.lineno
-                )
-
-        self.assertGreaterEqual(
-            len(column_calls),
-            2,
+        app_source = Path(
+            "apps/"
+            "streamlit_attentive_slides.py"
+        ).read_text(
+            encoding="utf-8"
         )
 
-        for required_text in (
-            '"MODE"',
-            '"CAMERA"',
-            '"MICROPHONE"',
-            '"CLOUD TUTOR"',
-        ):
-            self.assertIn(
-                required_text,
-                self.app_source,
-            )
+        component_source = Path(
+            "modules/media/"
+            "microphone_component/"
+            "index.html"
+        ).read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "render_sidebar_device_controls",
+            app_source,
+        )
+
+        start = component_source.index(
+            "  function renderDeviceView() {"
+        )
+
+        end = component_source.index(
+            "  function renderPushToTalkView() {",
+            start,
+        )
+
+        device_block = component_source[
+            start:end
+        ]
+
+        self.assertIn(
+            'data-testid="system-status-grid"',
+            device_block,
+        )
+
+        self.assertIn(
+            'data-columns="2"',
+            device_block,
+        )
+
+        self.assertIn(
+            'data-rows="2"',
+            device_block,
+        )
+
+        self.assertIn(
+            'data-items="4"',
+            device_block,
+        )
+
+        labels = (
+            "MODE",
+            "CAMERA",
+            "MICROPHONE",
+            "CLOUD TUTOR",
+        )
+
+        for label in labels:
+            with self.subTest(
+                label=label,
+            ):
+                self.assertIn(
+                    label,
+                    device_block,
+                )
+
+        self.assertEqual(
+            sum(
+                device_block.count(
+                    label
+                )
+                for label in labels
+            ),
+            4,
+        )
 
     def test_main_workspace_status_metrics_are_absent(
         self,
@@ -374,6 +409,188 @@ class TestSidebarLayout(
         self.assertEqual(
             violations,
             [],
+        )
+
+
+    def test_device_status_renderer_targets_streamlit_sidebar(
+        self,
+    ) -> None:
+        import ast
+        from pathlib import Path
+
+        ui_path = Path(
+            "modules/system/"
+            "realtime_voice_ui.py"
+        )
+
+        ui_source = ui_path.read_text(
+            encoding="utf-8"
+        )
+
+        ui_tree = ast.parse(
+            ui_source,
+            filename=str(
+                ui_path
+            ),
+        )
+
+        renderer = next(
+            (
+                node
+                for node in ui_tree.body
+                if (
+                    isinstance(
+                        node,
+                        ast.FunctionDef,
+                    )
+                    and node.name
+                    == (
+                        "render_sidebar_"
+                        "device_controls"
+                    )
+                )
+            ),
+            None,
+        )
+
+        self.assertIsNotNone(
+            renderer
+        )
+
+        parents = {}
+
+        for parent in ast.walk(
+            renderer
+        ):
+            for child in (
+                ast.iter_child_nodes(
+                    parent
+                )
+            ):
+                parents[child] = parent
+
+        def call_name(
+            call: ast.Call,
+        ) -> str:
+            if isinstance(
+                call.func,
+                ast.Name,
+            ):
+                return call.func.id
+
+            if isinstance(
+                call.func,
+                ast.Attribute,
+            ):
+                return call.func.attr
+
+            return ""
+
+        iframe_calls = [
+            node
+            for node in ast.walk(
+                renderer
+            )
+            if (
+                isinstance(
+                    node,
+                    ast.Call,
+                )
+                and call_name(node)
+                == "iframe"
+            )
+        ]
+
+        self.assertEqual(
+            len(iframe_calls),
+            1,
+        )
+
+        current = iframe_calls[0]
+        inside_sidebar = False
+
+        while current in parents:
+            current = parents[
+                current
+            ]
+
+            if not isinstance(
+                current,
+                ast.With,
+            ):
+                continue
+
+            for item in current.items:
+                context = (
+                    item.context_expr
+                )
+
+                if (
+                    isinstance(
+                        context,
+                        ast.Attribute,
+                    )
+                    and isinstance(
+                        context.value,
+                        ast.Name,
+                    )
+                    and context.value.id
+                    == "st"
+                    and context.attr
+                    == "sidebar"
+                ):
+                    inside_sidebar = True
+                    break
+
+            if inside_sidebar:
+                break
+
+        self.assertTrue(
+            inside_sidebar,
+            msg=(
+                "The actual device iframe "
+                "must execute inside "
+                "with st.sidebar."
+            ),
+        )
+
+        app_path = Path(
+            "apps/"
+            "streamlit_attentive_slides.py"
+        )
+
+        app_source = app_path.read_text(
+            encoding="utf-8"
+        )
+
+        app_tree = ast.parse(
+            app_source,
+            filename=str(
+                app_path
+            ),
+        )
+
+        app_calls = [
+            node
+            for node in ast.walk(
+                app_tree
+            )
+            if (
+                isinstance(
+                    node,
+                    ast.Call,
+                )
+                and call_name(node)
+                == (
+                    "render_sidebar_"
+                    "device_controls"
+                )
+            )
+        ]
+
+        self.assertEqual(
+            len(app_calls),
+            1,
         )
 
 

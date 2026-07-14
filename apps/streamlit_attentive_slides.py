@@ -84,7 +84,12 @@ from modules.system.manual_targeting import (
 from modules.system.uploaded_deck_service import (
     UploadedDeckWorkspace,
 )
-from modules.system.voice_input_ui import render_voice_input_panel, voice_sidebar_status
+from modules.system.realtime_voice_ui import (
+    render_continuous_voice_panel,
+    render_grounded_tutor_voice,
+    render_realtime_voice_xai,
+    render_sidebar_device_controls,
+)
 
 
 BUILT_IN_MANIFEST_PATH = (
@@ -693,6 +698,8 @@ def _render_sidebar_status(
     browser: Any,
     view: MainUIViewModel,
 ) -> None:
+
+    render_sidebar_device_controls()
     with st.sidebar.expander(
         "Privacy Status",
         expanded=False,
@@ -770,58 +777,6 @@ def _render_sidebar_status(
         st.sidebar.columns(2)
     )
 
-    with sidebar_status_row_1[0]:
-        with st.container(
-            border=True
-        ):
-            st.caption("MODE")
-            st.markdown("**Manual**")
-
-    with sidebar_status_row_1[1]:
-        with st.container(
-            border=True
-        ):
-            st.caption("CAMERA")
-            st.markdown("**Off**")
-
-    sidebar_status_row_2 = (
-        st.sidebar.columns(2)
-    )
-
-    with sidebar_status_row_2[0]:
-        with st.container(
-            border=True
-        ):
-            st.caption("MICROPHONE")
-            st.markdown(
-            f"**{voice_sidebar_status()}**"
-        )
-
-    cloud_api_configured = bool(
-        os.environ.get(
-            "DASHSCOPE_API_KEY"
-        )
-    )
-
-    if not st.session_state[
-        "main_cloud_text_allowed"
-    ]:
-        cloud_tutor_status = "Blocked"
-
-    elif cloud_api_configured:
-        cloud_tutor_status = "Ready"
-
-    else:
-        cloud_tutor_status = "No API key"
-
-    with sidebar_status_row_2[1]:
-        with st.container(
-            border=True
-        ):
-            st.caption("CLOUD TUTOR")
-            st.markdown(
-                f"**{cloud_tutor_status}**"
-            )
     st.sidebar.markdown(
         "### Active deck"
     )
@@ -1210,9 +1165,6 @@ def _render_intent_column(
 
     _render_quick_intent_actions()
 
-    render_voice_input_panel(
-        command_key="main_typed_command",
-    )
     
     st.text_area(
         "Typed command",
@@ -1322,6 +1274,7 @@ def _render_answer_column(
         view
     )
     _render_tutor_result()
+    render_continuous_voice_panel(view=locals().get("view"))
     _render_xai_drawer()
 
     st.button(
@@ -1342,6 +1295,7 @@ def _render_header(
         "Select a slide region, state your learning goal, "
         "and receive a grounded tutor response."
     )
+    render_grounded_tutor_voice(view=locals().get("view"))
 
 
 
@@ -3350,6 +3304,8 @@ def _render_main_xai() -> None:
         st.json(
             integrated["privacy"]
         )
+
+    render_realtime_voice_xai()
 
 
 
