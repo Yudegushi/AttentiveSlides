@@ -411,6 +411,8 @@
         if (!sameSlideIdentity) {
           serverMatchedAoiId = null;
           clearAuxiliaryGaze();
+        } else if (nextArgs.clear_server_match) {
+          serverMatchedAoiId = null;
         }
         const preserveManualBBox = sameSlideIdentity
           && Boolean(nextArgs.drawing_enabled)

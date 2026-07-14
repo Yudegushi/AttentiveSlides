@@ -32,6 +32,10 @@ class LiveGazeDebugComponentTest(unittest.TestCase):
         self.assertIn("serverMatchedAoiId === aoiId", self.viewport)
         self.assertIn("else if (liveCandidateAoiId === aoiId)", self.viewport)
 
+    def test_explicit_turn_reset_clears_the_server_match(self) -> None:
+        self.assertIn("nextArgs.clear_server_match", self.viewport)
+        self.assertIn("serverMatchedAoiId = null", self.viewport)
+
 
 if __name__ == "__main__":
     unittest.main()

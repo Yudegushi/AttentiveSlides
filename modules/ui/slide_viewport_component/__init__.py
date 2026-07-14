@@ -25,6 +25,7 @@ def render_slide_viewport(
     show_aoi_overlay: bool,
     display_width_percent: int,
     key: str,
+    clear_server_match: bool = False,
 ) -> dict[str, object] | None:
     if os.environ.get("ATTENTIVE_DISABLE_CANVAS_FOR_APPTEST") == "1":
         return {"event": "disabled"}
@@ -53,6 +54,7 @@ def render_slide_viewport(
         ],
         drawing_enabled=bool(drawing_enabled),
         show_aoi_overlay=bool(show_aoi_overlay),
+        clear_server_match=bool(clear_server_match),
         display_width_percent=bounded_width,
         default={"event": "mounted"},
         key=key,

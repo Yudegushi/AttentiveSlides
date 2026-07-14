@@ -581,6 +581,7 @@ class TestStreamlitAttentiveSlides(
         self,
     ) -> None:
         periodic = self.function_source("_render_live_periodic")
+        workspace = self.function_source("_render_slide_workspace")
         self.assertIn("resolve_live_debug_aoi_id", periodic)
         self.assertIn("render_live_debug_bridge", periodic)
         self.assertIn("main_live_proposal", periodic)
@@ -591,6 +592,9 @@ class TestStreamlitAttentiveSlides(
             periodic.index("render_live_debug_bridge"),
         )
         self.assertNotIn("main_live_debug_match", self.source)
+        self.assertIn("clear_server_match", workspace)
+        self.assertIn("main_live_proposal", workspace)
+        self.assertIn("main_confirmed_interaction", workspace)
 
     def test_live_proposal_uses_point_revision_or_latest_grid_geometry(self) -> None:
         consume = self.function_source("_consume_live_proposal")

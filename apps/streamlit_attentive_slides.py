@@ -1969,6 +1969,16 @@ def _render_slide_workspace(
         display_width_percent=int(
             st.session_state["main_slide_width_percent"]
         ),
+        clear_server_match=(
+            not isinstance(
+                st.session_state.get("main_live_proposal"),
+                LiveInteractionProposal,
+            )
+            and not isinstance(
+                st.session_state.get("main_confirmed_interaction"),
+                dict,
+            )
+        ),
         key=(
             "main_slide_viewport_"
             f"{view.deck_id}_{view.active_slide_id}"
