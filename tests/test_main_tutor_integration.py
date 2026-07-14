@@ -70,6 +70,34 @@ class StaticClient:
         )
 
 
+class RaisingClient:
+    provider = "test_provider"
+    model = "test_model"
+
+    def generate(self, messages) -> RawLLMResponse:
+        del messages
+        raise ConnectionError("provider unavailable")
+
+
+class RawTextClient:
+    provider = "test_provider"
+    model = "test_model"
+
+    def __init__(self, raw_text: str) -> None:
+        self.raw_text = raw_text
+
+    def generate(self, messages) -> RawLLMResponse:
+        del messages
+        return RawLLMResponse(
+            provider=self.provider,
+            model=self.model,
+            raw_text=self.raw_text,
+            latency_ms=10.0,
+            usage=None,
+            request_id="private_request_id",
+        )
+
+
 def make_slide() -> MainUISlide:
     return MainUISlide(
         slide_id=5,
@@ -204,6 +232,65 @@ def valid_response() -> dict:
 class TestMainTutorIntegration(
     unittest.TestCase
 ):
+    def test_provider_exhaustion_is_retryable_error(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "ConnectionError: provider unavailable",
+        ):
+            generate_main_tutor_response(
+                make_confirmed_payload(),
+                slide=make_slide(),
+                agent=GroundedTutorAgent(
+                    llm_client=RaisingClient(),
+                    max_retries=0,
+                ),
+                cloud_text_allowed=True,
+                api_configured=True,
+            )
+
+    def test_malformed_exhaustion_is_retryable_error(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "json_not_found",
+        ):
+            generate_main_tutor_response(
+                make_confirmed_payload(),
+                slide=make_slide(),
+                agent=GroundedTutorAgent(
+                    llm_client=RawTextClient("not-json"),
+                    max_retries=0,
+                ),
+                cloud_text_allowed=True,
+                api_configured=True,
+            )
+
+    def test_validation_exhaustion_is_retryable_error(
+        self,
+    ) -> None:
+        invalid = valid_response()
+        invalid["claims"][0]["source_ids"] = [
+            "unknown_source"
+        ]
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "unknown_source",
+        ):
+            generate_main_tutor_response(
+                make_confirmed_payload(),
+                slide=make_slide(),
+                agent=GroundedTutorAgent(
+                    llm_client=StaticClient(invalid),
+                    max_retries=0,
+                ),
+                cloud_text_allowed=True,
+                api_configured=True,
+            )
+
     def test_missing_confirmation_is_blocked(
         self,
     ) -> None:

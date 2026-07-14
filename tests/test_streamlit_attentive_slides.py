@@ -328,11 +328,11 @@ class TestStreamlitAttentiveSlides(
             region_present,
         )
 
-    def test_manual_region_uses_direct_canvas(
+    def test_slide_workspace_uses_viewport_component(
         self,
     ) -> None:
         function = self.functions[
-            "_render_manual_canvas"
+            "_render_slide_workspace"
         ]
 
         call_names = {
@@ -348,18 +348,48 @@ class TestStreamlitAttentiveSlides(
         }
 
         source = self.function_source(
-            "_render_manual_canvas"
+            "_render_slide_workspace"
         )
 
         self.assertIn(
-            "st_canvas",
+            "render_slide_viewport",
             source,
         )
+        self.assertIn("parse_component_geometry", source)
+        self.assertNotIn("st_canvas", self.source)
+        self.assertNotIn("streamlit_drawable_canvas", self.source)
 
-        self.assertNotIn(
-            "slider",
-            call_names,
-        )
+    def test_production_live_graph_has_no_second_tutor_path(self) -> None:
+        source = self.function_source("build_main_live_resources")
+
+        self.assertIn("ActiveDeckSlideProvider", source)
+        self.assertIn("ProposalTurnRunner", source)
+        self.assertIn('aggregation_key="gaze_grid"', source)
+        self.assertNotIn("RealSlideProvider", source)
+        self.assertNotIn("LiveTurnRunner", source)
+        self.assertNotIn("LiveTutorAdapter", source)
+        self.assertNotIn("InteractionLogger", source)
+
+    def test_capture_is_outside_periodic_fragment(self) -> None:
+        controls = self.function_source("_render_live_controls")
+        periodic = self.function_source("_render_live_periodic")
+
+        self.assertIn('st.iframe("/capture"', controls)
+        self.assertNotIn("iframe", periodic)
+
+    def test_periodic_fragment_refreshes_live_transport_status(self) -> None:
+        periodic = self.function_source("_render_live_periodic")
+
+        self.assertIn("session_snapshot", periodic)
+        self.assertIn("controller.state.value", periodic)
+        self.assertIn("Media:", periodic)
+
+    def test_live_fragment_callbacks_do_not_force_app_reruns(self) -> None:
+        manual = self.function_source("_enable_live_manual_region")
+        overlay = self.function_source("_on_live_overlay_change")
+
+        self.assertNotIn("st.rerun", manual)
+        self.assertNotIn("st.rerun", overlay)
 
     def test_xai_drawer_is_collapsed(
         self,

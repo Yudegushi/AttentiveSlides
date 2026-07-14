@@ -119,6 +119,160 @@ class GridTargetResolverTest(unittest.TestCase):
         self.assertIsNone(low.predicted_aoi_id)
 
 
+class LiveConfirmationContractTest(unittest.TestCase):
+    def resolved(self, **changes):
+        values = {
+            "layout_revision": 7,
+            "predicted_aoi_id": "right",
+            "target_confidence": 0.88,
+        }
+        values.update(changes)
+        return make_proposal(**values)
+
+    def test_always_confirm_never_auto_confirms(self):
+        from modules.system.live_ui_bridge import should_auto_confirm
+
+        self.assertFalse(
+            should_auto_confirm(
+                self.resolved(),
+                make_geometry(),
+                policy="Always confirm",
+                threshold=0.80,
+                interaction_pending=False,
+            )
+        )
+
+    def test_high_confidence_can_auto_confirm(self):
+        from modules.system.live_ui_bridge import should_auto_confirm
+
+        self.assertTrue(
+            should_auto_confirm(
+                self.resolved(),
+                make_geometry(),
+                policy="Confidence-based auto",
+                threshold=0.80,
+                interaction_pending=False,
+            )
+        )
+
+    def test_low_or_missing_gaze_cannot_auto_confirm(self):
+        from modules.system.live_ui_bridge import should_auto_confirm
+
+        for proposal in (
+            self.resolved(target_confidence=0.79),
+            self.resolved(predicted_aoi_id=None),
+        ):
+            self.assertFalse(
+                should_auto_confirm(
+                    proposal,
+                    make_geometry(),
+                    policy="Confidence-based auto",
+                    threshold=0.80,
+                    interaction_pending=False,
+                )
+            )
+
+    def test_stale_geometry_pending_turn_and_bad_threshold_block_auto(self):
+        from modules.system.live_ui_bridge import should_auto_confirm
+
+        cases = (
+            (self.resolved(), make_geometry(layout_revision=8), 0.80, False),
+            (self.resolved(), make_geometry(), 0.80, True),
+            (self.resolved(), make_geometry(), 0.69, False),
+            (self.resolved(transcript=" "), make_geometry(), 0.80, False),
+        )
+        for proposal, geometry, threshold, pending in cases:
+            self.assertFalse(
+                should_auto_confirm(
+                    proposal,
+                    geometry,
+                    policy="Confidence-based auto",
+                    threshold=threshold,
+                    interaction_pending=pending,
+                )
+            )
+
+    def test_prediction_builds_sensor_assisted_interaction(self):
+        from modules.system.live_ui_bridge import build_live_interaction_input
+
+        interaction = build_live_interaction_input(
+            self.resolved(),
+            command="Explain this",
+            selected_aoi_id="right",
+            automatic=True,
+        )
+
+        self.assertEqual(interaction.mode, "sensor_assisted")
+        self.assertEqual(interaction.target.source, "gaze_prediction")
+        self.assertEqual(interaction.intent.source, "speech_transcript")
+        self.assertIsNone(interaction.intent.source_confidence)
+        self.assertEqual(
+            interaction.confirmation.source,
+            "automatic_high_confidence",
+        )
+
+    def test_user_correction_preserves_prediction(self):
+        from modules.system.live_ui_bridge import build_live_interaction_input
+
+        interaction = build_live_interaction_input(
+            self.resolved(),
+            command="Explain this",
+            selected_aoi_id="left",
+        )
+
+        self.assertEqual(
+            interaction.confirmation.source,
+            "manual_correction",
+        )
+        self.assertEqual(
+            interaction.confirmation.confirmed_aoi_id,
+            "left",
+        )
+        self.assertEqual(
+            interaction.confirmation.corrected_from_aoi_id,
+            "right",
+        )
+        self.assertEqual(
+            interaction.metadata["predicted_aoi_id"],
+            "right",
+        )
+
+    def test_transcript_edit_enters_hybrid_mode(self):
+        from modules.system.live_ui_bridge import build_live_interaction_input
+
+        interaction = build_live_interaction_input(
+            self.resolved(),
+            command="Please compare both concepts",
+            selected_aoi_id="right",
+        )
+
+        self.assertEqual(interaction.mode, "hybrid")
+        self.assertEqual(interaction.intent.source, "typed_text")
+
+    def test_whole_slide_and_manual_rectangle_remain_explicit(self):
+        from modules.system.live_ui_bridge import build_live_interaction_input
+
+        whole = build_live_interaction_input(
+            self.resolved(predicted_aoi_id=None),
+            command="Explain this",
+            selected_aoi_id="whole_slide",
+        )
+        region = build_live_interaction_input(
+            self.resolved(),
+            command="Explain this",
+            selected_aoi_id="left",
+            manual_bbox=(0.1, 0.2, 0.4, 0.6),
+        )
+
+        self.assertEqual(whole.target.source, "whole_slide")
+        self.assertEqual(
+            whole.confirmation.source,
+            "explicit_user_confirmation",
+        )
+        self.assertEqual(region.target.source, "manual_rectangle")
+        self.assertEqual(region.mode, "hybrid")
+
+
 class ProposalTurnRunnerTest(unittest.TestCase):
     def test_publishes_transcript_and_grid_without_pending_confirmation(self):
         from modules.system.live_ui_bridge import (

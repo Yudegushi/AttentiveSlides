@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from collections.abc import MutableMapping
+from collections.abc import Callable, MutableMapping
 from typing import Any
 
 from modules.common.schemas import AOI
@@ -127,12 +127,56 @@ def build_main_turn_defaults() -> dict[str, Any]:
     }
 
 
+def build_main_live_defaults() -> dict[str, Any]:
+    """Return the small set of Live-mode session defaults."""
+    return {
+        "main_interaction_mode": "Manual",
+        "main_live_master_enabled": False,
+        "main_confirmation_policy": "Always confirm",
+        "main_auto_confirm_threshold": 0.80,
+        "main_live_proposal": None,
+        "main_live_original_transcript": None,
+        "main_live_predicted_aoi_id": None,
+        "main_live_layout_revision": None,
+        "main_logged_interaction_ids": [],
+    }
+
+
 def reset_main_turn_state(
     state: MutableMapping[str, Any],
 ) -> None:
     """Reset turn-specific state while preserving session data."""
     for key, value in build_main_turn_defaults().items():
         state[key] = value
+
+
+def reset_main_live_turn_state(
+    state: MutableMapping[str, Any],
+) -> None:
+    """Clear one Live proposal while retaining user preferences."""
+    reset_main_turn_state(state)
+    for key in (
+        "main_live_proposal",
+        "main_live_original_transcript",
+        "main_live_predicted_aoi_id",
+        "main_live_layout_revision",
+    ):
+        state[key] = None
+
+
+def write_main_interaction_once(
+    logged_interaction_ids: list[str],
+    *,
+    interaction_id: str,
+    payload: dict[str, Any],
+    write: Callable[[dict[str, Any]], None],
+) -> bool:
+    """Write before marking an interaction ID as durably logged."""
+    if interaction_id in logged_interaction_ids:
+        return False
+    write(payload)
+    logged_interaction_ids.append(interaction_id)
+    return True
 
 
 def build_main_conversation_defaults() -> dict[str, Any]:

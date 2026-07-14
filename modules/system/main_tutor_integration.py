@@ -132,6 +132,55 @@ class MainTutorGeneration:
         }
 
 
+def retryable_generation_error_message(
+    result: GroundedTutorResult,
+) -> str:
+    """Describe the final exhausted provider/parse/validation failure."""
+    detail = "No generation attempt returned a usable response."
+
+    if result.attempts:
+        final_attempt = result.attempts[-1]
+
+        if final_attempt.provider_error:
+            error = final_attempt.provider_error
+            detail = (
+                f"{error.get('type', 'ProviderError')}: "
+                f"{error.get('message', 'provider request failed')}"
+            )
+        elif final_attempt.parse_error:
+            error = final_attempt.parse_error
+            detail = (
+                f"{error.get('code', 'parse_error')}: "
+                f"{error.get('message', 'response parsing failed')}"
+            )
+        elif final_attempt.validation:
+            errors = [
+                item
+                for item in final_attempt.validation.get(
+                    "issues",
+                    [],
+                )
+                if isinstance(item, Mapping)
+                and item.get("severity") == "error"
+            ]
+            messages = [
+                (
+                    f"{item.get('code', 'validation_error')}: "
+                    f"{item.get('message', 'response validation failed')}"
+                )
+                for item in errors
+            ]
+            detail = (
+                "; ".join(messages)
+                or "Response validation failed."
+            )
+
+    return (
+        "Tutor generation exhausted all attempts; retry is safe. "
+        f"Final failure: {detail}"
+    )
+
+
 def assess_tutor_generation(
     confirmed_interaction: (
         Mapping[str, Any] | None
@@ -428,6 +477,13 @@ def generate_main_tutor_response(
     result = agent.answer_context(
         context_build.context
     )
+
+    if result.status == "fallback":
+        raise RuntimeError(
+            retryable_generation_error_message(
+                result
+            )
+        )
 
     if result.status == "confirmation_required":
         raise RuntimeError(

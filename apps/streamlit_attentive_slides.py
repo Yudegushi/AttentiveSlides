@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass, replace
 
 import json
 from io import BytesIO
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 REPOSITORY_ROOT = Path(
@@ -24,11 +25,21 @@ if str(REPOSITORY_ROOT) not in sys.path:
     )
 
 import streamlit as st
-from streamlit_drawable_canvas import st_canvas
 from PIL import (
     Image,
     ImageDraw,
 )
+
+from modules.audio.faster_whisper_transcriber import (
+    FasterWhisperTranscriber,
+)
+from modules.audio.streaming_vad import default_vad_backend
+from modules.audio.transcriber import TranscriptionConfig
+from modules.audio.voice_turn_detector import VoiceTurnDetector
+from modules.logging.interaction_logger import InteractionLogger
+from modules.media import BrowserMediaSource
+from modules.media.live_ingress_service import LiveIngressService
+from modules.media.single_port_transport import FallbackMediaIngress
 
 from modules.system.safe_table import (
     records_to_html,
@@ -58,10 +69,13 @@ from modules.system.main_ui_state import (
     MainUIViewModel,
     ManifestDeckBrowser,
     build_main_conversation_defaults,
+    build_main_live_defaults,
     build_main_turn_defaults,
     build_main_ui_view_model,
     reset_main_conversation_state,
+    reset_main_live_turn_state,
     reset_main_turn_state,
+    write_main_interaction_once,
 )
 from modules.system.manual_confirmation import (
     assess_manual_confirmation,
@@ -79,11 +93,33 @@ from modules.system.manual_intent import (
 from modules.system.manual_targeting import (
     ManualSelectionResult,
     map_bbox_to_aois,
-    extract_latest_rectangle,
 )
+from modules.system.active_deck_slide_provider import (
+    ActiveDeckSlideProvider,
+)
+from modules.system.audio_worker import AudioWorker
+from modules.system.controller import SystemController
+from modules.system.live_ui_bridge import (
+    LatestProposalInbox,
+    LiveInteractionProposal,
+    MainUILiveRuntime,
+    ProposalTurnRunner,
+    build_live_interaction_input,
+    map_gaze_grid_only,
+    resolve_grid_target,
+    should_auto_confirm,
+)
+from modules.system.sensing_snapshot_store import SensingSnapshotStore
+from modules.system.sensing_worker import SensingWorker
+from modules.system.slide_geometry import (
+    SlideViewportGeometry,
+    parse_component_geometry,
+)
+from modules.system.turn_context import TurnContextCollector
 from modules.system.uploaded_deck_service import (
     UploadedDeckWorkspace,
 )
+from modules.ui.slide_viewport_component import render_slide_viewport
 
 
 BUILT_IN_MANIFEST_PATH = (
@@ -98,6 +134,116 @@ RUNTIME_DATA_DIR = Path(
     "project_data/runtime/"
     "attentive_slides"
 )
+
+MAIN_INTERACTION_LOG_PATH = (
+    RUNTIME_DATA_DIR
+    / "logs"
+    / "main_interactions.jsonl"
+)
+
+
+@dataclass
+class MainLiveResources:
+    """One cached production graph shared by Main UI reruns."""
+
+    runtime: MainUILiveRuntime
+    provider: ActiveDeckSlideProvider
+    snapshots: SensingSnapshotStore
+    inbox: LatestProposalInbox
+    ingress: FallbackMediaIngress
+    service: LiveIngressService
+    bound_deck_id: str | None = None
+    bound_slide_id: int | None = None
+
+
+@st.cache_resource
+def build_main_live_resources(
+    *,
+    start_ingress: bool = True,
+) -> MainLiveResources:
+    """Build the thin Live proposal graph; the Main UI owns tutoring."""
+    media_source = BrowserMediaSource()
+    provider = ActiveDeckSlideProvider()
+    snapshots = SensingSnapshotStore()
+    sensing_worker = SensingWorker(
+        media_source=media_source,
+        slide_provider=provider,
+        snapshot_store=snapshots,
+        gaze_to_aoi=map_gaze_grid_only,
+    )
+    transcriber = FasterWhisperTranscriber(
+        TranscriptionConfig(
+            engine="faster_whisper",
+            model_size=os.environ.get(
+                "ATTENTIVE_WHISPER_MODEL",
+                "small",
+            ),
+        )
+    )
+    audio_worker = AudioWorker(
+        media_source=media_source,
+        detector=VoiceTurnDetector(
+            default_vad_backend()
+        ),
+        transcribe=transcriber.transcribe,
+    )
+    collector = TurnContextCollector(
+        slide_provider=provider,
+        snapshot_store=snapshots,
+        aggregation_key="gaze_grid",
+    )
+    inbox = LatestProposalInbox()
+    runner = ProposalTurnRunner(
+        context_collector=collector,
+        inbox=inbox,
+    )
+    controller = SystemController(
+        media_source=media_source,
+        sensing_worker=sensing_worker,
+        audio_worker=audio_worker,
+        context_collector=collector,
+        turn_runner=runner,
+    )
+    runtime = MainUILiveRuntime(
+        controller=controller,
+        inbox=inbox,
+        snapshot_store=snapshots,
+    )
+    ingress = FallbackMediaIngress(
+        media_source,
+        start_armed=False,
+        coordinated_activation=True,
+        media_stale_after_seconds=2.0,
+        inactive_after_seconds=3.0,
+    )
+    capture_html = (
+        REPOSITORY_ROOT
+        / "modules"
+        / "media"
+        / "live_capture_component"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+    service = LiveIngressService(
+        runtime=runtime,
+        source=media_source,
+        ingress=ingress,
+        capture_html=capture_html,
+    )
+    if start_ingress:
+        service.ensure_started()
+    return MainLiveResources(
+        runtime=runtime,
+        provider=provider,
+        snapshots=snapshots,
+        inbox=inbox,
+        ingress=ingress,
+        service=service,
+    )
+
+
+@st.cache_resource
+def _main_interaction_logger() -> InteractionLogger:
+    return InteractionLogger(MAIN_INTERACTION_LOG_PATH)
 
 
 
@@ -165,6 +311,24 @@ def main() -> None:
         st.exception(exc)
         st.stop()
 
+    live_resources = build_main_live_resources(
+        start_ingress=(
+            os.environ.get(
+                "ATTENTIVE_DISABLE_CANVAS_FOR_APPTEST",
+                "0",
+            )
+            != "1"
+        )
+    )
+    _bind_main_live_resources(
+        live_resources,
+        browser=browser,
+        view=view,
+    )
+    _render_live_controls(
+        live_resources
+    )
+
     _render_sidebar_status(
         browser,
         view,
@@ -174,13 +338,17 @@ def main() -> None:
     _render_slide_selector(
         browser
     )
-    _render_slide_workspace(view)
+    geometry = _render_slide_workspace(
+        view
+    )
     _render_navigation(
         browser,
         view,
     )
     _render_manual_interaction(
-        view
+        view,
+        live_resources=live_resources,
+        geometry=geometry,
     )
     _render_lower_workspace(view)
 
@@ -219,6 +387,7 @@ def _initialize_global_state() -> None:
         "main_selection_error": None,
         **build_main_turn_defaults(),
         **build_main_conversation_defaults(),
+        **build_main_live_defaults(),
     }
 
     for key, value in defaults.items():
@@ -365,6 +534,24 @@ def _normalize_widget_state() -> None:
             "main_conversation_turns"
         ] = []
 
+    if not isinstance(
+        st.session_state.get("main_logged_interaction_ids"),
+        list,
+    ):
+        st.session_state["main_logged_interaction_ids"] = []
+
+    if st.session_state.get("main_interaction_mode") not in {
+        "Manual",
+        "Live",
+    }:
+        st.session_state["main_interaction_mode"] = "Manual"
+
+    if st.session_state.get("main_confirmation_policy") not in {
+        "Always confirm",
+        "Confidence-based auto",
+    }:
+        st.session_state["main_confirmation_policy"] = "Always confirm"
+
     st.session_state[
         "main_widget_error"
     ] = None
@@ -449,6 +636,109 @@ def _on_overlay_change() -> None:
     st.session_state[
         "main_widget_error"
     ] = None
+
+
+def _on_live_preference_change() -> None:
+    st.session_state["main_widget_error"] = None
+
+
+def _bind_main_live_resources(
+    resources: MainLiveResources,
+    *,
+    browser: Any,
+    view: MainUIViewModel,
+) -> None:
+    """Bind the canonical browser before media can be armed."""
+    if resources.bound_deck_id != view.deck_id:
+        resources.service.set_master_enabled(False)
+        resources.service.reconcile_once()
+        st.session_state["main_live_master_enabled"] = False
+        resources.provider.set_browser(browser)
+        resources.inbox.clear()
+        resources.snapshots.clear()
+        resources.runtime.set_slide(view.active_slide_id)
+        resources.bound_deck_id = view.deck_id
+        resources.bound_slide_id = view.active_slide_id
+        return
+
+    if resources.bound_slide_id != view.active_slide_id:
+        resources.runtime.set_slide(view.active_slide_id)
+        resources.bound_slide_id = view.active_slide_id
+
+
+def _render_live_controls(
+    resources: MainLiveResources,
+) -> None:
+    """Add the small mode/policy controls to the existing sidebar."""
+    st.sidebar.markdown("### Interaction")
+    st.sidebar.radio(
+        "Mode",
+        options=["Manual", "Live"],
+        horizontal=True,
+        key="main_interaction_mode",
+        on_change=_on_live_preference_change,
+    )
+    live_mode = (
+        st.session_state["main_interaction_mode"]
+        == "Live"
+    )
+
+    if live_mode:
+        st.sidebar.checkbox(
+            "Enable camera and microphone",
+            key="main_live_master_enabled",
+            on_change=_on_live_preference_change,
+            help=(
+                "Media remains local to the runtime; only confirmed "
+                "text may be sent to the cloud tutor."
+            ),
+        )
+        st.sidebar.radio(
+            "Confirmation policy",
+            options=[
+                "Always confirm",
+                "Confidence-based auto",
+            ],
+            key="main_confirmation_policy",
+            on_change=_on_live_preference_change,
+        )
+        if (
+            st.session_state["main_confirmation_policy"]
+            == "Confidence-based auto"
+        ):
+            st.sidebar.slider(
+                "Auto-confirm confidence",
+                min_value=0.70,
+                max_value=0.95,
+                value=0.80,
+                step=0.01,
+                key="main_auto_confirm_threshold",
+                on_change=_on_live_preference_change,
+            )
+    else:
+        st.session_state["main_live_master_enabled"] = False
+
+    enabled = bool(
+        live_mode
+        and st.session_state["main_live_master_enabled"]
+    )
+    resources.service.set_master_enabled(enabled)
+    resources.service.reconcile_once()
+
+    runtime_state = resources.runtime.controller.state.value
+    session = resources.ingress.session_snapshot()
+    st.sidebar.caption(
+        f"Transport: {'armed' if enabled else 'off'} · "
+        f"Runtime: {runtime_state} · "
+        f"Media: {'ready' if session.video_fresh and session.audio_fresh else 'waiting'}"
+    )
+
+    if enabled:
+        with st.sidebar.expander(
+            "Camera and microphone preview",
+            expanded=False,
+        ):
+            st.iframe("/capture", height=340)
 
 
 def _on_manual_region_change() -> None:
@@ -692,6 +982,10 @@ def _render_sidebar_status(
     browser: Any,
     view: MainUIViewModel,
 ) -> None:
+    live_enabled = bool(
+        st.session_state.get("main_interaction_mode") == "Live"
+        and st.session_state.get("main_live_master_enabled")
+    )
     with st.sidebar.expander(
         "Privacy Status",
         expanded=False,
@@ -701,8 +995,9 @@ def _render_sidebar_status(
         )
 
         st.caption(
-            "Off in Manual mode. "
-            "No camera frames are collected."
+            "On for coarse 3×3 viewport gaze targeting."
+            if live_enabled
+            else "Off. No camera frames are collected."
         )
 
         st.markdown(
@@ -710,8 +1005,9 @@ def _render_sidebar_status(
         )
 
         st.caption(
-            "Off in Manual mode. "
-            "No audio is collected."
+            "On for local VAD and speech transcription."
+            if live_enabled
+            else "Off. No audio is collected."
         )
 
         st.checkbox(
@@ -774,14 +1070,18 @@ def _render_sidebar_status(
             border=True
         ):
             st.caption("MODE")
-            st.markdown("**Manual**")
+            st.markdown(
+                f"**{st.session_state['main_interaction_mode']}**"
+            )
 
     with sidebar_status_row_1[1]:
         with st.container(
             border=True
         ):
             st.caption("CAMERA")
-            st.markdown("**Off**")
+            st.markdown(
+                f"**{'On' if live_enabled else 'Off'}**"
+            )
 
     sidebar_status_row_2 = (
         st.sidebar.columns(2)
@@ -792,7 +1092,9 @@ def _render_sidebar_status(
             border=True
         ):
             st.caption("MICROPHONE")
-            st.markdown("**Off**")
+            st.markdown(
+                f"**{'On' if live_enabled else 'Off'}**"
+            )
 
     cloud_api_configured = bool(
         os.environ.get(
@@ -1411,7 +1713,7 @@ def _reset_turn_state() -> None:
         + 1
     )
 
-    reset_main_turn_state(
+    reset_main_live_turn_state(
         st.session_state
     )
 
@@ -1527,25 +1829,87 @@ def _on_target_scope_change() -> None:
 
 def _render_slide_workspace(
     view: MainUIViewModel,
-) -> None:
-    if (
-        st.session_state[
-            "main_target_scope"
-        ]
+) -> SlideViewportGeometry | None:
+    drawing_enabled = (
+        st.session_state["main_target_scope"]
         == "Manual region"
-    ):
-        _render_manual_canvas(
-            view
+    )
+    if not drawing_enabled:
+        _set_whole_slide_target(view)
+
+    payload = render_slide_viewport(
+        deck_id=view.deck_id,
+        slide=view.active_slide,
+        layout_revision=int(
+            st.session_state.get(
+                "main_canvas_revision",
+                0,
+            )
+        ),
+        drawing_enabled=drawing_enabled,
+        show_aoi_overlay=bool(
+            st.session_state["main_show_aoi_overlay"]
+        ),
+        key=(
+            "main_slide_viewport_"
+            f"{view.deck_id}_{view.active_slide_id}"
+        ),
+    )
+    if payload is None:
+        _render_static_slide(view.active_slide)
+        if drawing_enabled:
+            st.caption(
+                "Viewport selection is disabled only in AppTest workers."
+            )
+        return None
+
+    try:
+        geometry = parse_component_geometry(
+            payload,
+            received_at=time.monotonic(),
         )
-        return
+        raw_bbox = payload.get("manual_bbox")
+        if (
+            drawing_enabled
+            and isinstance(raw_bbox, (list, tuple))
+            and len(raw_bbox) == 4
+        ):
+            bbox = tuple(float(value) for value in raw_bbox)
+            selection = ManualSelectionResult(
+                bbox=bbox,
+                canvas_width=max(
+                    1,
+                    round(
+                        geometry.slide_rect.x2
+                        - geometry.slide_rect.x1
+                    ),
+                ),
+                canvas_height=max(
+                    1,
+                    round(
+                        geometry.slide_rect.y2
+                        - geometry.slide_rect.y1
+                    ),
+                ),
+                matches=map_bbox_to_aois(
+                    bbox,
+                    view.active_slide.aois,
+                ),
+            )
+            st.session_state["main_manual_region_active"] = True
+            _store_manual_selection(selection)
+            st.session_state["main_selection_error"] = None
+    except Exception as exc:
+        st.session_state["main_selection_error"] = (
+            f"{type(exc).__name__}: {exc}"
+        )
+        st.error(
+            "Unable to read slide viewport geometry: "
+            + st.session_state["main_selection_error"]
+        )
+        return None
 
-    _set_whole_slide_target(
-        view
-    )
-
-    _render_static_slide(
-        view.active_slide
-    )
+    return geometry
 
 
 
@@ -1633,163 +1997,6 @@ def _render_static_slide(
                 slide.slide_text
                 or "Slide image unavailable."
             )
-
-
-
-def _render_manual_canvas(
-    view: MainUIViewModel,
-) -> None:
-    """Render direct rectangle selection over the current slide."""
-    slide = view.active_slide
-
-    if (
-        os.environ.get(
-            "ATTENTIVE_DISABLE_CANVAS_FOR_APPTEST",
-            "0",
-        )
-        == "1"
-    ):
-        _render_static_slide(
-            slide
-        )
-        st.caption(
-            "Direct canvas interaction is disabled only in AppTest workers."
-        )
-        return
-
-    if not (
-        slide.image_available
-        and slide.image_path
-    ):
-        _render_static_slide(
-            slide
-        )
-        st.warning(
-            "Direct region selection requires a rendered slide image."
-        )
-        return
-
-    base_image = _load_slide_image(
-        slide.image_path
-    )
-    display_image = base_image
-    canvas_background = None
-
-    try:
-        if st.session_state[
-            "main_show_aoi_overlay"
-        ]:
-            display_image = _draw_aoi_overlay(
-                base_image,
-                slide,
-            )
-
-        canvas_width = min(
-            1400,
-            max(
-                720,
-                display_image.width,
-            ),
-        )
-        canvas_height = max(
-            420,
-            round(
-                canvas_width
-                * display_image.height
-                / display_image.width
-            ),
-        )
-
-        resampling = getattr(
-            Image,
-            "Resampling",
-            Image,
-        ).LANCZOS
-
-        canvas_background = (
-            display_image.resize(
-                (
-                    canvas_width,
-                    canvas_height,
-                ),
-                resampling,
-            )
-        )
-
-        canvas_result = st_canvas(
-            fill_color="rgba(255, 75, 75, 0.14)",
-            stroke_width=3,
-            stroke_color="#ff4b4b",
-            background_image=canvas_background,
-            update_streamlit=True,
-            height=canvas_height,
-            width=canvas_width,
-            drawing_mode="rect",
-            display_toolbar=True,
-            key=(
-                "main_manual_canvas_"
-                f"{view.deck_id}_"
-                f"{slide.slide_id}_"
-                f"{st.session_state.get('main_canvas_revision', 0)}"
-            ),
-        )
-
-        selection = extract_latest_rectangle(
-            canvas_result.json_data,
-            canvas_width=canvas_width,
-            canvas_height=canvas_height,
-            aois=slide.aois,
-        )
-
-        if selection is not None:
-            st.session_state[
-                "main_manual_region_active"
-            ] = True
-            _store_manual_selection(
-                selection
-            )
-            st.session_state[
-                "main_selection_error"
-            ] = None
-
-            st.success(
-                "Region selected. You can now choose an action or type a question."
-            )
-
-        elif st.session_state.get(
-            "main_manual_bbox"
-        ):
-            st.caption(
-                "A previously selected region remains active."
-            )
-
-        else:
-            st.caption(
-                "Drag on the slide to create a rectangle."
-            )
-
-    except Exception as exc:
-        st.session_state[
-            "main_selection_error"
-        ] = (
-            f"{type(exc).__name__}: {exc}"
-        )
-        st.error(
-            "Unable to read the selected region: "
-            + st.session_state[
-                "main_selection_error"
-            ]
-        )
-
-    finally:
-        if canvas_background is not None:
-            canvas_background.close()
-
-        if display_image is not base_image:
-            display_image.close()
-
-        base_image.close()
-
 
 
 
@@ -2408,6 +2615,34 @@ def _record_completed_turn(
     )
 
 
+def _log_completed_interaction_once() -> None:
+    """Write one sanitized JSONL record after successful generation."""
+    confirmed = st.session_state.get("main_confirmed_interaction") or {}
+    interaction = confirmed.get("interaction", {})
+    interaction_id = str(interaction.get("interaction_id", ""))
+    if (
+        not interaction_id
+        or st.session_state.get("main_last_generated_interaction_id")
+        != interaction_id
+        or not st.session_state.get("main_tutor_result")
+    ):
+        return
+    logged = st.session_state["main_logged_interaction_ids"]
+    write_main_interaction_once(
+        logged,
+        interaction_id=interaction_id,
+        payload={
+            "interaction_id": interaction_id,
+            "deck_id": interaction.get("deck_id"),
+            "slide_id": interaction.get("slide_id"),
+            "interaction": interaction,
+            "tutor": st.session_state["main_tutor_result"],
+            "xai": st.session_state["main_xai_result"],
+        },
+        write=_main_interaction_logger().log_interaction,
+    )
+
+
 def _render_conversation_history(
     view: MainUIViewModel,
 ) -> None:
@@ -2812,6 +3047,10 @@ def _render_tutor_generation_panel(
                 "main_tutor_error"
             ] = None
 
+            st.session_state[
+                "main_last_generated_interaction_id"
+            ] = current_interaction_id
+
             try:
                 _record_completed_turn(
                     tutor_payload=(
@@ -2830,6 +3069,14 @@ def _render_tutor_generation_panel(
                     "conversation recording failed: "
                     f"{type(exc).__name__}: {exc}"
                 )
+
+    try:
+        _log_completed_interaction_once()
+    except Exception as exc:
+        st.session_state["main_conversation_error"] = (
+            "Tutor answer succeeded, but JSONL recording failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
 
     if st.session_state[
         "main_tutor_error"
@@ -3345,11 +3592,342 @@ def _render_main_xai() -> None:
         )
 
 
+def _live_target_options(
+    proposal: LiveInteractionProposal,
+) -> list[str]:
+    options: list[str] = []
+    for aoi_id in (
+        proposal.predicted_aoi_id,
+        *(
+            candidate.aoi_id
+            for candidate in proposal.alternatives
+        ),
+    ):
+        if aoi_id and aoi_id not in options:
+            options.append(aoi_id)
+    options.append("whole_slide")
+    if st.session_state.get("main_manual_bbox"):
+        options.append("manual_region")
+    return options
+
+
+def _enable_live_manual_region() -> None:
+    st.session_state["main_target_scope"] = "Manual region"
+    st.session_state["main_manual_region_active"] = True
+    _invalidate_confirmation()
+    st.session_state["main_live_full_rerun_requested"] = True
+
+
+def _on_live_overlay_change() -> None:
+    _on_overlay_change()
+    st.session_state["main_live_full_rerun_requested"] = True
+
+
+def _store_live_confirmation(
+    view: MainUIViewModel,
+    proposal: LiveInteractionProposal,
+    *,
+    selected_option: str,
+    automatic: bool,
+) -> None:
+    manual_bbox = None
+    selected_aoi_id = selected_option
+    if selected_option == "manual_region":
+        raw_bbox = st.session_state.get("main_manual_bbox")
+        if not raw_bbox:
+            raise ValueError("Draw a manual rectangle before confirming it.")
+        manual_bbox = tuple(float(value) for value in raw_bbox)
+        selected_ids = st.session_state.get(
+            "main_selected_aoi_ids",
+            [],
+        )
+        selected_aoi_id = (
+            str(selected_ids[0])
+            if selected_ids
+            else "whole_slide"
+        )
+
+    interaction = build_live_interaction_input(
+        proposal,
+        command=st.session_state["main_typed_command"],
+        selected_aoi_id=selected_aoi_id,
+        automatic=automatic,
+        manual_bbox=manual_bbox,
+    )
+    selected_aoi = next(
+        (
+            aoi
+            for aoi in view.active_slide.aois
+            if aoi.aoi_id == selected_aoi_id
+        ),
+        None,
+    )
+    confirmed_context = (
+        selected_aoi.text.strip()
+        if selected_aoi is not None
+        and selected_aoi.text.strip()
+        else view.active_slide.slide_text.strip()
+    )
+    wrapper = {
+        "interaction": interaction.to_dict(),
+        "selected_target": {"aoi_id": selected_aoi_id},
+        "proposed_aoi_id": proposal.predicted_aoi_id,
+        "corrected": (
+            selected_aoi_id != proposal.predicted_aoi_id
+        ),
+        "confirmed_context": confirmed_context,
+    }
+    st.session_state["main_confirmed"] = True
+    st.session_state["main_confirmation_source"] = (
+        interaction.confirmation.source
+    )
+    st.session_state["main_confirmed_aoi_id"] = selected_aoi_id
+    st.session_state["main_corrected_from_aoi_id"] = (
+        interaction.confirmation.corrected_from_aoi_id
+    )
+    st.session_state["main_confirmed_interaction"] = wrapper
+    st.session_state["main_confirmation_error"] = None
+
+
+def _consume_live_proposal(
+    resources: MainLiveResources,
+    view: MainUIViewModel,
+    geometry: SlideViewportGeometry | None,
+) -> None:
+    resources.runtime.poll()
+    confirmed = (
+        st.session_state.get("main_confirmed_interaction")
+        or {}
+    ).get("interaction", {})
+    pending_id = str(confirmed.get("interaction_id", ""))
+    if (
+        pending_id
+        and pending_id
+        != st.session_state.get("main_last_generated_interaction_id")
+    ):
+        return
+
+    raw = resources.inbox.pop()
+    if raw is None:
+        return
+    if raw.deck_id != view.deck_id or raw.slide_id != view.active_slide_id:
+        return
+
+    if geometry is None:
+        proposal = replace(
+            raw,
+            predicted_aoi_id=None,
+            target_confidence=0.0,
+            alternatives=(),
+        )
+    else:
+        proposal = resolve_grid_target(
+            raw,
+            geometry,
+            view.active_slide.aois,
+        )
+
+    reset_main_turn_state(st.session_state)
+    st.session_state["main_live_proposal"] = proposal
+    st.session_state["main_live_original_transcript"] = (
+        proposal.original_speech_transcript
+    )
+    st.session_state["main_live_predicted_aoi_id"] = (
+        proposal.predicted_aoi_id
+    )
+    st.session_state["main_live_layout_revision"] = (
+        proposal.layout_revision
+        if proposal.layout_revision >= 0
+        else None
+    )
+    st.session_state["main_typed_command"] = proposal.transcript
+    options = _live_target_options(proposal)
+    st.session_state["main_live_target_choice"] = (
+        proposal.predicted_aoi_id
+        if proposal.predicted_aoi_id in options
+        else options[0]
+    )
+
+    if should_auto_confirm(
+        proposal,
+        geometry,
+        policy=st.session_state["main_confirmation_policy"],
+        threshold=float(
+            st.session_state["main_auto_confirm_threshold"]
+        ),
+        interaction_pending=False,
+    ):
+        _store_live_confirmation(
+            view,
+            proposal,
+            selected_option=str(proposal.predicted_aoi_id),
+            automatic=True,
+        )
+
+
+def _render_live_target_column(
+    view: MainUIViewModel,
+    proposal: LiveInteractionProposal | None,
+) -> str | None:
+    st.markdown("### 1. Live target")
+    st.checkbox(
+        "Show AOI overlay",
+        key="main_show_aoi_overlay",
+        on_change=_on_live_overlay_change,
+    )
+    if proposal is None:
+        st.caption("Waiting for a completed speech turn and gaze evidence.")
+        return None
+
+    options = _live_target_options(proposal)
+    current = st.session_state.get("main_live_target_choice")
+    if current not in options:
+        st.session_state["main_live_target_choice"] = options[0]
+    selected = st.selectbox(
+        "Confirm or correct target",
+        options=options,
+        key="main_live_target_choice",
+        format_func=lambda value: (
+            "Manual rectangle"
+            if value == "manual_region"
+            else "Whole slide"
+            if value == "whole_slide"
+            else value
+        ),
+        on_change=_invalidate_confirmation,
+    )
+    if proposal.predicted_aoi_id:
+        st.caption(
+            f"Predicted: {proposal.predicted_aoi_id} · "
+            f"confidence {proposal.target_confidence:.2f} · "
+            f"grid {proposal.gaze_grid}"
+        )
+    else:
+        st.warning(
+            "No valid gaze target. Choose whole slide or draw a region."
+        )
+    st.button(
+        "Draw manual region",
+        key="main_live_draw_region_button",
+        width="stretch",
+        on_click=_enable_live_manual_region,
+    )
+    if st.session_state.get("main_manual_bbox"):
+        st.caption("A manual rectangle is available as a fallback target.")
+    return selected
+
+
+def _render_live_interaction(
+    view: MainUIViewModel,
+) -> None:
+    proposal = st.session_state.get("main_live_proposal")
+    if not isinstance(proposal, LiveInteractionProposal):
+        proposal = None
+    target_column, intent_column, answer_column = st.columns(
+        [1.05, 1.20, 1.35],
+        gap="medium",
+    )
+    with target_column:
+        selected = _render_live_target_column(view, proposal)
+    with intent_column:
+        st.markdown("### 2. Live command")
+        st.text_area(
+            "Speech transcript",
+            key="main_typed_command",
+            height=110,
+            placeholder="Speak a request after enabling camera and microphone.",
+            on_change=_on_typed_command_change,
+        )
+        if proposal is not None:
+            edited = (
+                st.session_state["main_typed_command"].strip()
+                != proposal.original_speech_transcript.strip()
+            )
+            st.caption(
+                "Edited transcript: hybrid provenance."
+                if edited
+                else "Original speech transcript: sensor-assisted provenance."
+            )
+        confirm_clicked = st.button(
+            "Confirm target and command",
+            type="primary",
+            disabled=(
+                proposal is None
+                or selected is None
+                or not st.session_state["main_typed_command"].strip()
+                or st.session_state["main_confirmed"]
+            ),
+            width="stretch",
+            key="main_live_confirm_button",
+        )
+        if confirm_clicked and proposal is not None and selected is not None:
+            try:
+                _store_live_confirmation(
+                    view,
+                    proposal,
+                    selected_option=selected,
+                    automatic=False,
+                )
+            except Exception as exc:
+                _invalidate_confirmation()
+                st.session_state["main_confirmation_error"] = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+        if st.session_state["main_confirmation_error"]:
+            st.error(st.session_state["main_confirmation_error"])
+        elif st.session_state["main_confirmed"]:
+            st.success(
+                "Live request confirmed via "
+                f"{st.session_state['main_confirmation_source']}."
+            )
+    with answer_column:
+        _render_answer_column(view)
+
+
+@st.fragment(run_every=0.5)
+def _render_live_periodic(
+    resources: MainLiveResources,
+    view: MainUIViewModel,
+    geometry: SlideViewportGeometry | None,
+) -> None:
+    try:
+        _consume_live_proposal(resources, view, geometry)
+    except Exception as exc:
+        st.error(
+            "Live proposal processing failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+    session = resources.ingress.session_snapshot()
+    runtime_state = resources.runtime.controller.state.value
+    st.caption(
+        f"Live transport: {'armed' if session.armed else 'off'} · "
+        f"Runtime: {runtime_state} · "
+        f"Media: {'ready' if session.video_fresh and session.audio_fresh else 'waiting'}"
+    )
+    _render_live_interaction(view)
+    if st.session_state.pop("main_live_full_rerun_requested", False):
+        st.rerun(scope="app")
+
+
 
 def _render_manual_interaction(
     view: MainUIViewModel,
+    *,
+    live_resources: MainLiveResources | None = None,
+    geometry: SlideViewportGeometry | None = None,
 ) -> None:
     """Render the core learner workflow in one horizontal row."""
+    if (
+        st.session_state.get("main_interaction_mode") == "Live"
+        and live_resources is not None
+    ):
+        _render_live_periodic(
+            live_resources,
+            view,
+            geometry,
+        )
+        return
+
     (
         target_column,
         intent_column,

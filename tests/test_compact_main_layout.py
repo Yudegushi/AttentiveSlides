@@ -218,11 +218,11 @@ class TestCompactMainLayout(
             matches,
         )
 
-    def test_region_sliders_are_not_rendered(
+    def test_viewport_component_replaces_region_sliders(
         self,
     ) -> None:
         calls = self.calls_of(
-            "_render_manual_canvas"
+            "_render_slide_workspace"
         )
 
         slider_calls = [
@@ -242,11 +242,12 @@ class TestCompactMainLayout(
         )
 
         self.assertIn(
-            "st_canvas",
+            "render_slide_viewport",
             self.source_of(
-                "_render_manual_canvas"
+                "_render_slide_workspace"
             ),
         )
+        self.assertNotIn("st_canvas", self.source)
 
     def test_xai_drawer_is_collapsed(
         self,

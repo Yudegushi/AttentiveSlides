@@ -10,6 +10,24 @@ from aiohttp.test_utils import TestServer
 
 
 class LiveSinglePortLauncherSpikeTest(unittest.TestCase):
+    def test_official_main_ui_is_the_default(self):
+        from scripts.run_live_single_port import parse_args
+
+        self.assertEqual(
+            parse_args([]).streamlit_app,
+            "apps/streamlit_attentive_slides.py",
+        )
+
+    def test_diagnostic_app_remains_selectable(self):
+        from scripts.run_live_single_port import parse_args
+
+        self.assertEqual(
+            parse_args(
+                ["--streamlit-app", "apps/streamlit_live.py"]
+            ).streamlit_app,
+            "apps/streamlit_live.py",
+        )
+
     def test_streamlit_child_uses_current_interpreter(self):
         from scripts.run_live_single_port import build_streamlit_command
 

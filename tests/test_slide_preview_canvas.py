@@ -45,11 +45,12 @@ class TestSlidePreviewCanvas(unittest.TestCase):
         self.assertIn("main_slide_preview_", ast.unparse(selector))
         self.assertIn("_navigate_to_slide", ast.unparse(selector))
 
-    def test_direct_canvas_replaces_region_sliders(self) -> None:
-        canvas = self.functions["_render_manual_canvas"]
-        rendered = ast.unparse(canvas)
-        self.assertIn("st_canvas", rendered)
-        self.assertIn("extract_latest_rectangle", rendered)
+    def test_viewport_component_replaces_region_sliders(self) -> None:
+        workspace = self.functions["_render_slide_workspace"]
+        rendered = ast.unparse(workspace)
+        self.assertIn("render_slide_viewport", rendered)
+        self.assertIn("parse_component_geometry", rendered)
+        self.assertNotIn("st_canvas", self.source)
         self.assertNotIn("main_region_x_range", rendered)
         self.assertNotIn("main_region_y_range", rendered)
         self.assertNotIn("main_apply_region_button", rendered)

@@ -240,7 +240,10 @@ def _handle_termination(_signum, _frame) -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--streamlit-app", default="apps/streamlit_live.py")
+    parser.add_argument(
+        "--streamlit-app",
+        default="apps/streamlit_attentive_slides.py",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8501)
     parser.add_argument("--streamlit-host", default="127.0.0.1")

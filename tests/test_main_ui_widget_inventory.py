@@ -188,6 +188,9 @@ class TestMainUIWidgetInventory(
         required = {
             "main_pdf_upload",
             "main_cloud_text_allowed",
+            "main_interaction_mode",
+            "main_live_master_enabled",
+            "main_confirmation_policy",
             "main_history_enabled",
             "main_thumbnail_window_previous",
             "main_thumbnail_window_next",
@@ -198,6 +201,7 @@ class TestMainUIWidgetInventory(
             "main_clear_region_button",
             "main_typed_command",
             "main_confirm_button",
+            "main_live_confirm_button",
             "main_generate_answer_button",
             "main_reset_turn_button",
             "main_clear_conversation_button",

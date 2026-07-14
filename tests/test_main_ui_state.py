@@ -10,10 +10,13 @@ from pathlib import Path
 from modules.system.main_ui_state import (
     ManifestDeckBrowser,
     build_main_conversation_defaults,
+    build_main_live_defaults,
     build_main_turn_defaults,
     build_main_ui_view_model,
     reset_main_conversation_state,
+    reset_main_live_turn_state,
     reset_main_turn_state,
+    write_main_interaction_once,
 )
 
 
@@ -74,6 +77,121 @@ def make_slide_payload(
 
 
 class TestMainUIState(unittest.TestCase):
+    def test_main_interaction_log_is_exactly_once(self) -> None:
+        logged: list[str] = []
+        payloads: list[dict] = []
+
+        first = write_main_interaction_once(
+            logged,
+            interaction_id="turn-1",
+            payload={"interaction_id": "turn-1"},
+            write=payloads.append,
+        )
+        second = write_main_interaction_once(
+            logged,
+            interaction_id="turn-1",
+            payload={"interaction_id": "turn-1"},
+            write=payloads.append,
+        )
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(logged, ["turn-1"])
+        self.assertEqual(payloads, [{"interaction_id": "turn-1"}])
+
+    def test_failed_log_write_does_not_mark_interaction(self) -> None:
+        logged: list[str] = []
+
+        def fail(_payload: dict) -> None:
+            raise OSError("disk unavailable")
+
+        with self.assertRaisesRegex(OSError, "disk unavailable"):
+            write_main_interaction_once(
+                logged,
+                interaction_id="turn-2",
+                payload={"interaction_id": "turn-2"},
+                write=fail,
+            )
+
+        self.assertEqual(logged, [])
+
+    def test_main_live_defaults_are_minimal_and_fresh(
+        self,
+    ) -> None:
+        first = build_main_live_defaults()
+        second = build_main_live_defaults()
+
+        self.assertEqual(
+            first,
+            {
+                "main_interaction_mode": "Manual",
+                "main_live_master_enabled": False,
+                "main_confirmation_policy": (
+                    "Always confirm"
+                ),
+                "main_auto_confirm_threshold": 0.80,
+                "main_live_proposal": None,
+                "main_live_original_transcript": None,
+                "main_live_predicted_aoi_id": None,
+                "main_live_layout_revision": None,
+                "main_logged_interaction_ids": [],
+            },
+        )
+        self.assertIsNot(
+            first["main_logged_interaction_ids"],
+            second["main_logged_interaction_ids"],
+        )
+
+    def test_live_turn_reset_preserves_preferences(
+        self,
+    ) -> None:
+        state = {
+            **build_main_live_defaults(),
+            **build_main_turn_defaults(),
+            "main_interaction_mode": "Live",
+            "main_live_master_enabled": True,
+            "main_confirmation_policy": (
+                "Confidence-based auto"
+            ),
+            "main_auto_confirm_threshold": 0.91,
+            "main_live_proposal": {"interaction_id": "live-1"},
+            "main_live_original_transcript": "original",
+            "main_live_predicted_aoi_id": "aoi-1",
+            "main_live_layout_revision": 7,
+            "main_logged_interaction_ids": ["logged-1"],
+            "main_typed_command": "explain this",
+            "main_confirmed": True,
+        }
+
+        reset_main_live_turn_state(state)
+
+        self.assertEqual(state["main_interaction_mode"], "Live")
+        self.assertTrue(state["main_live_master_enabled"])
+        self.assertEqual(
+            state["main_confirmation_policy"],
+            "Confidence-based auto",
+        )
+        self.assertEqual(
+            state["main_auto_confirm_threshold"],
+            0.91,
+        )
+        self.assertEqual(
+            state["main_logged_interaction_ids"],
+            ["logged-1"],
+        )
+        self.assertIsNone(state["main_live_proposal"])
+        self.assertIsNone(
+            state["main_live_original_transcript"]
+        )
+        self.assertIsNone(
+            state["main_live_predicted_aoi_id"]
+        )
+        self.assertIsNone(
+            state["main_live_layout_revision"]
+        )
+        self.assertEqual(state["main_typed_command"], "")
+        self.assertFalse(state["main_confirmed"])
+
     def test_repository_manifest_loads(
         self,
     ) -> None:

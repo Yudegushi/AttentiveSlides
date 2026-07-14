@@ -9,7 +9,13 @@ import queue
 from typing import Callable, Sequence
 import uuid
 
-from modules.common.interaction_contracts import TargetCandidate
+from modules.common.interaction_contracts import (
+    ConfirmationInput,
+    InteractionInput,
+    IntentInput,
+    TargetCandidate,
+    TargetInput,
+)
 from modules.common.schemas import AOI
 from modules.human_sensing.contracts import AOIPrediction as MemberAOIPrediction
 from modules.system.runtime_state import RuntimeState
@@ -140,6 +146,119 @@ def resolve_grid_target(
         ),
         target_confidence=round(top_confidence, 3),
         alternatives=alternatives,
+    )
+
+
+def should_auto_confirm(
+    proposal: LiveInteractionProposal,
+    geometry: SlideViewportGeometry | None,
+    *,
+    policy: str,
+    threshold: float,
+    interaction_pending: bool,
+) -> bool:
+    """Apply every approved confidence-based auto-confirm gate."""
+    return bool(
+        policy == "Confidence-based auto"
+        and 0.70 <= threshold <= 1.0
+        and proposal.target_confidence >= threshold
+        and proposal.predicted_aoi_id
+        and proposal.transcript.strip()
+        and not interaction_pending
+        and geometry is not None
+        and proposal.deck_id == geometry.deck_id
+        and proposal.slide_id == geometry.slide_id
+        and proposal.layout_revision == geometry.layout_revision
+    )
+
+
+def build_live_interaction_input(
+    proposal: LiveInteractionProposal,
+    *,
+    command: str,
+    selected_aoi_id: str,
+    automatic: bool = False,
+    manual_bbox: tuple[float, float, float, float] | None = None,
+) -> InteractionInput:
+    """Build the canonical contract after Live confirmation."""
+    command = command.strip()
+    selected_aoi_id = selected_aoi_id.strip()
+    if not command:
+        raise ValueError("A non-empty transcript or edited command is required.")
+    if not selected_aoi_id:
+        raise ValueError("A confirmed target is required.")
+    if automatic and selected_aoi_id != proposal.predicted_aoi_id:
+        raise ValueError("Automatic confirmation requires the predicted AOI.")
+
+    transcript_edited = command != proposal.original_speech_transcript.strip()
+    manual_target = manual_bbox is not None or selected_aoi_id == "whole_slide"
+    mode = "hybrid" if transcript_edited or manual_target else "sensor_assisted"
+    intent = IntentInput(
+        source="typed_text" if transcript_edited else "speech_transcript",
+        text=command,
+        # The current STT adapter does not expose calibrated confidence.
+        source_confidence=None,
+    )
+
+    if manual_bbox is not None:
+        target = TargetInput(
+            source="manual_rectangle",
+            slide_id=proposal.slide_id,
+            bbox=manual_bbox,
+            selected_aoi_id=selected_aoi_id,
+            alternatives=proposal.alternatives,
+        )
+    elif selected_aoi_id == "whole_slide":
+        target = TargetInput(
+            source="whole_slide",
+            slide_id=proposal.slide_id,
+            selected_aoi_id="whole_slide",
+        )
+    else:
+        target = TargetInput(
+            source="gaze_prediction",
+            slide_id=proposal.slide_id,
+            predicted_aoi_id=proposal.predicted_aoi_id,
+            confidence=proposal.target_confidence,
+            alternatives=proposal.alternatives,
+            stable_duration_sec=proposal.stable_duration_sec,
+        )
+
+    corrected = bool(
+        proposal.predicted_aoi_id
+        and selected_aoi_id != proposal.predicted_aoi_id
+    )
+    confirmation_source = (
+        "automatic_high_confidence"
+        if automatic
+        else "manual_correction"
+        if corrected
+        else "explicit_user_confirmation"
+    )
+    return InteractionInput(
+        interaction_id=proposal.interaction_id,
+        deck_id=proposal.deck_id,
+        slide_id=proposal.slide_id,
+        mode=mode,
+        target=target,
+        intent=intent,
+        confirmation=ConfirmationInput(
+            confirmed=True,
+            source=confirmation_source,
+            confirmed_aoi_id=selected_aoi_id,
+            corrected_from_aoi_id=(
+                proposal.predicted_aoi_id if corrected else None
+            ),
+        ),
+        metadata={
+            "original_speech_transcript": proposal.original_speech_transcript,
+            "gaze_grid": proposal.gaze_grid,
+            "gaze_confidence": proposal.gaze_confidence,
+            "target_confidence": proposal.target_confidence,
+            "layout_revision": proposal.layout_revision,
+            "predicted_aoi_id": proposal.predicted_aoi_id,
+            "confirmed_aoi_id": selected_aoi_id,
+        },
     )
 
 
