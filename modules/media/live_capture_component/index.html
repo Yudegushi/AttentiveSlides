@@ -8,11 +8,13 @@
     body { font-family: system-ui, sans-serif; margin: 0; }
     button { font-size: 1rem; padding: .55rem .9rem; }
     #status { font-weight: 600; }
+    #audio-status { color: #475569; font-size: .9rem; margin: .35rem 0 0; }
     video { background: #111; display: block; margin-top: .75rem; max-width: 320px; width: 100%; }
   </style>
 </head>
 <body>
   <p id="status">Preparing camera and microphone…</p>
+  <p id="audio-status">Mic level: waiting for capture…</p>
   <button id="permission" hidden>Grant camera/mic</button>
   <video id="preview" autoplay muted playsinline></video>
 <script>
@@ -20,6 +22,7 @@
   const sessionId = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() :
     String(Date.now()) + "-" + Math.random().toString(16).slice(2);
   const status = document.getElementById("status");
+  const audioStatus = document.getElementById("audio-status");
   const permissionButton = document.getElementById("permission");
   const preview = document.getElementById("preview");
   const canvas = document.createElement("canvas");
@@ -36,6 +39,8 @@
   let generation = null;
   let videoInFlight = false;
   let audioInFlight = false;
+  let lastAudioStatusUpdate = 0;
+  const energyVadThreshold = 250;
 
   function headers(extra = {}) {
     return { "X-Attentive-Media-Session": sessionId, ...extra };
@@ -48,6 +53,18 @@
 
   function setStatus(message) {
     status.textContent = message;
+  }
+
+  function updateAudioStatus(pcm) {
+    const now = performance.now();
+    if (now - lastAudioStatusUpdate < 250) return;
+    lastAudioStatusUpdate = now;
+    let peak = 0;
+    for (let index = 0; index < pcm.length; index += 1) {
+      peak = Math.max(peak, Math.abs(pcm[index]));
+    }
+    const state = peak >= energyVadThreshold ? "speech detected" : "waiting for speech";
+    audioStatus.textContent = `Mic peak ${peak} · energy VAD: ${state}`;
   }
 
   function downsampleToS16(input, sourceRate) {
@@ -123,6 +140,7 @@
     processor.onaudioprocess = (event) => {
       if (!running || audioInFlight) return;
       const pcm = downsampleToS16(event.inputBuffer.getChannelData(0), audioContext.sampleRate);
+      updateAudioStatus(pcm);
       audioInFlight = true;
       fetch("/attentive-media/audio", {
         method: "POST",
@@ -204,6 +222,7 @@
     silentGain = null;
     if (audioContext) await audioContext.close().catch(() => {});
     audioContext = null;
+    audioStatus.textContent = "Mic level: capture stopped.";
     if (stream) stream.getTracks().forEach((track) => track.stop());
     stream = null;
     preview.srcObject = null;

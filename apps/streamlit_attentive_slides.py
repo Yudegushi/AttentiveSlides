@@ -33,7 +33,7 @@ from PIL import (
 from modules.audio.faster_whisper_transcriber import (
     FasterWhisperTranscriber,
 )
-from modules.audio.streaming_vad import default_vad_backend
+from modules.audio.streaming_vad import EnergyVadBackend
 from modules.audio.transcriber import TranscriptionConfig
 from modules.audio.voice_turn_detector import VoiceTurnDetector
 from modules.logging.interaction_logger import InteractionLogger
@@ -180,12 +180,20 @@ def build_main_live_resources(
                 "ATTENTIVE_WHISPER_MODEL",
                 "small",
             ),
+            device=os.environ.get(
+                "ATTENTIVE_WHISPER_DEVICE",
+                "auto",
+            ),
+            compute_type=os.environ.get(
+                "ATTENTIVE_WHISPER_COMPUTE_TYPE",
+                "auto",
+            ),
         )
     )
     audio_worker = AudioWorker(
         media_source=media_source,
         detector=VoiceTurnDetector(
-            default_vad_backend()
+            EnergyVadBackend(speech_threshold=250)
         ),
         transcribe=transcriber.transcribe,
     )
@@ -411,11 +419,6 @@ def _initialize_global_state() -> None:
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
-    # Thumbnail strip state.
-    st.session_state.setdefault(
-        "main_thumbnail_window_start",
-        0,
-    )
 
 
 def _render_records_table(
@@ -1320,28 +1323,6 @@ def _thumbnail_png_bytes(
         thumbnail.close()
 
 
-def _shift_thumbnail_window(
-    delta: int,
-    maximum_start: int,
-) -> None:
-    current = int(
-        st.session_state.get(
-            "main_thumbnail_window_start",
-            0,
-        )
-    )
-
-    st.session_state[
-        "main_thumbnail_window_start"
-    ] = max(
-        0,
-        min(
-            maximum_start,
-            current + int(delta),
-        ),
-    )
-
-
 def _target_scope_label(
     value: str,
 ) -> str:
@@ -1355,7 +1336,7 @@ def _target_scope_label(
 def _render_slide_selector(
     browser: Any,
 ) -> None:
-    """Render a horizontal, clickable slide-preview strip."""
+    """Render a compact right-aligned popover of vertical slide previews."""
     slide_ids = list(
         browser.slide_ids
     )
@@ -1363,156 +1344,86 @@ def _render_slide_selector(
     if not slide_ids:
         return
 
-    active_slide_id = st.session_state[
-        "main_active_slide_id"
-    ]
-
-    try:
-        active_index = slide_ids.index(
-            active_slide_id
-        )
-    except ValueError:
-        active_index = 0
+    active_slide_id = st.session_state.get(
+        "main_active_slide_id",
+        slide_ids[0],
+    )
+    if active_slide_id not in slide_ids:
         active_slide_id = slide_ids[0]
         st.session_state[
             "main_active_slide_id"
         ] = active_slide_id
 
-    window_size = min(
-        7,
-        len(slide_ids),
-    )
-    maximum_start = max(
-        0,
-        len(slide_ids) - window_size,
-    )
-
-    start = int(
-        st.session_state.get(
-            "main_thumbnail_window_start",
-            0,
-        )
-    )
-    start = max(
-        0,
-        min(maximum_start, start),
-    )
-
-    if not (
-        start
-        <= active_index
-        < start + window_size
-    ):
-        start = max(
-            0,
-            min(
-                maximum_start,
-                active_index
-                - window_size // 2,
-            ),
-        )
-
-    st.session_state[
-        "main_thumbnail_window_start"
-    ] = start
-
-    visible_slide_ids = slide_ids[
-        start : start + window_size
-    ]
-
-    widths = [0.08] + [1.0] * len(
-        visible_slide_ids
-    ) + [0.08]
-
-    columns = st.columns(
-        widths,
+    _, trigger_column = st.columns(
+        [0.88, 0.12],
         gap="small",
-        vertical_alignment="center",
     )
-
-    columns[0].button(
-        "‹",
-        key="main_thumbnail_window_previous",
-        disabled=start == 0,
-        help="Show earlier slide previews",
-        on_click=_shift_thumbnail_window,
-        args=(-window_size, maximum_start),
-        width="stretch",
-    )
-
-    for offset, slide_id in enumerate(
-        visible_slide_ids,
-        start=1,
-    ):
-        with columns[offset]:
+    with trigger_column:
+        with st.popover("Slides"):
+            st.caption(
+                f"{len(slide_ids)} slides"
+            )
             with st.container(
-                border=True
+                height=560,
+                border=False,
             ):
-                try:
-                    preview_slide = (
-                        browser.get_slide(
-                            slide_id
+                for slide_id in slide_ids:
+                    with st.container(
+                        border=True
+                    ):
+                        try:
+                            preview_slide = (
+                                browser.get_slide(
+                                    slide_id
+                                )
+                            )
+                        except Exception:
+                            preview_slide = None
+
+                        if (
+                            preview_slide is not None
+                            and preview_slide.image_available
+                            and preview_slide.image_path
+                        ):
+                            preview_path = Path(
+                                preview_slide.image_path
+                            )
+                            st.image(
+                                _thumbnail_png_bytes(
+                                    str(preview_path),
+                                    preview_path.stat().st_mtime_ns,
+                                ),
+                                width="stretch",
+                            )
+                        else:
+                            st.markdown(
+                                "<div style='height:4.8rem;display:flex;"
+                                "align-items:center;justify-content:center;"
+                                "border:1px dashed rgba(128,128,128,.35);"
+                                "border-radius:.35rem;'>Preview</div>",
+                                unsafe_allow_html=True,
+                            )
+
+                        st.button(
+                            f"Slide {slide_id}",
+                            key=(
+                                "main_slide_preview_"
+                                f"{slide_id}"
+                            ),
+                            type=(
+                                "primary"
+                                if slide_id
+                                == active_slide_id
+                                else "secondary"
+                            ),
+                            width="stretch",
+                            on_click=_navigate_to_slide,
+                            args=(slide_id,),
+                            help=(
+                                "Open slide "
+                                f"{slide_id}"
+                            ),
                         )
-                    )
-                except Exception:
-                    preview_slide = None
-
-                if (
-                    preview_slide is not None
-                    and preview_slide.image_available
-                    and preview_slide.image_path
-                ):
-                    preview_path = Path(
-                        preview_slide.image_path
-                    )
-
-                    st.image(
-                        _thumbnail_png_bytes(
-                            str(preview_path),
-                            preview_path.stat().st_mtime_ns,
-                        ),
-                        width="stretch",
-                    )
-
-                else:
-                    st.markdown(
-                        "<div style='height:4.8rem;display:flex;"
-                        "align-items:center;justify-content:center;"
-                        "border:1px dashed rgba(128,128,128,.35);"
-                        "border-radius:.35rem;'>Preview</div>",
-                        unsafe_allow_html=True,
-                    )
-
-                st.button(
-                    str(slide_id),
-                    key=(
-                        "main_slide_preview_"
-                        f"{slide_id}"
-                    ),
-                    type=(
-                        "primary"
-                        if slide_id
-                        == active_slide_id
-                        else "secondary"
-                    ),
-                    width="stretch",
-                    on_click=_navigate_to_slide,
-                    args=(slide_id,),
-                    help=(
-                        "Open slide "
-                        f"{slide_id}"
-                    ),
-                )
-
-    columns[-1].button(
-        "›",
-        key="main_thumbnail_window_next",
-        disabled=start >= maximum_start,
-        help="Show later slide previews",
-        on_click=_shift_thumbnail_window,
-        args=(window_size, maximum_start),
-        width="stretch",
-    )
 
 
 
@@ -1969,8 +1880,6 @@ def _render_current_slide_llm_aoi_action(
     )
     if not configured:
         st.caption("LLM AOI is not configured")
-    if st.session_state.get("main_llm_aoi_message"):
-        st.success(st.session_state["main_llm_aoi_message"])
     if st.session_state.get("main_llm_aoi_error"):
         st.error(st.session_state["main_llm_aoi_error"])
     if not clicked:
