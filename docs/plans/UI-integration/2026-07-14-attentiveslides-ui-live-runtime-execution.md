@@ -622,13 +622,13 @@ git commit -m "feat: report slide viewport geometry"
 - Produces: `LiveInteractionProposal`, `LatestProposalInbox`, `resolve_grid_target`, `ProposalTurnRunner`, `MainUILiveRuntime`.
 - Consumes: existing `SensingWorker` dependency injection, `SystemController`, `AudioTurnResult`, and `TurnContextCollector`.
 
-- [ ] **Step 1: Add an opt-in grid aggregation test**
+- [x] **Step 1: Add an opt-in grid aggregation test**
 
 Construct snapshots for `middle_left` and `middle_right`, instantiate `TurnContextCollector(..., aggregation_key="gaze_grid")`, and assert the dwell winner is returned in `gaze_grid`, with `predicted_aoi_id=None`. Existing default AOI aggregation tests must remain unchanged.
 
 Run the focused test. Expected: FAIL because `aggregation_key` does not exist.
 
-- [ ] **Step 2: Add the smallest aggregation switch**
+- [x] **Step 2: Add the smallest aggregation switch**
 
 Add constructor validation for `aggregation_key in {"aoi_id", "gaze_grid"}`. In `aggregate`, choose the weight key from either `predicted_aoi_id` or `gaze_grid`. For grid mode, construct:
 
@@ -645,7 +645,7 @@ gaze = GazePrediction(
 
 Run all `tests.test_turn_context`. Expected: PASS for old and new modes.
 
-- [ ] **Step 3: Write bridge unit tests**
+- [x] **Step 3: Write bridge unit tests**
 
 Cover:
 
@@ -658,7 +658,7 @@ Cover:
 
 Run the new test module. Expected: FAIL because the bridge does not exist.
 
-- [ ] **Step 4: Implement the proposal and latest-only inbox**
+- [x] **Step 4: Implement the proposal and latest-only inbox**
 
 Use:
 
@@ -698,11 +698,11 @@ class LatestProposalInbox:
             pass
 ```
 
-- [ ] **Step 5: Reuse the existing sensing injection point for raw grid confidence**
+- [x] **Step 5: Reuse the existing sensing injection point for raw grid confidence**
 
 Implement `map_gaze_grid_only(gaze, _aois) -> MemberAOIPrediction` by copying timestamp, slide ID, `gaze_grid`, confidence, and dwell, and using the grid name as the temporary non-null prediction key. This preserves the existing learning-state call but avoids the old normalized-AOI score. Configure production `SensingWorker(gaze_to_aoi=map_gaze_grid_only)` and `TurnContextCollector(aggregation_key="gaze_grid")`; diagnostic apps keep defaults.
 
-- [ ] **Step 6: Implement proposal resolution and runner**
+- [x] **Step 6: Implement proposal resolution and runner**
 
 `resolve_grid_target` divides `(0, 0, viewport_width, viewport_height)` into 3×3 CSS-pixel cells, scores eligible AOI rects using the approved formula, and returns `dataclasses.replace` with the current geometry revision. Eligibility excludes `whole_slide` and AOIs whose normalized type is one of `footer`, `page_number`, `decoration`, or `background`.
 
@@ -730,7 +730,7 @@ return ProposalTurnOutcome(pending_confirmation=False)
 
 It must not import `GroundedTutorAgent`, `LiveTutorAdapter`, or `InteractionLogger`.
 
-- [ ] **Step 7: Implement the runtime facade in the same module**
+- [x] **Step 7: Implement the runtime facade in the same module**
 
 `MainUILiveRuntime` wraps the existing controller and exposes only:
 
@@ -760,7 +760,7 @@ def poll(self) -> None:
 
 `poll()` delegates to `controller.poll()`; the runner already published the proposal. Do not reproduce `LiveViewModel` snapshots or tutor state.
 
-- [ ] **Step 8: Run bridge/runtime regressions and commit**
+- [x] **Step 8: Run bridge/runtime regressions and commit**
 
 Run:
 
@@ -802,7 +802,7 @@ git commit -m "feat: bridge live turns into UI proposals"
 - Consumes: Tasks 2–4 adapters, component, bridge, inbox, and runtime facade.
 - Produces: Manual/Live mode UI, Always-confirm/auto policy, exactly-once Main Tutor call and JSONL entry.
 
-- [ ] **Step 1: Add minimal Live session defaults and tests**
+- [x] **Step 1: Add minimal Live session defaults and tests**
 
 Add only these session keys:
 
@@ -822,7 +822,7 @@ Add only these session keys:
 
 Deck/slide change resets proposal fields and the current turn, but preserves mode and policy preferences. Run `tests.test_main_ui_state`; expected FAIL before implementation and PASS after.
 
-- [ ] **Step 2: Make exhausted grounded generation retryable without changing the agent hierarchy**
+- [x] **Step 2: Make exhausted grounded generation retryable without changing the agent hierarchy**
 
 Add a helper in `main_tutor_integration.py` that extracts the last provider/parse/validation error from `GroundedTutorResult.attempts`. Immediately after `agent.answer_context(...)`, reject fallback:
 
@@ -835,7 +835,7 @@ if result.status == "fallback":
 
 Add tests for provider exception, malformed response, and validation exhaustion. Each must assert an exception message containing the real final failure and must assert no generation payload is returned. Existing successful fake-agent tests remain unchanged.
 
-- [ ] **Step 3: Build cached live resources around the canonical deck provider**
+- [x] **Step 3: Build cached live resources around the canonical deck provider**
 
 In `apps/streamlit_attentive_slides.py`, add a cached `build_main_live_resources()` that constructs one:
 
@@ -851,13 +851,13 @@ In `apps/streamlit_attentive_slides.py`, add a cached `build_main_live_resources
 
 Do not construct `RealSlideProvider`, `LiveTurnRunner`, `LiveTutorAdapter`, or a live JSONL logger in this production resource graph.
 
-- [ ] **Step 4: Replace both static/manual slide renderers with the component**
+- [x] **Step 4: Replace both static/manual slide renderers with the component**
 
 `_render_slide_workspace(view)` always calls `render_slide_viewport`. Set `drawing_enabled` only when target scope is `Manual region`. Parse geometry with Python `time.monotonic()` and store the latest geometry in `main_live_geometry`. For a returned normalized manual bbox, call `map_bbox_to_aois`, construct `ManualSelectionResult` with the component's slide pixel width/height, and pass it to the existing `_store_manual_selection` function.
 
 When the component is disabled for AppTest, retain `_render_static_slide` as the test fallback. Remove production use of `st_canvas` after equivalent manual-selection tests pass; then remove `streamlit-drawable-canvas-fix` from `requirements-ui.txt` only if no remaining import exists.
 
-- [ ] **Step 5: Add Live controls without redesigning the sidebar**
+- [x] **Step 5: Add Live controls without redesigning the sidebar**
 
 Add:
 
@@ -870,7 +870,7 @@ Add:
 
 Mount `st.iframe("/capture", height=340)` outside every periodic fragment. Manual mode disarms ingress and stops runtime. Binding a new uploaded browser calls provider `set_browser`, clears snapshots/inbox, and sets the active slide before enabling the master switch.
 
-- [ ] **Step 6: Consume proposals before rendering Live interaction widgets**
+- [x] **Step 6: Consume proposals before rendering Live interaction widgets**
 
 Create a Live-only fragment with `run_every=0.5`. Within the fragment, in this order:
 
@@ -883,7 +883,7 @@ Create a Live-only fragment with `run_every=0.5`. Within the fragment, in this o
 
 Because the fragment owns the command widget, it may set `main_typed_command` before creating that widget. The capture iframe remains outside and is not remounted by periodic fragment reruns.
 
-- [ ] **Step 7: Build the canonical live `InteractionInput`**
+- [x] **Step 7: Build the canonical live `InteractionInput`**
 
 Before user edits:
 
@@ -898,13 +898,13 @@ If transcript differs from `original_speech_transcript`, set `mode="hybrid"` and
 
 Auto-confirm only when all conditions in the design spec pass. Otherwise show the same candidate selector, whole-slide option, and manual-region entry used by explicit confirmation. Unit-test the ten acceptance cases from Checkpoint 3 of the design spec.
 
-- [ ] **Step 8: Keep tutor call and logging exactly once**
+- [x] **Step 8: Keep tutor call and logging exactly once**
 
 Continue calling only the existing `generate_main_tutor_response` function with the confirmed interaction, active slide, grounded agent, privacy/API gates, and conversation history already used by the Main UI.
 
 Use `main_last_generated_interaction_id` as the API idempotency gate. On error, leave `main_confirmed_interaction` intact, show the retryable message, and do not set the last-generated ID. On success, upsert history/XAI and call the existing `InteractionLogger` only if the interaction ID is absent from `main_logged_interaction_ids`; append the ID after the write succeeds.
 
-- [ ] **Step 9: Update launcher default and automated tests**
+- [x] **Step 9: Update launcher default and automated tests**
 
 Change only the CLI default:
 
@@ -934,7 +934,7 @@ git diff --check
 
 Expected: PASS; tests use fake agents and no device/API.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add apps/streamlit_attentive_slides.py \
@@ -961,7 +961,7 @@ git commit -m "feat: integrate live runtime into main UI"
 **Interfaces:**
 - Produces: verified and pushed `codex/ui-live-runtime-integration-v1`.
 
-- [ ] **Step 1: Run static and full automated validation**
+- [x] **Step 1: Run static and full automated validation**
 
 Run:
 
@@ -979,7 +979,7 @@ git status --short
 
 Expected: all commands exit 0; status contains only intentional documentation updates.
 
-- [ ] **Step 2: Run diagnostic smoke tests**
+- [x] **Step 2: Run diagnostic smoke tests**
 
 Launch the old diagnostic app explicitly and verify it still starts:
 
@@ -992,7 +992,7 @@ Launch the old diagnostic app explicitly and verify it still starts:
 
 Stop it cleanly, then launch the official app using the launcher default.
 
-- [ ] **Step 3: Complete manual one-port acceptance**
+- [x] **Step 3: Complete manual one-port acceptance**
 
 Record exact evidence for:
 
@@ -1007,7 +1007,7 @@ Record exact evidence for:
 
 Do not claim continuous gaze or calibrated accuracy.
 
-- [ ] **Step 4: Update concise user documentation**
+- [x] **Step 4: Update concise user documentation**
 
 Document only:
 
@@ -1018,7 +1018,7 @@ Document only:
 - diagnostic app invocation;
 - known limitation that point gaze/calibration is future work.
 
-- [ ] **Step 5: Commit final evidence**
+- [x] **Step 5: Commit final evidence**
 
 ```bash
 git add docs/plans/UI-integration/handoffs/ui-live-runtime-integration-log.md \

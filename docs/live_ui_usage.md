@@ -2,16 +2,18 @@
 
 ## Purpose and ownership
 
-`apps/streamlit_live.py` is the formal UI for the existing continuous runtime.
-It no longer imports or calls `streamlit-webrtc`. The page owns rendering and
-commands only; one cached resource graph owns exactly one
-`BrowserMediaSource`, `SystemController`, audio worker, sensing worker, and
-`LiveTurnRunner`. The same source is injected into `FallbackMediaIngress`.
+`apps/streamlit_attentive_slides.py` is the official Manual + Live UI.
+`apps/streamlit_live.py` remains a diagnostic entrypoint. The official page
+owns rendering, confirmation, the single Main Tutor call, history, XAI, and
+JSONL logging. One cached Live resource graph owns exactly one
+`BrowserMediaSource`, `SystemController`, audio worker, sensing worker, and a
+latest-only proposal inbox. The same source is injected into
+`FallbackMediaIngress`.
 
 HTTP handlers only validate, decode, timestamp, and enqueue bounded packets.
-Sensing, VAD, STT, confirmation, tutor generation, Streamlit calls, and JSONL
-logging remain in their existing worker/controller boundaries. No raw camera or
-microphone data is persisted.
+Sensing, VAD, and STT remain in worker/controller boundaries. Background
+workers never call Streamlit or the LLM. No raw camera or microphone data is
+persisted.
 
 ## AutoDL prerequisites
 
@@ -19,7 +21,7 @@ Use the project interpreter because the SSH shell has no reliable `python`
 alias:
 
 ```bash
-cd /root/autodl-tmp/workspace/AttentiveSlides-live-system
+cd /path/to/AttentiveSlides-checkout
 /root/miniconda3/envs/attentive-app/bin/python -m pip install \
   -r requirements-audio.txt -r requirements-media.txt
 ```
@@ -59,7 +61,7 @@ for both internal health checks, inherits child output, fails on port conflicts,
 and exits if either internal service later fails.
 
 ```bash
-cd /root/autodl-tmp/workspace/AttentiveSlides-live-system
+cd /path/to/AttentiveSlides-checkout
 ATTENTIVE_WHISPER_MODEL=/absolute/path/to/faster-whisper-small/snapshot \
 /root/miniconda3/envs/attentive-app/bin/python \
   scripts/run_live_single_port.py \
@@ -82,8 +84,8 @@ internal port.
 
 ## Master and media lifecycle
 
-1. Upload a real PDF before enabling Master.
-2. Master ON arms ingress and renders `/capture` outside the periodic
+1. Upload a real PDF, switch to **Live**, then enable camera and microphone.
+2. The Live media switch arms ingress and renders `/capture` outside the periodic
    Streamlit fragment. Capture automatically requests camera and microphone.
 3. If browser policy blocks automatic capture, the component shows one
    **Grant camera/mic** recovery button. It is not a second master switch.
@@ -91,7 +93,7 @@ internal port.
    audio have both arrived for the active generation.
 5. Replacement sessions stop the old runtime before activating and clearing
    readiness for the new generation.
-6. Master OFF, pagehide, heartbeat timeout, an ended track, persistent mute, or
+6. Live media OFF, pagehide, heartbeat timeout, an ended track, persistent mute, or
    a stale track all stop controller, ingress, workers, browser tracks, and
    queues through the same idempotent cleanup.
 
@@ -103,22 +105,29 @@ URLs.
 ## Interaction behavior
 
 Speak a short deictic request such as “解释一下这里”, then remain quiet so VAD
-can finalize the turn. Empty STT output is treated as a recoverable invalid turn
-and returns to monitoring; it cannot enter reference resolution or create a
-confirmation. A valid transcript uses the frozen start-time context and the
-canonical `LiveTurnRunner` pipeline. If confirmation appears, selecting a
-candidate different from the prediction calls
-`SystemController.confirm(query_id, confirmed_aoi_id)`; the correction replaces
-the prediction before tutor generation.
+can finalize the turn. Empty STT output is recoverable and cannot create a
+proposal. A valid transcript and the current coarse 3×3 gaze cell enter the
+latest-only proposal inbox. The official UI resolves that cell against current
+browser-coordinate AOI geometry, then lets the user confirm, correct, choose
+the whole slide, or draw a manual rectangle.
 
 Each canonical AOI is drawn with a numbered badge. The confirmation selector
 uses the same number and includes the PDF-derived text excerpt, AOI type, and
 internal ID. The full numbered mapping is available under **Canonical AOI
 details**.
 
-The tutor defaults to deterministic mode for transport/runtime acceptance.
-`data/logs/live_interactions.jsonl` stores canonical interaction metadata only,
-never raw media, prompts, secrets, provider payloads, or hidden reasoning.
+**Always confirm** is the default. **Confidence-based auto** is opt-in, defaults
+to `0.80`, and never auto-confirms missing/low-confidence gaze, stale geometry,
+or an existing pending interaction. The official UI calls only the existing
+Main Tutor path after confirmation. Provider, parse, or grounding-validation
+exhaustion is shown as a retryable error; no deterministic fallback answer is
+presented. `/root/autodl-tmp/project_data/runtime/attentive_slides/logs/main_interactions.jsonl` is
+written at most once per interaction ID and never contains raw media, secrets,
+provider payloads, or hidden reasoning.
+
+Point gaze and calibration are intentionally out of scope. Current production
+targeting is coarse 3×3 viewport gaze plus browser-coordinate AOI/manual-region
+geometry.
 
 ## Automated checks
 
@@ -135,7 +144,23 @@ or call a real STT/LLM API.
   tests.test_live_integrated_turn -v
 ```
 
-## 2026-07-13 acceptance status
+## 2026-07-14 integrated UI acceptance status
+
+The official one-port UI passed browser acceptance with the media switch on:
+the capture iframe reported feeding, ingress reported active video/audio/
+heartbeat freshness, and the periodic UI status updated to
+`Runtime: speech_active · Media: ready`. Manual/Live switching, explicit
+confidence-auto selection with a `0.80` slider, camera/mic OFF cleanup, and the
+diagnostic entrypoint were also verified.
+
+All 446 discovered tests, compileall, the demo tutor loop, and both eight-case
+evaluation programs passed. Reference-resolution metrics and scenario-output
+accuracy were all `1.0`. Real LLM acceptance was not run because no API key was
+configured. Calibrated point gaze and a deliberate real human voice script
+remain manual follow-up checks; synthetic media and integration tests cover the
+same lifecycle contracts without claiming physical-device accuracy.
+
+## 2026-07-13 diagnostic acceptance history
 
 The formal path has passed the one-port technical gate: the real Streamlit UI
 and WebSocket remained connected, the 13,499,116-byte course PDF crossed the

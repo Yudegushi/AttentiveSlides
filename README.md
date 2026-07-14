@@ -80,19 +80,22 @@ python -m unittest discover -s tests -v
 python scripts/demo_tutor_loop.py
 ```
 
-## Continuous Live Release
+## Official Manual + Live UI
 
-The continuous runtime is available through apps/streamlit_live.py. It reuses
-the existing controller, frozen-turn context, confirmation gate, canonical
-tutor pipeline, and JSONL logger. Deterministic tutoring is the default; the
-**Use grounded API tutor** switch lazily enables the existing validated
-grounded pipeline when its environment is configured.
+`apps/streamlit_attentive_slides.py` is the production UI. Manual mode keeps
+the uploaded-deck workflow; Live mode adds browser camera/microphone capture,
+VAD/STT, and coarse 3×3 viewport gaze targeting. The user confirms or corrects
+the proposed target before the same grounded Main Tutor path runs. Optional
+confidence-based auto-confirm must be selected explicitly.
 
-On AutoDL, use the attentive-app interpreter and bind the server to loopback:
+On AutoDL, start the one-port launcher with the attentive-app interpreter:
 
-    /root/miniconda3/envs/attentive-app/bin/python -m streamlit run \
-      apps/streamlit_live.py --server.address 127.0.0.1 --server.port 8501
+    /root/miniconda3/envs/attentive-app/bin/python \
+      scripts/run_live_single_port.py --host 127.0.0.1 --port 8501
     ssh -N -L 8501:127.0.0.1:8501 AutoDL
+
+`apps/streamlit_live.py` remains available only as a runtime diagnostic via
+`--streamlit-app apps/streamlit_live.py`.
 
 For the browser transport fallback and its limitation, see
 [docs/browser_media_runtime.md](docs/browser_media_runtime.md). For live UI
