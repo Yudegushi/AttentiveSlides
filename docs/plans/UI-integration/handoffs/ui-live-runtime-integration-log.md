@@ -17,6 +17,30 @@ Pinned inputs:
 - Lenovo EyeTheia health: `status=ok`, `personalized=true`, `cuda_available=true`, checkpoint `itracker_personalized_63.tar`
 - `baseline suite intentionally skipped per AGENTS.md`
 
+### EyeTheia local gaze execution ledger
+
+| Task | Status | Focused evidence | Commit | Notes |
+|---|---|---|---|---|
+| 1 Browser observations and ingress | complete | 37 passed | `a7b61f8` | Bounded point/geometry state; gaze requires active media session. |
+| 2 Rerun-free geometry | complete | initial group 38/40; smallest affected module 15/15 after test-contract corrections | `2e502e7` | Passive changes use direct HTTP and do not emit component values. |
+| 3 Lenovo-local EyeTheia | complete | 53 passed | `1b21c3f` | One camera; native frames/landmarks remain on Lenovo loopback. |
+| 4 Visible point matching | complete | 11 passed | `10005eb` | Fixed 50×35 CSS-pixel tolerance and newest-layout dwell. |
+| 5 Point-first cloud fallback | complete | 48 passed | `945148b` | Cloud learning state retained; grid fallback unchanged. |
+| 6 Documentation and final unit verification | complete | self-review fix 7/7; full discovery 514/515 with one unrelated starting-HEAD failure | this change | Freshness gate added; no full-suite rerun spent on the pre-existing thumbnail-key inventory mismatch. |
+| 7 User-assisted live acceptance | pending | pending | — | Five physical checks remain user-assisted. |
+
+Automated browser tests not run per AGENTS.md and user instruction. No branch
+was pushed or merged.
+
+The one planned full discovery run executed 515 tests. All EyeTheia integration
+and affected UI/runtime tests passed. The only failure was
+`test_required_static_keys_exist`, which still requires
+`main_thumbnail_window_previous` and `main_thumbnail_window_next`. Starting HEAD
+`608b762` had already removed those two compact-preview buttons without updating
+the inventory test; the EyeTheia branch never changed those keys. Per the plan's
+instruction to fix only failures caused by this change, this unrelated baseline
+mismatch was recorded rather than modified or used to justify another full run.
+
 ## Execution ledger
 
 | Task | Status | Evidence | Commit | Notes |

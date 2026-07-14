@@ -78,9 +78,29 @@ ssh -N -L 8501:127.0.0.1:8501 AutoDL
 ```
 
 Open <http://localhost:8501>. The public aiohttp listener routes `/capture` and
-`/media/*` to the internal ingress and routes the page, upload, assets, health,
+`/attentive-media/*` to the internal ingress and routes the page, upload, assets, health,
 and Streamlit WebSocket to internal Streamlit. The browser never accesses an
 internal port.
+
+## Lenovo EyeTheia start order
+
+EyeTheia is a Lenovo-local dependency, not a second cloud service or forwarded
+port. Start the supported deployment in this order:
+
+1. Start or confirm `eyetheia-personalized.service` on Lenovo. Its health at
+   `http://127.0.0.1:8001/api/health` must report `status=ok`,
+   `personalized=true`, `cuda_available=true`, and checkpoint
+   `itracker_personalized_63.tar`.
+2. Start the existing AttentiveSlides single-port launcher on AutoDL.
+3. Establish the existing local forward to AutoDL port 8501; do not forward
+   EyeTheia.
+4. Open `http://localhost:8501` fullscreen on Lenovo.
+5. Switch to Live and enable camera and microphone.
+
+The capture page loads the user-approved pinned Face Mesh browser bundle from
+jsDelivr. Native frames and 478 landmarks remain on Lenovo loopback. AutoDL
+receives unchanged 320-pixel/5 FPS cloud video, 16 kHz mono audio, point JSON at
+at most 5 Hz, and geometry JSON only for changed layouts.
 
 ## Master and media lifecycle
 
@@ -106,9 +126,10 @@ URLs.
 
 Speak a short deictic request such as “解释一下这里”, then remain quiet so VAD
 can finalize the turn. Empty STT output is recoverable and cannot create a
-proposal. A valid transcript and the current coarse 3×3 gaze cell enter the
-latest-only proposal inbox. The official UI resolves that cell against current
-browser-coordinate AOI geometry, then lets the user confirm, correct, choose
+proposal. Sufficient newest-layout local point dwell resolves directly against
+the visible portion of canonical AOIs. Otherwise the unchanged cloud 3×3 gaze
+cell is resolved against the latest direct browser geometry. Both paths enter
+the same latest-only proposal inbox and let the user confirm, correct, choose
 the whole slide, or draw a manual rectangle.
 
 Each canonical AOI is drawn with a numbered badge. The confirmation selector
@@ -125,15 +146,21 @@ presented. `/root/autodl-tmp/project_data/runtime/attentive_slides/logs/main_int
 written at most once per interaction ID and never contains raw media, secrets,
 provider payloads, or hidden reasoning.
 
-Point gaze and calibration are intentionally out of scope. Current production
-targeting is coarse 3×3 viewport gaze plus browser-coordinate AOI/manual-region
-geometry.
+This integration reuses the existing personalized EyeTheia checkpoint; it does
+not retrain, recalibrate, or claim pixel-level gaze accuracy. Point matching is
+advisory and preserves the existing human confirmation flow. Stopping EyeTheia
+must show `Local gaze: fallback` while camera, microphone, cloud video/audio,
+Streamlit, and cloud grid targeting remain active.
 
 ## Automated checks
 
 Automated media tests use synthetic JPEG/PCM and deterministic fakes. They do
 not request a physical camera/microphone, construct the default sensing model,
 or call a real STT/LLM API.
+
+Automated browser tests and browser smoke tests are intentionally not part of
+this integration's verification budget. One bounded user-assisted live
+acceptance is performed after the unit suite.
 
 ```bash
 /root/miniconda3/envs/attentive-app/bin/python -m unittest \

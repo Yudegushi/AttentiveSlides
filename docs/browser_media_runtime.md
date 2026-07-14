@@ -11,7 +11,7 @@ One public aiohttp listener is the only browser entry point:
 
 ```text
 localhost:8501 over one SSH -L
-├── /capture, /media/*  -> internal aiohttp ingress
+├── /capture, /attentive-media/*  -> internal aiohttp ingress
 └── everything else    -> internal Streamlit HTTP/WebSocket
 ```
 
@@ -76,12 +76,43 @@ in Streamlit 1.59.1. The iframe is outside the 0.5-second periodic fragment, so
 polling cannot recreate browser tracks. Installed Streamlit emits
 `allow="camera; microphone; geolocation"` for the iframe.
 
-Capture automatically attempts `getUserMedia({video: true, audio: true})`.
+Capture automatically makes one camera request with ideal 1280×720 at 30 FPS
+plus audio. The native frame is used only by local Face Mesh/EyeTheia; the
+existing cloud video encoder remains 320 pixels wide, JPEG quality 0.65, and a
+200 ms interval.
 When browser autoplay/user-gesture policy blocks it, exactly one
 **Grant camera/mic** button retries capture; this is permission recovery, not a
 second lifecycle switch. The component sends a one-second heartbeat, registers
 `ended`, `mute`, and `unmute` handlers for both tracks, sends a pagehide beacon,
 closes the `AudioContext`, stops browser tracks, and clears timers on cleanup.
+
+## Lenovo-local EyeTheia point gaze
+
+The browser loads the explicitly approved, pinned MediaPipe Face Mesh bundle
+`@mediapipe/face_mesh@0.4.1633559619`. It reuses the existing preview stream;
+there is no second `getUserMedia` call. Native JPEG frames and exactly one set
+of 478 normalized landmarks are sent only to Lenovo loopback at
+`ws://127.0.0.1:8001/ws/predict_gaze`. They do not enter AutoDL or any
+`/attentive-media/*` request.
+
+EyeTheia screen coordinates are based on the top-level browser viewport. After
+`screen_ack` and `filter_reset`, the capture page uploads only point JSON to
+`/attentive-media/gaze`, latest-only and at most five times per second. The
+slide component independently posts deduplicated viewport/AOI geometry to
+`/attentive-media/geometry` only when the rounded layout signature changes.
+Passive geometry reports do not call `streamlit:setComponentValue`.
+
+The cloud keeps one bounded observation store. It attaches matching geometry
+to received points, resolves visible AOIs using fixed CSS-pixel tolerance, and
+prefers sufficient newest-layout point dwell. Missing, insufficient, stale, or
+revision-mismatched point evidence falls back to the unchanged cloud 3×3 gaze
+aggregation. Confirmation remains human-controlled unless the existing opt-in
+auto-confirm policy passes every deck, slide, layout, and confidence gate.
+
+Local-gaze failures never stop camera, microphone, video, audio, or Streamlit.
+The status changes to `Local gaze: fallback`, and the WebSocket uses one bounded
+reconnect timer. Public HTTPS is outside this phase because an HTTPS page may
+be blocked from connecting to insecure loopback `ws://`.
 
 ## Reproducible launch
 
@@ -90,7 +121,7 @@ With `ATTENTIVE_WHISPER_MODEL` set to a local faster-whisper-small snapshot:
 
 ```bash
 # AutoDL
-cd /root/autodl-tmp/workspace/AttentiveSlides-live-system
+cd /path/to/verified/AttentiveSlides-worktree
 ATTENTIVE_WHISPER_MODEL=/absolute/local/snapshot \
 /root/miniconda3/envs/attentive-app/bin/python \
   scripts/run_live_single_port.py \

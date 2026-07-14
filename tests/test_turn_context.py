@@ -286,6 +286,39 @@ class TurnContextCollectorTest(unittest.TestCase):
         self.assertEqual(fallback.gaze_source, "cloud_grid")
         self.assertEqual(fallback, expected)
 
+    def test_stale_point_evidence_preserves_exact_grid_result(self):
+        clock = FakeClock(10.0)
+        observations = BrowserGazeSource(
+            clock=clock,
+            gaze_stale_after_seconds=0.1,
+        )
+        observations.accept_geometry(geometry_payload())
+        observations.accept_gaze(point_payload(sequence=1, x=200))
+        point_collector = TurnContextCollector(
+            slide_provider=FakeSlideProvider(),
+            snapshot_store=self.store,
+            browser_gaze_source=observations,
+            sensing_lookback_seconds=1.0,
+            aggregation_key="gaze_grid",
+        )
+        context = point_collector.freeze_end(
+            point_collector.freeze_start(slide_id=2, speech_started_at=10.0),
+            speech_ended_at=10.5,
+            current_slide_id=2,
+        )
+        self.snapshot(
+            context,
+            10.0,
+            "temporary-grid-key",
+            confidence=0.9,
+            grid="middle_right",
+        )
+
+        aggregated = point_collector.aggregate(context)
+
+        self.assertEqual(aggregated.gaze_source, "cloud_grid")
+        self.assertEqual(aggregated.frame.gaze_prediction.gaze_grid, "middle_right")
+
 
 if __name__ == "__main__":
     unittest.main()

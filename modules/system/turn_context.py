@@ -120,7 +120,12 @@ class TurnContextCollector:
             and snapshot.manifest_identity == context.manifest_identity
         ]
         matching_snapshots.sort(key=lambda snapshot: snapshot.processed_at)
-        if self.browser_gaze_source is not None:
+        if (
+            self.browser_gaze_source is not None
+            and self.browser_gaze_source.gaze_is_fresh(
+                now=context.speech_ended_at
+            )
+        ):
             frame = self.slide_provider.get_slide_frame(context.slide_id)
             if manifest_identity_for_frame(frame) == context.manifest_identity:
                 point = aggregate_point_gaze(
