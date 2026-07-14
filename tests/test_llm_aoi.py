@@ -67,6 +67,39 @@ def llm_item(text="alpha beta gamma delta", *, aoi_type="text", bbox=None, ancho
     return item
 
 
+def grounding_anchor(
+    anchor_id,
+    text,
+    bbox,
+    *,
+    role="paragraph",
+    block_id=1,
+    starts_bullet=False,
+):
+    return AOI(
+        anchor_id,
+        list(bbox),
+        "text",
+        text,
+        source="pdf_text_semantic",
+        group_confidence=0.9,
+        role=role,
+        children=[{
+            "text": text,
+            "bbox": list(bbox),
+            "source": "pdf_text",
+            "confidence": 1.0,
+            "block_id": block_id,
+            "line_id": 0,
+            "font_size": 10.0,
+            "font_family": "Body",
+            "font_flags": 0,
+            "direction": [1.0, 0.0],
+            "starts_bullet": starts_bullet,
+        }],
+    )
+
+
 class LLMAOIGeneratorValidationTest(unittest.TestCase):
     def test_sanitized_error_never_echoes_arbitrary_exception_text(self):
         sentinel = "SENTINEL_ENDPOINT_TOKEN"
@@ -191,12 +224,17 @@ class LLMAOIManagerTest(unittest.TestCase):
 
     def test_reconciliation_rejects_low_text_coverage_but_accepts_visual_heavy(self):
         manager = self.seeded_manager(FakeLLMGenerator())
-        grounding = [AOI("a", [0.1, 0.1, 0.4, 0.2], "text", "one two three four five six seven eight", source="pdf_text_semantic")]
+        grounding = [
+            grounding_anchor("a", "one two three four", [0.1, 0.1, 0.4, 0.2]),
+            grounding_anchor("b", "five six seven eight nine ten", [0.1, 0.3, 0.4, 0.4], block_id=2),
+        ]
         with self.assertRaisesRegex(ValueError, "coverage"):
-            manager.reconcile_llm_aois([AOI("x", [0.2, 0.2, 0.5, 0.5], "text", "unrelated", source="llm_guided")], grounding)
+            manager.reconcile_llm_aois([
+                AOI("x", [], "text", "model text", source="llm_guided", anchor_ids=["a"])
+            ], grounding, minimum_text_coverage=0.75)
         visual = manager.reconcile_llm_aois(
             [AOI("x", [0.2, 0.2, 0.5, 0.5], "diagram", "flow", source="llm_guided")],
-            [AOI("a", [0.1, 0.1, 0.4, 0.2], "text", "few anchors", source="pdf_text_semantic")],
+            [grounding_anchor("a", "few anchors", [0.1, 0.1, 0.4, 0.2])],
         )
         self.assertEqual(visual[0].type, "diagram")
 
@@ -308,6 +346,119 @@ class LLMAOIManagerTest(unittest.TestCase):
         stale = manager.save_slide_data("deck", SlideAOIData(1, str(self.image_path), "different", changed_aois, "pdf_text", "pdf_text_semantic"))
         self.assertEqual(stale["llm_aoi_status"], "not_requested")
         self.assertEqual(stale["llm_aois"], [])
+
+
+class LLMAOIProvenanceReconciliationTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.manager = AOIManager(self.temporary.name, llm_aoi_generator=FakeLLMGenerator())
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def test_text_bbox_is_union_of_referenced_anchors(self) -> None:
+        grounding = [
+            grounding_anchor("a", "First paragraph", [0.10, 0.20, 0.60, 0.28]),
+            grounding_anchor("b", "Second paragraph", [0.12, 0.30, 0.75, 0.38], block_id=2),
+        ]
+        llm = AOI(
+            "model",
+            [0.0, 0.0, 0.1, 0.1],
+            "text",
+            "invented model formatting",
+            source="llm_guided",
+            anchor_ids=["b", "a", "b"],
+        )
+
+        result = self.manager.reconcile_llm_aois([llm], grounding, minimum_text_coverage=0.0)
+
+        self.assertEqual(result[0].anchor_ids, ["a", "b"])
+        self.assertEqual(result[0].text, "First paragraph Second paragraph")
+        self.assertEqual(result[0].bbox, [0.10, 0.20, 0.75, 0.38])
+
+    def test_unknown_or_excluded_anchor_is_rejected(self) -> None:
+        grounding = [
+            grounding_anchor("content", "Body", [0.10, 0.20, 0.60, 0.28]),
+            grounding_anchor("heading", "Heading", [0.10, 0.10, 0.60, 0.16], role="heading"),
+        ]
+        llm = [
+            AOI("unknown", [], "text", "Unknown", source="llm_guided", anchor_ids=["missing"]),
+            AOI("excluded", [], "text", "Heading", source="llm_guided", anchor_ids=["heading"]),
+            AOI("visual", [0.70, 0.20, 0.90, 0.50], "diagram", "Flow", source="llm_guided"),
+        ]
+
+        result = self.manager.reconcile_llm_aois(llm, grounding, minimum_text_coverage=0.0)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].type, "diagram")
+        self.assertIsNone(result[0].anchor_ids)
+
+    def test_same_anchor_split_outputs_collapse_to_one_aoi(self) -> None:
+        grounding = [grounding_anchor("a", "Canonical paragraph", [0.10, 0.20, 0.70, 0.30])]
+        llm = [
+            AOI("one", [], "text", "First fragment", source="llm_guided", group_confidence=0.9, anchor_ids=["a"]),
+            AOI("two", [], "text", "Second fragment", source="llm_guided", group_confidence=0.7, anchor_ids=["a"]),
+        ]
+
+        result = self.manager.reconcile_llm_aois(llm, grounding)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].anchor_ids, ["a"])
+        self.assertEqual(result[0].text, "Canonical paragraph")
+        self.assertEqual(result[0].bbox, [0.10, 0.20, 0.70, 0.30])
+        self.assertEqual(result[0].group_confidence, 0.7)
+
+    def test_continuous_anchor_outputs_merge(self) -> None:
+        grounding = [
+            grounding_anchor("a", "Paragraph starts", [0.10, 0.20, 0.72, 0.25], block_id=10),
+            grounding_anchor("b", "and continues", [0.12, 0.255, 0.74, 0.305], block_id=11),
+        ]
+        llm = [
+            AOI("one", [], "text", "First", source="llm_guided", group_confidence=0.9, anchor_ids=["a"]),
+            AOI("two", [], "text", "Second", source="llm_guided", group_confidence=0.8, anchor_ids=["b"]),
+        ]
+
+        result = self.manager.reconcile_llm_aois(llm, grounding)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].anchor_ids, ["a", "b"])
+        self.assertEqual(result[0].text, "Paragraph starts and continues")
+        self.assertEqual(result[0].bbox, [0.10, 0.20, 0.74, 0.305])
+        self.assertEqual(result[0].group_confidence, 0.8)
+
+    def test_new_bullet_anchor_outputs_remain_separate(self) -> None:
+        grounding = [
+            grounding_anchor("a", "• First item", [0.10, 0.20, 0.72, 0.25], role="list_item", block_id=10, starts_bullet=True),
+            grounding_anchor("b", "• Second item", [0.10, 0.255, 0.74, 0.305], role="list_item", block_id=11, starts_bullet=True),
+        ]
+        llm = [
+            AOI("one", [], "text", "First", source="llm_guided", anchor_ids=["a"]),
+            AOI("two", [], "text", "Second", source="llm_guided", anchor_ids=["b"]),
+        ]
+
+        result = self.manager.reconcile_llm_aois(llm, grounding)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual([aoi.anchor_ids for aoi in result], [["a"], ["b"]])
+        self.assertEqual([aoi.role for aoi in result], ["list_item", "list_item"])
+
+    def test_visual_aoi_keeps_valid_model_bbox(self) -> None:
+        visual = AOI("visual", [0.55, 0.25, 0.90, 0.70], "figure", "Illustration", source="llm_guided")
+
+        result = self.manager.reconcile_llm_aois([visual], [])
+
+        self.assertEqual(result[0].bbox, [0.55, 0.25, 0.90, 0.70])
+        self.assertEqual(result[0].type, "figure")
+
+    def test_low_grounding_coverage_still_falls_back(self) -> None:
+        grounding = [
+            grounding_anchor("a", "one two three four", [0.10, 0.10, 0.70, 0.20]),
+            grounding_anchor("b", "five six seven eight nine ten", [0.10, 0.40, 0.70, 0.50], block_id=2),
+        ]
+        llm = AOI("partial", [], "text", "Partial", source="llm_guided", anchor_ids=["a"])
+
+        with self.assertRaisesRegex(ValueError, "coverage too low"):
+            self.manager.reconcile_llm_aois([llm], grounding, minimum_text_coverage=0.75)
 
 
 if __name__ == "__main__":

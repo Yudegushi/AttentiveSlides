@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import fitz
 
+from modules.slide.aoi_manager import AUTO_AOI_SCHEMA_VERSION
 from modules.system.uploaded_deck_service import (
     UploadedDeckWorkspace,
 )
@@ -200,6 +201,7 @@ class TestUploadedDeckService(
                 "slide_id": 1,
                 "slide_image_path": "",
                 "ocr_text": "anchors",
+                "auto_aoi_version": AUTO_AOI_SCHEMA_VERSION,
                 "aois": [{"aoi_id": "whole_slide", "bbox": [0, 0, 1, 1], "type": "whole_slide", "source": "rule"}],
             }
             browser = workspace.open_browser(deck_id, use_llm_aoi=True)

@@ -16,7 +16,9 @@ from .aoi_grouping import (
     EXCLUDED_ROLES,
     GroupingResult,
     TextGroup,
+    build_page_layout_profile,
     group_pdf_text,
+    text_groups_are_continuous,
 )
 from .ocr import OCREngine, TextBox, clamp
 from .slide_parser import SlideParser
@@ -24,6 +26,8 @@ from .llm_aoi import LLMAOIGenerator, sanitized_llm_error
 
 
 AUTO_AOI_SCHEMA_VERSION = "pdf-semantic-v2"
+TEXT_AOI_TYPES = frozenset({"title", "text", "caption", "footer", "axis_label"})
+VISUAL_AOI_TYPES = frozenset({"code", "diagram", "figure", "table", "formula", "mixed"})
 
 
 @dataclass
@@ -385,27 +389,32 @@ class AOIManager:
         grounding_aois: list[AOI],
         minimum_text_coverage: float = 0.45,
     ) -> list[AOI]:
-        by_text: dict[str, list[AOI]] = {}
-        for grounding in grounding_aois:
-            normalized = self._normalize_text(grounding.text)
-            if normalized:
-                by_text.setdefault(normalized, []).append(grounding)
-        text_types = {"title", "text", "caption", "footer", "axis_label"}
+        grounding_by_id = {aoi.aoi_id: aoi for aoi in grounding_aois}
+        candidates: list[AOI] = []
         for aoi in llm_aois:
-            matches = by_text.get(self._normalize_text(aoi.text), [])
-            if aoi.type in text_types and len(matches) == 1:
-                aoi.bbox = list(matches[0].bbox)
-        candidates = sorted(
-            (aoi for aoi in llm_aois if self._bbox_area(aoi.bbox) < 0.90),
-            key=lambda aoi: aoi.group_confidence or 0.0,
-            reverse=True,
-        )
+            if aoi.type in TEXT_AOI_TYPES:
+                resolved = self._resolve_text_aoi_anchors(aoi, grounding_by_id)
+                if resolved is not None and self._bbox_area(resolved.bbox) < 0.90:
+                    candidates.append(resolved)
+            elif aoi.type in VISUAL_AOI_TYPES:
+                try:
+                    self._validate_bbox(aoi.bbox)
+                except ValueError:
+                    continue
+                if self._bbox_area(aoi.bbox) < 0.90:
+                    candidates.append(aoi)
+
+        candidates = self._collapse_same_anchor_outputs(candidates, grounding_aois)
+        candidates = self._merge_llm_text_fragments(candidates, grounding_aois)
+        candidates.sort(key=lambda aoi: aoi.group_confidence or 0.0, reverse=True)
         resolved: list[AOI] = []
         for candidate in candidates:
             if not any(self._same_aoi_category(candidate, other) and self._bbox_iou(candidate.bbox, other.bbox) >= 0.85 for other in resolved):
                 resolved.append(candidate)
         resolved.sort(key=lambda aoi: (aoi.bbox[1], aoi.bbox[0]))
-        grounding_tokens = self._learning_tokens(grounding_aois)
+        grounding_tokens = self._learning_tokens([
+            aoi for aoi in grounding_aois if aoi.role not in EXCLUDED_ROLES
+        ])
         if len(grounding_tokens) >= 8:
             coverage = len(grounding_tokens & self._learning_tokens(resolved)) / len(grounding_tokens)
             if coverage < minimum_text_coverage:
@@ -415,6 +424,185 @@ class AOIManager:
         for index, aoi in enumerate(resolved, 1):
             aoi.aoi_id = f"llm_aoi_{index}"
         return resolved
+
+    def _resolve_text_aoi_anchors(
+        self,
+        aoi: AOI,
+        grounding_by_id: dict[str, AOI],
+    ) -> AOI | None:
+        anchor_ids = list(dict.fromkeys(aoi.anchor_ids or []))
+        requested = set(anchor_ids)
+        anchors = [anchor for anchor_id, anchor in grounding_by_id.items() if anchor_id in requested]
+        if len(anchors) != len(anchor_ids) or not anchors:
+            return None
+        if any(anchor.role in EXCLUDED_ROLES for anchor in anchors):
+            return None
+        if any(
+            anchor.source == "pdf_text_semantic" and anchor.role not in CONTENT_ROLES
+            for anchor in anchors
+        ):
+            return None
+        aoi.anchor_ids = [anchor.aoi_id for anchor in anchors]
+        aoi.text = " ".join(anchor.text.strip() for anchor in anchors if anchor.text.strip())
+        aoi.bbox = self._merged_aoi_bbox(anchors)
+        roles = {anchor.role for anchor in anchors if anchor.role}
+        aoi.role = "list_item" if anchors[0].role == "list_item" else (
+            next(iter(roles)) if len(roles) == 1 else "paragraph"
+        )
+        return aoi
+
+    @staticmethod
+    def _merged_aoi_bbox(aois: list[AOI]) -> list[float]:
+        return [
+            min(aoi.bbox[0] for aoi in aois),
+            min(aoi.bbox[1] for aoi in aois),
+            max(aoi.bbox[2] for aoi in aois),
+            max(aoi.bbox[3] for aoi in aois),
+        ]
+
+    def _collapse_same_anchor_outputs(
+        self,
+        aois: list[AOI],
+        grounding_aois: list[AOI],
+    ) -> list[AOI]:
+        grounding_by_id = {aoi.aoi_id: aoi for aoi in grounding_aois}
+        collapsed: list[AOI] = []
+        by_anchor_set: dict[tuple[str, ...], AOI] = {}
+        for aoi in aois:
+            if aoi.type not in TEXT_AOI_TYPES:
+                collapsed.append(aoi)
+                continue
+            key = tuple(aoi.anchor_ids or [])
+            previous = by_anchor_set.get(key)
+            if previous is None:
+                by_anchor_set[key] = aoi
+                collapsed.append(aoi)
+                continue
+            previous.group_confidence = min(
+                previous.group_confidence or 0.7,
+                aoi.group_confidence or 0.7,
+            )
+            anchors = [grounding_by_id[value] for value in key]
+            previous.text = " ".join(anchor.text.strip() for anchor in anchors if anchor.text.strip())
+            previous.bbox = self._merged_aoi_bbox(anchors)
+        return collapsed
+
+    def _merge_llm_text_fragments(
+        self,
+        aois: list[AOI],
+        grounding_aois: list[AOI],
+    ) -> list[AOI]:
+        grounding_order = {
+            aoi.aoi_id: index for index, aoi in enumerate(grounding_aois)
+        }
+        text_candidates = sorted(
+            (aoi for aoi in aois if aoi.type in TEXT_AOI_TYPES),
+            key=lambda aoi: min(grounding_order[value] for value in aoi.anchor_ids or []),
+        )
+        visual_candidates = [aoi for aoi in aois if aoi.type not in TEXT_AOI_TYPES]
+        return self._merge_ordered_text_candidates(
+            text_candidates,
+            grounding_aois,
+            grounding_order,
+        ) + visual_candidates
+
+    def _merge_ordered_text_candidates(
+        self,
+        aois: list[AOI],
+        grounding_aois: list[AOI],
+        grounding_order: dict[str, int],
+    ) -> list[AOI]:
+        grounding_by_id = {aoi.aoi_id: aoi for aoi in grounding_aois}
+        merged: list[AOI] = []
+        for candidate in aois:
+            if not merged or not self._llm_text_candidates_are_continuous(
+                merged[-1],
+                candidate,
+                grounding_by_id,
+                grounding_order,
+            ):
+                merged.append(candidate)
+                continue
+            previous = merged[-1]
+            combined_ids = sorted(
+                set(previous.anchor_ids or []) | set(candidate.anchor_ids or []),
+                key=grounding_order.__getitem__,
+            )
+            anchors = [grounding_by_id[value] for value in combined_ids]
+            previous.anchor_ids = combined_ids
+            previous.text = " ".join(anchor.text.strip() for anchor in anchors if anchor.text.strip())
+            previous.bbox = self._merged_aoi_bbox(anchors)
+            previous.group_confidence = min(
+                previous.group_confidence or 0.7,
+                candidate.group_confidence or 0.7,
+            )
+            roles = {anchor.role for anchor in anchors if anchor.role}
+            previous.role = "list_item" if anchors[0].role == "list_item" else (
+                next(iter(roles)) if len(roles) == 1 else "paragraph"
+            )
+        return merged
+
+    def _llm_text_candidates_are_continuous(
+        self,
+        first: AOI,
+        second: AOI,
+        grounding_by_id: dict[str, AOI],
+        grounding_order: dict[str, int],
+    ) -> bool:
+        first_ids = first.anchor_ids or []
+        second_ids = second.anchor_ids or []
+        if not first_ids or not second_ids or set(first_ids) & set(second_ids):
+            return False
+        first_indices = sorted(grounding_order[value] for value in first_ids)
+        second_indices = sorted(grounding_order[value] for value in second_ids)
+        if first_indices != list(range(first_indices[0], first_indices[-1] + 1)):
+            return False
+        if second_indices != list(range(second_indices[0], second_indices[-1] + 1)):
+            return False
+        if first_indices[-1] + 1 != second_indices[0]:
+            return False
+        first_group = self._text_group_from_anchors(
+            [grounding_by_id[value] for value in first_ids]
+        )
+        second_group = self._text_group_from_anchors(
+            [grounding_by_id[value] for value in second_ids]
+        )
+        if first_group is None or second_group is None:
+            return False
+        profile = build_page_layout_profile(
+            first_group.lines + second_group.lines,
+            frozenset(),
+            frozenset(),
+        )
+        return text_groups_are_continuous(first_group, second_group, profile)
+
+    @staticmethod
+    def _text_group_from_anchors(anchors: list[AOI]) -> TextGroup | None:
+        lines: list[TextBox] = []
+        for anchor in anchors:
+            if anchor.role in EXCLUDED_ROLES or not anchor.children:
+                return None
+            for child in anchor.children:
+                bbox = child.get("bbox")
+                if not isinstance(bbox, list) or len(bbox) != 4:
+                    return None
+                direction = child.get("direction")
+                lines.append(TextBox(
+                    text=str(child.get("text", "")),
+                    bbox=[float(value) for value in bbox],
+                    confidence=float(child.get("confidence", 1.0)),
+                    source=str(child.get("source", anchor.source)),
+                    block_id=child.get("block_id"),
+                    line_id=child.get("line_id"),
+                    block_bbox=child.get("block_bbox"),
+                    font_size=child.get("font_size"),
+                    font_family=child.get("font_family"),
+                    font_flags=child.get("font_flags"),
+                    direction=tuple(float(value) for value in direction) if direction is not None else None,
+                    starts_bullet=bool(child.get("starts_bullet", False)),
+                ))
+        role = anchors[0].role or "paragraph"
+        return TextGroup(role=role, lines=lines) if lines else None
 
     @classmethod
     def _learning_tokens(cls, aois: list[AOI]) -> set[str]:

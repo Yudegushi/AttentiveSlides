@@ -7,6 +7,7 @@ from unittest.mock import patch
 import fitz
 
 from modules.common.schemas import GazePrediction, LearningState, Transcript
+from modules.slide.aoi_manager import AUTO_AOI_SCHEMA_VERSION
 from modules.system.adapters import (
     ProviderBackedDeckStore,
     SensingFrame,
@@ -75,8 +76,9 @@ class RealSlideProviderTest(unittest.TestCase):
             payload = {
                 "slide_image_path": str(root / "slide.png"),
                 "ocr_text": "deterministic",
+                "auto_aoi_version": AUTO_AOI_SCHEMA_VERSION,
                 "aois": [
-                    {"aoi_id": "det", "bbox": [0.1, 0.1, 0.4, 0.3], "type": "text", "text": "deterministic", "source": "pdf_text_semantic"},
+                    {"aoi_id": "det", "bbox": [0.1, 0.1, 0.4, 0.3], "type": "text", "role": "paragraph", "text": "deterministic", "source": "pdf_text_semantic"},
                     {"aoi_id": "whole_slide", "bbox": [0, 0, 1, 1], "type": "whole_slide", "source": "rule"},
                 ],
                 "llm_aois": [
