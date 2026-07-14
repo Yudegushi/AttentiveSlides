@@ -17,23 +17,23 @@ This ledger accompanies `docs/plans/UI-integration/2026-07-14-llm-aoi-slide-medi
 | 1. Media routing | Complete | 23/23 focused tests pass | `HEAD` (`fix: restore Streamlit media routing`) | Checkpoint 2 unblocked |
 | 2. Slide width | Complete | 54/54 focused tests pass | `HEAD` (`feat: add adjustable slide width`) | Checkpoint 3 unblocked |
 | 3. Current-page LLM AOI | Complete | 60/60 focused + 22/22 review-fix tests pass | `HEAD` (`fix: harden LLM AOI activation boundaries`) | Checkpoint 4 unblocked |
-| 4. Deck batch/final acceptance | Not started | — | — | Ready after Checkpoint 3 gate |
+| 4. Deck batch/final acceptance | Code/focused complete | 32/32 focused tests pass | Pending | Final full suite and browser smoke pending |
 
 ## Verification Budget
 
 - [x] Checkpoint 1 focused group run once after implementation
 - [x] Checkpoint 2 focused group run once after implementation
 - [x] Checkpoint 3 focused group run once after implementation
-- [ ] Checkpoint 4 focused group run once after implementation
+- [x] Checkpoint 4 focused group run once after implementation
 - [ ] Final full suite run once after all checkpoints
 - [ ] Final browser smoke session run once
 - [ ] Real LLM calls did not exceed one text-heavy plus one visual-heavy page
 
 ## Current Resume Point
 
-- Next unchecked step: `4.1`
+- Next unchecked step: `4.6`
 - Last known blocker: none
-- Uncommitted in-scope files: none at plan creation
+- Uncommitted in-scope files: Checkpoint 4 code, tests, and this ledger pending commit
 - Out-of-scope/user-owned changes observed: none recorded
 
 ## Execution Notes
@@ -95,3 +95,9 @@ Changed: `modules/slide/aoi_manager.py`, `modules/system/real_slide_provider.py`
 Verified: targeted expected red ran 22 tests with exactly 3 failures; targeted green ran 22 tests with 0 failures/errors; no browser, full suite, or network call
 Decision/blocker: provider activation now reuses complete manager eligibility; worker exceptions cross the workspace boundary only as a fixed non-sensitive message; model anchors are projected to flat stable fields without `children`; no blocker
 Next: Step 4.1
+
+2026-07-14 20:40 CST — Checkpoint 4 / Steps 4.1–4.5
+Changed: `modules/slide/aoi_manager.py`, `modules/system/uploaded_deck_service.py`, `apps/streamlit_attentive_slides.py`, `tests/test_uploaded_deck_service.py`, `tests/test_main_ui_widget_inventory.py`, `tests/test_streamlit_attentive_slides.py`, `docs/plans/UI-integration/handoffs/llm-aoi-slide-media-log.md`
+Verified: `/root/miniconda3/envs/attentive-app/bin/python -m unittest tests.test_uploaded_deck_service tests.test_main_ui_widget_inventory tests.test_streamlit_attentive_slides -v`; expected red ran 32 tests with 25 passed, 1 failure, and 6 errors, all for missing Checkpoint 4 contracts; focused green ran 32 tests with 0 failures/errors in 0.987s
+Decision/blocker: batch processing is ascending and synchronous, skips profile-eligible pages, continues with fixed non-sensitive `fallback_used` results after per-page exceptions, invokes the callback once per completed page without swallowing callback exceptions, and persists the exact UI summary across one rerun; no real LLM, full suite, or browser smoke was run
+Next: Step 4.6 final full suite, then Step 4.7 browser smoke (both pending controller review)

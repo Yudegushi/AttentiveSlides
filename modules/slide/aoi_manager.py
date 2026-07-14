@@ -563,8 +563,19 @@ class AOIManager:
                 return current
 
     def get_llm_aoi_state(self, deck_id: str, slide_id: int) -> dict[str, Any]:
-        slide_data = self._ensure_slide_data(deck_id, slide_id)
         configured = bool(self.llm_aoi_generator.is_configured())
+        slide_data = self.manifest.get(self._slide_key(deck_id, slide_id))
+        if slide_data is None:
+            return {
+                "configured": configured,
+                "status": "not_requested",
+                "model": None,
+                "profile": None,
+                "expected_profile": None,
+                "eligible": False,
+                "aoi_count": 0,
+                "error": None,
+            }
         digest = self._anchor_digest(slide_data)
         expected_profile = self.llm_aoi_generator.profile(digest) if configured else None
         stored_profile = slide_data.get("llm_aoi_profile")

@@ -287,6 +287,11 @@ def main() -> None:
 
     _ensure_deck_state(browser)
 
+    _render_llm_aoi_deck_batch(
+        browser,
+        workspace,
+    )
+
     try:
         with st.spinner(
             "Preparing the current slide..."
@@ -391,6 +396,7 @@ def _initialize_global_state() -> None:
         "main_active_aoi_signature": None,
         "main_llm_aoi_message": None,
         "main_llm_aoi_error": None,
+        "main_llm_aoi_deck_summary": None,
         "main_show_aoi_overlay": True,
         "main_canvas_revision": 0,
         "main_slide_width_percent": 100,
@@ -919,6 +925,62 @@ def _on_llm_aoi_mode_change() -> None:
     st.session_state["main_active_aoi_signature"] = None
     st.session_state["main_llm_aoi_message"] = None
     st.session_state["main_llm_aoi_error"] = None
+
+
+def _render_llm_aoi_deck_batch(
+    browser: Any,
+    workspace: UploadedDeckWorkspace,
+) -> None:
+    if not st.session_state.get("main_uploaded_deck_id"):
+        return
+
+    previous_summary = st.session_state.get("main_llm_aoi_deck_summary")
+    if previous_summary:
+        st.sidebar.success(previous_summary)
+
+    st.sidebar.caption(
+        f"{browser.page_count} pages will be processed sequentially; "
+        "cached successful pages are skipped."
+    )
+    batch_clicked = st.sidebar.button(
+        "Process entire deck with LLM",
+        key="main_process_deck_llm_aoi",
+        width="stretch",
+        disabled=not st.session_state.get("main_llm_aoi_enabled"),
+    )
+    if not batch_clicked:
+        return
+
+    st.session_state["main_llm_aoi_deck_summary"] = None
+    progress = st.sidebar.progress(0.0)
+    status = st.sidebar.empty()
+
+    def update_progress(
+        completed: int,
+        total: int,
+        result: dict[str, Any],
+    ) -> None:
+        progress.progress(completed / total)
+        status.caption(
+            f"{completed} of {total} pages processed; "
+            f"slide {result['slide_id']}: {result['status']}."
+        )
+
+    summary = workspace.prepare_llm_deck(
+        browser.deck_id,
+        progress_callback=update_progress,
+    )
+    summary_message = (
+        "LLM AOI deck processing finished: "
+        f"{summary['successful']} successful, "
+        f"{summary['fallback']} fallback, "
+        f"{summary['skipped']} skipped."
+    )
+    st.session_state["main_llm_aoi_deck_summary"] = summary_message
+    st.sidebar.success(summary_message)
+    _reset_turn_state()
+    st.session_state["main_active_aoi_signature"] = None
+    st.rerun()
 
 
 def _sync_active_aoi_signature(view: MainUIViewModel) -> None:

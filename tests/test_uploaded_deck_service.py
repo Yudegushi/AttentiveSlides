@@ -225,6 +225,186 @@ class TestUploadedDeckService(
             self.assertEqual(message, "Unable to prepare LLM AOIs for this slide.")
             self.assertNotIn("SECRET_ENDPOINT_TOKEN", message)
 
+    def test_missing_llm_state_read_is_stable_and_side_effect_free(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = UploadedDeckWorkspace(directory)
+            manager = workspace.aoi_manager
+
+            with patch.object(
+                manager.llm_aoi_generator,
+                "is_configured",
+                return_value=True,
+            ), patch.object(manager, "process_slide") as process_slide, patch.object(
+                manager,
+                "_save_manifest",
+            ) as save_manifest:
+                state = manager.get_llm_aoi_state("missing-deck", 4)
+
+            process_slide.assert_not_called()
+            save_manifest.assert_not_called()
+            self.assertNotIn("missing-deck:4", manager.manifest)
+            self.assertEqual(
+                state,
+                {
+                    "configured": True,
+                    "status": "not_requested",
+                    "model": None,
+                    "profile": None,
+                    "expected_profile": None,
+                    "eligible": False,
+                    "aoi_count": 0,
+                    "error": None,
+                },
+            )
+
+    def test_llm_deck_batch_is_sequential_skips_success_and_continues_fallback(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = UploadedDeckWorkspace(directory)
+            state_reads = []
+            processed = []
+            events = []
+
+            states = {
+                1: {"eligible": True, "status": "used"},
+                2: {"eligible": False, "status": "not_requested"},
+                3: {"eligible": False, "status": "not_requested"},
+            }
+
+            def read_state(deck_id, slide_id):
+                self.assertEqual(deck_id, "deck")
+                state_reads.append(slide_id)
+                return states[slide_id]
+
+            def prepare(deck_id, slide_id, *, force):
+                self.assertEqual(deck_id, "deck")
+                processed.append((slide_id, force))
+                return {
+                    "eligible": slide_id == 3,
+                    "status": "used" if slide_id == 3 else "fallback_used",
+                }
+
+            with patch.object(
+                workspace.slide_parser,
+                "get_page_count",
+                return_value=3,
+            ), patch.object(
+                workspace,
+                "get_llm_aoi_state",
+                side_effect=read_state,
+            ), patch.object(
+                workspace,
+                "prepare_llm_aoi",
+                side_effect=prepare,
+            ):
+                summary = workspace.prepare_llm_deck(
+                    "deck",
+                    progress_callback=lambda completed, total, result: events.append(
+                        (completed, total, result["slide_id"], result["status"])
+                    ),
+                )
+
+            self.assertEqual(state_reads, [1, 2, 3])
+            self.assertEqual(processed, [(2, True), (3, True)])
+            self.assertEqual(
+                events,
+                [
+                    (1, 3, 1, "skipped"),
+                    (2, 3, 2, "fallback_used"),
+                    (3, 3, 3, "used"),
+                ],
+            )
+            self.assertEqual(
+                summary,
+                {"successful": 1, "fallback": 1, "skipped": 1, "total": 3},
+            )
+
+    def test_llm_deck_batch_sanitizes_page_exceptions_and_continues(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = UploadedDeckWorkspace(directory)
+            prepared = []
+            events = []
+
+            def read_state(_deck_id, slide_id):
+                if slide_id == 1:
+                    raise RuntimeError("state SECRET_STATE_TOKEN")
+                return {"eligible": slide_id == 4, "status": "used"}
+
+            def prepare(_deck_id, slide_id, *, force):
+                prepared.append((slide_id, force))
+                if slide_id == 2:
+                    raise RuntimeError("worker SECRET_WORKER_TOKEN")
+                return {"eligible": True, "status": "used"}
+
+            with patch.object(
+                workspace.slide_parser,
+                "get_page_count",
+                return_value=4,
+            ), patch.object(
+                workspace,
+                "get_llm_aoi_state",
+                side_effect=read_state,
+            ), patch.object(
+                workspace,
+                "prepare_llm_aoi",
+                side_effect=prepare,
+            ):
+                summary = workspace.prepare_llm_deck(
+                    "deck",
+                    progress_callback=lambda completed, total, result: events.append(
+                        (completed, total, dict(result))
+                    ),
+                )
+
+            self.assertEqual(prepared, [(2, True), (3, True)])
+            self.assertEqual(
+                summary,
+                {"successful": 1, "fallback": 2, "skipped": 1, "total": 4},
+            )
+            self.assertEqual(
+                [(completed, total) for completed, total, _result in events],
+                [(1, 4), (2, 4), (3, 4), (4, 4)],
+            )
+            self.assertEqual(
+                [result["status"] for _completed, _total, result in events],
+                ["fallback_used", "fallback_used", "used", "skipped"],
+            )
+            for _completed, _total, result in events[:2]:
+                self.assertEqual(result["eligible"], False)
+                self.assertEqual(
+                    result["error"],
+                    "Unable to prepare LLM AOIs for this slide.",
+                )
+                self.assertNotIn("SECRET", str(result))
+
+    def test_llm_deck_batch_does_not_swallow_progress_callback_exception(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = UploadedDeckWorkspace(directory)
+            callback_error = RuntimeError("callback failed")
+
+            with patch.object(
+                workspace.slide_parser,
+                "get_page_count",
+                return_value=2,
+            ), patch.object(
+                workspace,
+                "get_llm_aoi_state",
+                return_value={"eligible": True, "status": "used"},
+            ) as state_read:
+                with self.assertRaises(RuntimeError) as raised:
+                    workspace.prepare_llm_deck(
+                        "deck",
+                        progress_callback=lambda *_args: (_ for _ in ()).throw(
+                            callback_error
+                        ),
+                    )
+
+            self.assertIs(raised.exception, callback_error)
+            self.assertEqual(state_read.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
