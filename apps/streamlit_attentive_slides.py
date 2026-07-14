@@ -1356,76 +1356,89 @@ def _render_slide_selector(
             "main_active_slide_id"
         ] = active_slide_id
 
-    _, trigger_column = st.columns(
-        [0.88, 0.12],
-        gap="small",
+    st.markdown(
+        """
+        <style>
+        .st-key-main_slides_popover {
+            position: fixed;
+            top: 3.5rem;
+            right: 0.75rem;
+            width: auto;
+            z-index: 999998;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
-    with trigger_column:
-        with st.popover("Slides"):
-            st.caption(
-                f"{len(slide_ids)} slides"
-            )
-            with st.container(
-                height=560,
-                border=False,
-            ):
-                for slide_id in slide_ids:
-                    with st.container(
-                        border=True
+    with st.popover(
+        "Slides",
+        key="main_slides_popover",
+        width="content",
+    ):
+        st.caption(
+            f"{len(slide_ids)} slides"
+        )
+        with st.container(
+            height=720,
+            border=False,
+        ):
+            for slide_id in slide_ids:
+                with st.container(
+                    border=True
+                ):
+                    try:
+                        preview_slide = (
+                            browser.get_slide(
+                                slide_id
+                            )
+                        )
+                    except Exception:
+                        preview_slide = None
+
+                    if (
+                        preview_slide is not None
+                        and preview_slide.image_available
+                        and preview_slide.image_path
                     ):
-                        try:
-                            preview_slide = (
-                                browser.get_slide(
-                                    slide_id
-                                )
-                            )
-                        except Exception:
-                            preview_slide = None
-
-                        if (
-                            preview_slide is not None
-                            and preview_slide.image_available
-                            and preview_slide.image_path
-                        ):
-                            preview_path = Path(
-                                preview_slide.image_path
-                            )
-                            st.image(
-                                _thumbnail_png_bytes(
-                                    str(preview_path),
-                                    preview_path.stat().st_mtime_ns,
-                                ),
-                                width="stretch",
-                            )
-                        else:
-                            st.markdown(
-                                "<div style='height:4.8rem;display:flex;"
-                                "align-items:center;justify-content:center;"
-                                "border:1px dashed rgba(128,128,128,.35);"
-                                "border-radius:.35rem;'>Preview</div>",
-                                unsafe_allow_html=True,
-                            )
-
-                        st.button(
-                            f"Slide {slide_id}",
-                            key=(
-                                "main_slide_preview_"
-                                f"{slide_id}"
-                            ),
-                            type=(
-                                "primary"
-                                if slide_id
-                                == active_slide_id
-                                else "secondary"
+                        preview_path = Path(
+                            preview_slide.image_path
+                        )
+                        st.image(
+                            _thumbnail_png_bytes(
+                                str(preview_path),
+                                preview_path.stat().st_mtime_ns,
                             ),
                             width="stretch",
-                            on_click=_navigate_to_slide,
-                            args=(slide_id,),
-                            help=(
-                                "Open slide "
-                                f"{slide_id}"
-                            ),
                         )
+                    else:
+                        st.markdown(
+                            "<div style='height:4.8rem;display:flex;"
+                            "align-items:center;justify-content:center;"
+                            "border:1px dashed rgba(128,128,128,.35);"
+                            "border-radius:.35rem;'>Preview</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    st.button(
+                        f"Slide {slide_id}",
+                        key=(
+                            "main_slide_preview_"
+                            f"{slide_id}"
+                        ),
+                        type=(
+                            "primary"
+                            if slide_id
+                            == active_slide_id
+                            else "secondary"
+                        ),
+                        width="stretch",
+                        on_click=_navigate_to_slide,
+                        args=(slide_id,),
+                        help=(
+                            "Open slide "
+                            f"{slide_id}"
+                        ),
+                    )
 
 
 
