@@ -9,6 +9,14 @@ Pinned inputs:
 - Frontend: `3af3c527b1de4b7cf3abe9d72c32eac6f0a39745`
 - Live backend: `e3f193928a2601422d5face51572eeca6ee08cb1`
 
+## EyeTheia local gaze integration preflight
+
+- Implementation worktree: `/root/autodl-tmp/workspace/AttentiveSlides-eyetheia-local-gaze-integration`
+- Branch: `codex/eyetheia-local-gaze-integration`
+- Starting code HEAD: `608b762de7409dbb0788b15b7eb08cec0d4b56ae` (descendant of required `acbc4a0`)
+- Lenovo EyeTheia health: `status=ok`, `personalized=true`, `cuda_available=true`, checkpoint `itracker_personalized_63.tar`
+- `baseline suite intentionally skipped per AGENTS.md`
+
 ## Execution ledger
 
 | Task | Status | Evidence | Commit | Notes |

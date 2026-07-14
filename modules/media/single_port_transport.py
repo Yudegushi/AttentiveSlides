@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 import math
@@ -14,6 +15,11 @@ import cv2
 import numpy as np
 from aiohttp import web
 
+from .browser_gaze_source import (
+    BrowserGazeSource,
+    BrowserGeometrySnapshot,
+    BrowserPointGazeSample,
+)
 from .browser_media_source import BrowserMediaSource
 
 
@@ -58,6 +64,7 @@ class FallbackMediaIngress:
         self,
         source: BrowserMediaSource,
         *,
+        observations: BrowserGazeSource | None = None,
         clock: Callable[[], float] = time.monotonic,
         inactive_after_seconds: float = 2.0,
         media_stale_after_seconds: float = 2.0,
@@ -74,6 +81,7 @@ class FallbackMediaIngress:
         if max_video_bytes <= 0 or max_audio_bytes <= 0:
             raise ValueError("media byte limits must be positive")
         self.source = source
+        self.observations = observations or BrowserGazeSource(clock=clock)
         self._clock = clock
         self.inactive_after_seconds = float(inactive_after_seconds)
         self.media_stale_after_seconds = float(media_stale_after_seconds)
@@ -111,6 +119,7 @@ class FallbackMediaIngress:
                 raise InactiveMediaSession("browser media ingress is not armed")
             if session_id in {self._active_session_id, self._pending_session_id}:
                 return
+            self.observations.clear_gaze()
             replacing_session = self._active_session_id is not None or self._pending_session_id is not None
             if replacing_session:
                 self.source.stop(reason="browser session replaced")
@@ -247,6 +256,21 @@ class FallbackMediaIngress:
             self._last_audio_received_at = self._clock()
             return accepted
 
+    def accept_geometry_json(
+        self,
+        payload: Mapping[str, object],
+    ) -> BrowserGeometrySnapshot:
+        return self.observations.accept_geometry(payload)
+
+    def accept_gaze_json(
+        self,
+        session_id: str,
+        payload: Mapping[str, object],
+    ) -> BrowserPointGazeSample:
+        with self._lock:
+            self._require_active_session(session_id)
+        return self.observations.accept_gaze(payload)
+
     def session_snapshot(self) -> MediaIngressSessionSnapshot:
         with self._lock:
             now = self._clock()
@@ -269,6 +293,7 @@ class FallbackMediaIngress:
     def stats_payload(self) -> dict[str, object]:
         stats = self.source.stats()
         session = self.session_snapshot()
+        observation_stats = self.observations.stats()
         return {
             "transport": "single-port-http",
             "active_session": session.active,
@@ -289,6 +314,14 @@ class FallbackMediaIngress:
             "audio_overruns": stats.audio_overruns,
             "is_running": stats.is_running,
             "cleanup_state": stats.cleanup_state,
+            "gaze_fresh": self.observations.gaze_is_fresh(),
+            "gaze_samples": observation_stats.gaze_samples,
+            "gaze_rejections": observation_stats.gaze_rejections,
+            "last_gaze_received_at": observation_stats.last_gaze_received_at,
+            "geometry_slide_id": observation_stats.geometry_slide_id,
+            "geometry_layout_revision": (
+                observation_stats.geometry_layout_revision
+            ),
         }
 
     def _decode_video(self, payload: bytes) -> np.ndarray:
@@ -314,6 +347,7 @@ class FallbackMediaIngress:
 
     def _clear_sessions(self, *, reason: str) -> None:
         self.source.stop(reason=reason)
+        self.observations.clear_gaze()
         self._active_session_id = None
         self._active_generation = None
         self._pending_session_id = None
@@ -648,6 +682,23 @@ def build_fallback_app(
             _raise_http_error(exc)
         return web.json_response(ingress.stats_payload())
 
+    async def geometry(request: web.Request) -> web.Response:
+        try:
+            ingress.accept_geometry_json(await _json_object(request))
+        except ValueError as exc:
+            _raise_http_error(exc)
+        return web.json_response(ingress.stats_payload())
+
+    async def gaze(request: web.Request) -> web.Response:
+        try:
+            ingress.accept_gaze_json(
+                _session_id(request),
+                await _json_object(request),
+            )
+        except ValueError as exc:
+            _raise_http_error(exc)
+        return web.json_response(ingress.stats_payload())
+
     async def heartbeat(request: web.Request) -> web.Response:
         try:
             ingress.heartbeat(_session_id(request))
@@ -671,6 +722,8 @@ def build_fallback_app(
     app.router.add_post("/attentive-media/start", start)
     app.router.add_post("/attentive-media/video", video)
     app.router.add_post("/attentive-media/audio", audio)
+    app.router.add_post("/attentive-media/geometry", geometry)
+    app.router.add_post("/attentive-media/gaze", gaze)
     app.router.add_post("/attentive-media/heartbeat", heartbeat)
     app.router.add_post("/attentive-media/stop", stop)
     app.router.add_get("/attentive-media/stats", stats)
@@ -702,6 +755,16 @@ def _session_id(request: web.Request) -> str:
     return request.headers.get(SESSION_HEADER) or request.query.get("session") or ""
 
 
+async def _json_object(request: web.Request) -> Mapping[str, object]:
+    try:
+        payload = await request.json()
+    except (TypeError, ValueError) as exc:
+        raise MediaIngressError("request body must be valid JSON") from exc
+    if not isinstance(payload, Mapping):
+        raise MediaIngressError("request JSON must be an object")
+    return payload
+
+
 def _header_float(request: web.Request, name: str) -> float:
     value = request.headers.get(name)
     if value is None:
@@ -722,7 +785,7 @@ def _header_int(request: web.Request, name: str) -> int:
         raise MediaIngressError(f"{name} must be an integer") from exc
 
 
-def _raise_http_error(error: MediaIngressError) -> None:
+def _raise_http_error(error: ValueError) -> None:
     if isinstance(error, InactiveMediaSession):
         raise web.HTTPConflict(text=str(error))
     if isinstance(error, MediaPayloadTooLarge):

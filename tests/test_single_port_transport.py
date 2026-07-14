@@ -12,6 +12,7 @@ from modules.media.single_port_transport import (
     FallbackMediaIngress,
     InactiveMediaSession,
     MediaPayloadTooLarge,
+    SESSION_HEADER,
     build_fallback_app,
     fallback_page_html,
 )
@@ -29,6 +30,34 @@ def jpeg_payload() -> bytes:
     output = BytesIO()
     Image.new("RGB", (4, 2), color=(255, 0, 0)).save(output, format="JPEG")
     return output.getvalue()
+
+
+def geometry_payload():
+    return {
+        "deck_id": "deck-a",
+        "slide_id": 2,
+        "layout_revision": 7,
+        "browser_timestamp_ms": 1000.0,
+        "viewport_width": 1440,
+        "viewport_height": 900,
+        "device_pixel_ratio": 2,
+        "slide_rect": {"x1": 100, "y1": 20, "x2": 1100, "y2": 780},
+        "aoi_rects": {},
+    }
+
+
+def gaze_payload():
+    return {
+        "sequence": 3,
+        "browser_timestamp_ms": 1200.0,
+        "x_css": 320.0,
+        "y_css": 240.0,
+        "viewport_width": 1440,
+        "viewport_height": 900,
+        "valid": True,
+        "face_detected": True,
+        "source": "eyetheia_local",
+    }
 
 
 class SinglePortTransportTest(unittest.TestCase):
@@ -117,6 +146,8 @@ class SinglePortTransportTest(unittest.TestCase):
             "/attentive-media/start",
             "/attentive-media/video",
             "/attentive-media/audio",
+            "/attentive-media/geometry",
+            "/attentive-media/gaze",
             "/attentive-media/heartbeat",
             "/attentive-media/stop",
             "/attentive-media/stats",
@@ -132,6 +163,89 @@ class SinglePortTransportTest(unittest.TestCase):
         self.assertIn('fetch("/attentive-media/audio"', page)
         self.assertNotIn("http://", page)
         self.assertNotIn("https://", page)
+
+    def test_stop_clears_gaze_but_preserves_geometry_and_media_cleanup(self):
+        self.ingress.accept_geometry_json(geometry_payload())
+        self.ingress.start("session-a")
+        self.ingress.accept_gaze_json("session-a", gaze_payload())
+        self.ingress.accept_video_jpeg(
+            "session-a", jpeg_payload(), timestamp=1.0
+        )
+
+        self.ingress.stop("session-a")
+
+        self.assertEqual(self.ingress.observations.stats().gaze_samples, 0)
+        self.assertIsNotNone(
+            self.ingress.observations.latest_geometry_for("deck-a", 2)
+        )
+        self.assertFalse(self.source.is_running)
+        self.assertTrue(self.source.video_queue.empty())
+
+    def test_stats_include_browser_observation_fields(self):
+        self.ingress.accept_geometry_json(geometry_payload())
+        self.ingress.start("session-a")
+        self.ingress.accept_gaze_json("session-a", gaze_payload())
+
+        stats = self.ingress.stats_payload()
+
+        self.assertTrue(stats["gaze_fresh"])
+        self.assertEqual(stats["gaze_samples"], 1)
+        self.assertEqual(stats["gaze_rejections"], 0)
+        self.assertEqual(stats["geometry_slide_id"], 2)
+        self.assertEqual(stats["geometry_layout_revision"], 7)
+
+
+class BrowserObservationRouteTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.clock = FakeClock()
+        self.source = BrowserMediaSource(clock=self.clock)
+        self.ingress = FallbackMediaIngress(self.source, clock=self.clock)
+        self.client = TestClient(TestServer(build_fallback_app(self.ingress)))
+        await self.client.start_server()
+        self.addAsyncCleanup(self.client.close)
+
+    async def test_geometry_succeeds_before_media_activation(self):
+        response = await self.client.post(
+            "/attentive-media/geometry",
+            json=geometry_payload(),
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["geometry_slide_id"], 2)
+
+    async def test_gaze_requires_the_active_media_session(self):
+        self.ingress.start("session-a")
+
+        valid = await self.client.post(
+            "/attentive-media/gaze",
+            json=gaze_payload(),
+            headers={SESSION_HEADER: "session-a"},
+        )
+        stale = await self.client.post(
+            "/attentive-media/gaze",
+            json=gaze_payload(),
+            headers={SESSION_HEADER: "session-old"},
+        )
+
+        self.assertEqual(valid.status, 200)
+        self.assertEqual(stale.status, 409)
+
+    async def test_invalid_observation_fields_return_400(self):
+        invalid_geometry = await self.client.post(
+            "/attentive-media/geometry",
+            json={"deck_id": "deck-a"},
+        )
+        self.ingress.start("session-a")
+        invalid_gaze = gaze_payload()
+        invalid_gaze["source"] = "cloud"
+        gaze_response = await self.client.post(
+            "/attentive-media/gaze",
+            json=invalid_gaze,
+            headers={SESSION_HEADER: "session-a"},
+        )
+
+        self.assertEqual(invalid_geometry.status, 400)
+        self.assertEqual(gaze_response.status, 400)
 
 
 class SinglePortHealthRouteTest(unittest.IsolatedAsyncioTestCase):

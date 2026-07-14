@@ -55,6 +55,20 @@ def pcm_payload() -> bytes:
     return np.array([1, -2, 3, -4], dtype="<i2").tobytes()
 
 
+def gaze_payload() -> dict[str, object]:
+    return {
+        "sequence": 1,
+        "browser_timestamp_ms": 1000.0,
+        "x_css": 200.0,
+        "y_css": 100.0,
+        "viewport_width": 1440.0,
+        "viewport_height": 900.0,
+        "valid": True,
+        "face_detected": True,
+        "source": "eyetheia_local",
+    }
+
+
 class LiveIngressServiceTest(unittest.TestCase):
     def setUp(self):
         from modules.media.live_ingress_service import LiveIngressService
@@ -124,6 +138,17 @@ class LiveIngressServiceTest(unittest.TestCase):
         )
         self.service.reconcile_once()
         self.assertEqual(self.runtime.start_count, 1)
+
+    def test_gaze_does_not_start_runtime_without_video_and_audio(self):
+        self.service.set_master_enabled(True)
+        self.ingress.start("session-a")
+        self.service.reconcile_once()
+
+        self.ingress.accept_gaze_json("session-a", gaze_payload())
+        self.service.reconcile_once()
+
+        self.assertEqual(self.runtime.start_count, 0)
+        self.assertEqual(self.ingress.observations.stats().gaze_samples, 1)
 
     def test_audio_only_does_not_start_controller(self):
         self.service.set_master_enabled(True)
