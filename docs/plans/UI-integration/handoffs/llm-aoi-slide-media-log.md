@@ -17,7 +17,7 @@ This ledger accompanies `docs/plans/UI-integration/2026-07-14-llm-aoi-slide-medi
 | 1. Media routing | Complete | 23/23 focused tests pass | `HEAD` (`fix: restore Streamlit media routing`) | Checkpoint 2 unblocked |
 | 2. Slide width | Complete | 54/54 focused tests pass | `HEAD` (`feat: add adjustable slide width`) | Checkpoint 3 unblocked |
 | 3. Current-page LLM AOI | Complete | 60/60 focused + 22/22 review-fix tests pass | `HEAD` (`fix: harden LLM AOI activation boundaries`) | Checkpoint 4 unblocked |
-| 4. Deck batch/final acceptance | Complete | 32/32 focused tests; 477/477 full suite; browser smoke passed | `16a443c` (`feat: add sequential deck LLM AOI processing`) | Final independent review pending |
+| 4. Deck batch/final acceptance | Complete | 32/32 focused; browser smoke; final post-review suite 479/479 | `16a443c`, hardened by `d2e4d76` | Independent review approved |
 
 ## Verification Budget
 
@@ -31,9 +31,9 @@ This ledger accompanies `docs/plans/UI-integration/2026-07-14-llm-aoi-slide-medi
 
 ## Current Resume Point
 
-- Next unchecked step: final independent whole-change review
+- Next unchecked step: none; implementation and acceptance complete
 - Last known blocker: none
-- Uncommitted in-scope files: this final ledger update pending commit
+- Uncommitted in-scope files: none after the final ledger commit
 - Out-of-scope/user-owned changes observed: none recorded
 
 ## Execution Notes
@@ -107,3 +107,21 @@ Changed: no product code; browser smoke used a temporary three-page PDF and temp
 Verified: `/root/miniconda3/envs/attentive-app/bin/python -m unittest discover -s tests -v`; 477 tests passed, 0 failures/errors in 21.469s. Browser smoke through `http://127.0.0.1:18611/`: three `/media/*` thumbnails completed with natural width 160 and no browser error logs; slide centered at 50/75/100 percent; normalized manual bbox remained unchanged across width changes and cleared on page navigation; missing API key disabled current-page LLM processing; three-page sequential batch reported `0 successful, 3 fallback, 0 skipped`; summary survived rerun; disabling LLM restored deterministic-only mode with 10 AOI overlays visible
 Decision/blocker: 0 real LLM calls were made; temporary browser tabs, tunnel, and AutoDL launcher were closed and ports 18601–18603 were released; no blocker
 Next: independent whole-change review, then completion audit
+
+2026-07-14 20:50 CST — Final independent review
+Changed: no files; read-only review of `3e1a7a6..cab0650`
+Verified: reviewer found the formal capture component still used old `/media/*` capture routes and raw exception text could expose endpoint/query data; both were classified as merge-blocking
+Decision/blocker: findings reproduced against the current code; one bounded review-fix wave authorized, with no unrelated feature work
+Next: add focused regression tests and fix both boundaries
+
+2026-07-14 20:53 CST — Final review fix
+Changed: `modules/media/live_capture_component/index.html`, `modules/slide/llm_aoi.py`, `tests/test_streamlit_live.py`, `tests/test_llm_aoi.py`
+Verified: combined focused expected-red ran 24 tests with 8 failures; combined green ran 24 tests with 0 failures/errors; `git diff --check` clean; independent re-review of `d2e4d76` reported no Critical/Important findings and `Ready to merge: Yes`
+Decision/blocker: formal capture now exclusively uses `/attentive-media/*`; persisted/UI-facing LLM errors use fixed safe copy and sentinel endpoint/API key values do not reach manifest or exposed state; the reviewer’s remaining response-body/BaseException test suggestion is non-blocking and deferred to avoid scope expansion
+Next: one post-fix final full suite
+
+2026-07-14 20:54 CST — Post-review final verification
+Changed: no product code
+Verified: `/root/miniconda3/envs/attentive-app/bin/python -m unittest discover -s tests -v`; 479 tests passed, 0 failures/errors in 20.338s
+Decision/blocker: final acceptance gate satisfied; no additional browser session or repeated focused run was needed
+Next: commit this ledger and hand off the clean, unpushed branch
