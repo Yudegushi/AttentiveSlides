@@ -3,6 +3,7 @@ import unittest
 from modules.common.schemas import AOI, VisualContextItem
 from modules.realtime.realtime_contracts import TargetBinding
 from modules.system.main_ui_state import MainUISlide
+from modules.system.live_ui_bridge import LatestProposalInbox, ProposalTurnRunner
 from modules.system.target_switching import SwitchIntent, TargetSwitchController
 
 from apps.streamlit_attentive_slides import _target_binding_from_slide
@@ -71,6 +72,35 @@ class OmniTargetSwitchIntegrationTests(unittest.TestCase):
         confirmed = controller.confirm()
         self.assertIs(confirmed.intent, SwitchIntent.CONFIRM)
         self.assertEqual(controller.active_target.signature, candidate.signature)
+
+    def test_recovered_transcript_publishes_one_locked_target_proposal(self) -> None:
+        inbox = LatestProposalInbox()
+        runner = ProposalTurnRunner(
+            context_collector=object(),
+            inbox=inbox,
+            id_factory=lambda: "recovered-turn",
+        )
+        target = TargetBinding("deck", 1, "b", "Chart B", "Visual B")
+
+        proposal = runner.publish_transcript(" explain   this ", target=target)
+
+        self.assertIsNotNone(proposal)
+        self.assertEqual(proposal.interaction_id, "recovered-turn")
+        self.assertEqual(proposal.predicted_aoi_id, "b")
+        self.assertEqual(proposal.gaze_source, "voice_locked_target")
+        self.assertEqual(inbox.pop(), proposal)
+        self.assertIsNone(inbox.pop())
+
+    def test_empty_recovered_transcript_does_not_publish(self) -> None:
+        inbox = LatestProposalInbox()
+        runner = ProposalTurnRunner(
+            context_collector=object(),
+            inbox=inbox,
+        )
+        target = TargetBinding("deck", 1, "a", "Area A", "Native A")
+
+        self.assertIsNone(runner.publish_transcript("   ", target=target))
+        self.assertIsNone(inbox.pop())
 
 
 if __name__ == "__main__":

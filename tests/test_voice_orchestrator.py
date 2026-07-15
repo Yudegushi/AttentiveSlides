@@ -163,6 +163,18 @@ class VoiceOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("已切换", snapshot["status_message"])
         self.assertEqual(self.published, ["recovered"])
 
+    async def test_fallback_without_transcript_is_sanitized_and_returns_audio_to_single_turn(self) -> None:
+        self.orchestrator.update_preferences(VoicePreferences(engine=VoiceEngine.OMNI))
+        await self.settle()
+        secret = "Authorization: Bearer private-api-key"
+        await self.orchestrator.fallback_to_single_turn(secret, None)
+        snapshot = self.orchestrator.snapshot()
+        self.assertEqual(snapshot["engine"], "single_turn")
+        self.assertIn("重新说一次", snapshot["status_message"])
+        self.assertNotIn(secret, snapshot["status_message"])
+        self.assertEqual(self.published, [])
+        self.assertFalse(self.orchestrator.should_consume_audio())
+
     async def test_stop_clears_session_before_future_pcm(self) -> None:
         self.orchestrator.update_preferences(
             VoicePreferences(speech_mode=SpeechMode.PUSH_TO_TALK)

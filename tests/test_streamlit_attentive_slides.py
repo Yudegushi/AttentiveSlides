@@ -684,6 +684,23 @@ class TestStreamlitAttentiveSlides(
         self.assertIn("[1.05, 1.20, 1.35]", source)
         self.assertIn("_render_voice_component(view)", source)
 
+    def test_single_turn_tts_is_text_first_and_uses_the_cached_controller(self) -> None:
+        result = self.function_source("_render_tutor_result")
+        self.assertLess(
+            result.index('st.markdown(\n        result["answer"]'),
+            result.index("tts_controller.synthesize_once("),
+        )
+        self.assertIn("st.audio", result)
+        builder = self.function_source("build_main_live_resources")
+        self.assertEqual(builder.count("SingleTurnTTSController("), 1)
+
+    def test_fallback_transcript_reuses_proposal_confirmation_path(self) -> None:
+        builder = self.function_source("build_main_live_resources")
+        self.assertIn("runner.publish_transcript(transcript, target=target)", builder)
+        self.assertNotIn("generate_main_tutor_response", builder)
+        consumer = self.function_source("_consume_live_proposal")
+        self.assertIn('raw.gaze_source == "voice_locked_target"', consumer)
+
 
 if __name__ == "__main__":
     unittest.main()

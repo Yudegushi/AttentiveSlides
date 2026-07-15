@@ -18,6 +18,7 @@ from modules.common.interaction_contracts import (
 )
 from modules.common.schemas import AOI
 from modules.human_sensing.contracts import AOIPrediction as MemberAOIPrediction
+from modules.realtime.realtime_contracts import TargetBinding
 from modules.system.runtime_state import RuntimeState
 from modules.system.slide_geometry import SlideViewportGeometry, ViewportBBox
 
@@ -325,6 +326,39 @@ class ProposalTurnRunner:
             )
         )
         return ProposalTurnOutcome(pending_confirmation=False)
+
+    def publish_transcript(
+        self,
+        transcript: str,
+        *,
+        target: TargetBinding,
+    ) -> LiveInteractionProposal | None:
+        """Return a recovered Omni transcript to the existing confirmation path."""
+        normalized = " ".join(str(transcript).strip().split())
+        if not normalized:
+            return None
+        if target.target_id == "whole-slide":
+            selected_target = "whole_slide"
+        elif target.target_id.startswith("manual-"):
+            selected_target = "manual_region"
+        else:
+            selected_target = target.target_id
+        proposal = LiveInteractionProposal(
+            interaction_id=self.id_factory(),
+            deck_id=target.deck_id,
+            slide_id=target.slide_id,
+            layout_revision=-1,
+            transcript=normalized,
+            gaze_grid="unknown",
+            gaze_confidence=0.0,
+            stable_duration_sec=0.0,
+            predicted_aoi_id=selected_target,
+            target_confidence=1.0,
+            original_speech_transcript=normalized,
+            gaze_source="voice_locked_target",
+        )
+        self.inbox.publish(proposal)
+        return proposal
 
 
 class MainUILiveRuntime:

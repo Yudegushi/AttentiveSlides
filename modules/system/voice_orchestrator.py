@@ -60,6 +60,8 @@ class VoiceOrchestrator:
             if previous == preferences:
                 return
             self._preferences = preferences
+            if preferences.engine is VoiceEngine.OMNI:
+                self._status_message = None
         self._submit(lambda: self._apply_preferences(previous, preferences))
 
     def update_target(self, target: TargetBinding) -> None:
@@ -87,6 +89,10 @@ class VoiceOrchestrator:
             preferences.engine is VoiceEngine.OMNI
             or preferences.speech_mode is SpeechMode.PUSH_TO_TALK
         )
+
+    def current_target(self) -> TargetBinding | None:
+        with self._lock:
+            return self._target
 
     async def accept_pcm(self, session_id: str, pcm: bytes) -> None:
         with self._lock:
@@ -163,6 +169,7 @@ class VoiceOrchestrator:
         self, reason: str, transcript: str | None = None
     ) -> None:
         del reason
+        recovered = bool(transcript and transcript.strip())
         with self._lock:
             current = self._preferences
             self._preferences = VoicePreferences(
@@ -170,17 +177,21 @@ class VoiceOrchestrator:
                 speech_mode=current.speech_mode,
                 answer_audio_enabled=current.answer_audio_enabled,
             )
-            self._status_message = "Omni 不可用，已切换到 Grounded Tutor 单轮模式。"
+            self._status_message = (
+                "Omni 不可用，已切换到 Grounded Tutor 单轮模式。"
+                + ("" if recovered else " 请在单轮模式重新说一次。")
+            )
         await self._omni.stop_session("fallback")
         await self._events.clear_playback()
-        if transcript and transcript.strip():
+        if recovered:
+            assert transcript is not None
             self._publish_single_turn_transcript(transcript.strip())
         await self._events.publish_json(
             "voice.fallback",
             {
                 "engine": VoiceEngine.SINGLE_TURN.value,
                 "message": self._status_message,
-                "transcript_recovered": bool(transcript and transcript.strip()),
+                "transcript_recovered": recovered,
             },
         )
 

@@ -145,6 +145,7 @@ from modules.system.realtime_tutor_context import (
     build_realtime_tutor_instructions,
 )
 from modules.system.single_turn_ptt_runtime import SingleTurnPTTRuntime
+from modules.system.single_turn_tts import SingleTurnTTSController
 from modules.system.target_switching import TargetSwitchController
 from modules.system.voice_event_hub import VoiceEventHub
 from modules.system.voice_orchestrator import VoiceOrchestrator
@@ -192,6 +193,7 @@ class MainLiveResources:
     fatigue_store: FatigueStateStore
     voice: VoiceOrchestrator
     voice_events: VoiceEventHub
+    single_turn_tts: SingleTurnTTSController
     bound_deck_id: str | None = None
     bound_slide_id: int | None = None
     bound_aoi_signature: str | None = None
@@ -344,14 +346,24 @@ def build_main_live_resources(
         context_collector=collector,
         proposal_runner=runner,
     )
+
+    def publish_fallback_transcript(transcript: str) -> None:
+        orchestrator = voice_holder.get("voice")
+        target = orchestrator.current_target() if orchestrator is not None else None
+        if target is not None:
+            runner.publish_transcript(transcript, target=target)
+
     voice = VoiceOrchestrator(
         events=voice_events,
         omni=omni_runtime,
         single_turn_ptt=single_turn_ptt,
         target_switching=target_switching,
-        publish_single_turn_transcript=lambda transcript: None,
+        publish_single_turn_transcript=publish_fallback_transcript,
     )
     voice_holder["voice"] = voice
+    single_turn_tts = SingleTurnTTSController(
+        output_dir=RUNTIME_DATA_DIR / "tts",
+    )
     controller = SystemController(
         media_source=media_source,
         sensing_worker=sensing_worker,
@@ -399,6 +411,7 @@ def build_main_live_resources(
         fatigue_store=fatigue_store,
         voice=voice,
         voice_events=voice_events,
+        single_turn_tts=single_turn_tts,
     )
 
 
@@ -509,7 +522,7 @@ def main() -> None:
             view,
             live_resources=live_resources,
         )
-    _render_lower_workspace(view)
+    _render_lower_workspace(view, live_resources)
 
 
 
@@ -818,12 +831,34 @@ def _on_overlay_change() -> None:
 
 def _on_live_preference_change() -> None:
     st.session_state["main_widget_error"] = None
+    if st.session_state.get("main_voice_engine") == "omni":
+        # Empty string is a one-rerun retry sentinel so a deliberate Omni
+        # selection is not mistaken for an unacknowledged fallback.
+        st.session_state["main_voice_status_message"] = ""
+
+
+def _adopt_voice_fallback_state(
+    resources: MainLiveResources,
+) -> bool:
+    snapshot = resources.voice.snapshot()
+    status_message = snapshot.get("status_message")
+    fell_back = bool(
+        st.session_state.get("main_voice_engine") == "omni"
+        and st.session_state.get("main_voice_status_message") != ""
+        and snapshot.get("engine") == "single_turn"
+        and status_message
+    )
+    if fell_back:
+        st.session_state["main_voice_engine"] = "single_turn"
+        st.session_state["main_voice_status_message"] = str(status_message)
+    return fell_back
 
 
 def _sync_main_live_voice_resources(
     resources: MainLiveResources,
     view: MainUIViewModel,
 ) -> None:
+    _adopt_voice_fallback_state(resources)
     preferences = VoicePreferences(
         engine=VoiceEngine(str(st.session_state["main_voice_engine"])),
         speech_mode=SpeechMode(str(st.session_state["main_speech_mode"])),
@@ -834,6 +869,8 @@ def _sync_main_live_voice_resources(
     if resources.bound_voice_preferences != preferences:
         resources.voice.update_preferences(preferences)
         resources.bound_voice_preferences = preferences
+    if preferences.engine is VoiceEngine.OMNI:
+        st.session_state["main_voice_status_message"] = None
 
     target = _voice_target_binding(view)
     signature = target.signature if target is not None else None
@@ -982,6 +1019,8 @@ def _render_live_controls(
         f"Runtime: {runtime_state} · "
         f"Media: {'ready' if session.video_fresh and session.audio_fresh else 'waiting'}"
     )
+    if st.session_state.get("main_voice_status_message"):
+        st.sidebar.warning(st.session_state["main_voice_status_message"])
 
     if enabled:
         with st.sidebar.expander(
@@ -2126,6 +2165,7 @@ def _render_xai_drawer() -> None:
 
 def _render_answer_column(
     view: MainUIViewModel,
+    resources: MainLiveResources,
 ) -> None:
     st.markdown(
         "### 3. Tutor answer"
@@ -2134,7 +2174,7 @@ def _render_answer_column(
     _render_tutor_generation_panel(
         view
     )
-    _render_tutor_result()
+    _render_tutor_result(resources.single_turn_tts)
     _render_xai_drawer()
 
     st.button(
@@ -3185,7 +3225,9 @@ def _render_confirmation_panel(
 
 
 
-def _clear_conversation() -> None:
+def _clear_conversation(
+    tts_controller: SingleTurnTTSController,
+) -> None:
     """Clear stored turns without changing current settings."""
     active_deck_id = st.session_state.get(
         "main_conversation_deck_id"
@@ -3195,6 +3237,7 @@ def _clear_conversation() -> None:
         st.session_state,
         deck_id=active_deck_id,
     )
+    tts_controller.clear()
 
 
 def _start_follow_up() -> None:
@@ -3316,6 +3359,7 @@ def _log_completed_interaction_once() -> None:
 
 def _render_conversation_history(
     view: MainUIViewModel,
+    tts_controller: SingleTurnTTSController,
 ) -> None:
     """Render sanitized session-level tutoring history."""
     turns = st.session_state[
@@ -3361,6 +3405,7 @@ def _render_conversation_history(
         disabled=not turns,
         key="main_clear_conversation_button",
         on_click=_clear_conversation,
+        args=(tts_controller,),
     )
 
     export_payload = export_conversation(
@@ -3772,7 +3817,9 @@ def _render_tutor_generation_panel(
         )
 
 
-def _render_tutor_result() -> None:
+def _render_tutor_result(
+    tts_controller: SingleTurnTTSController,
+) -> None:
     """Render the learner-facing answer without developer diagnostics."""
     result = st.session_state[
         "main_tutor_result"
@@ -3787,6 +3834,18 @@ def _render_tutor_result() -> None:
     st.markdown(
         result["answer"]
     )
+
+    speech = tts_controller.synthesize_once(
+        interaction_id=str(
+            st.session_state.get("main_last_generated_interaction_id") or ""
+        ),
+        text=str(result["answer"]),
+        enabled=bool(st.session_state["main_answer_audio_enabled"]),
+    )
+    if speech.audio_path is not None:
+        st.audio(str(speech.audio_path), format="audio/wav")
+    elif speech.error_message:
+        st.warning(speech.error_message)
 
     if result.get(
         "active_recall_question"
@@ -4385,7 +4444,9 @@ def _consume_live_proposal(
     )
     geometry = snapshot.geometry if snapshot is not None else None
 
-    if raw.gaze_source == "eyetheia_local":
+    if raw.gaze_source == "voice_locked_target":
+        proposal = raw
+    elif raw.gaze_source == "eyetheia_local":
         proposal = (
             raw
             if geometry is not None
@@ -4635,7 +4696,7 @@ def _render_live_interaction(
                 f"{st.session_state['main_confirmation_source']}."
             )
     with answer_column:
-        _render_answer_column(view)
+        _render_answer_column(view, resources)
 
 
 @st.fragment(run_every=0.5)
@@ -4643,6 +4704,9 @@ def _render_live_periodic(
     resources: MainLiveResources,
     view: MainUIViewModel,
 ) -> None:
+    if _adopt_voice_fallback_state(resources):
+        st.rerun(scope="app")
+        return
     try:
         _consume_live_proposal(resources, view)
     except Exception as exc:
@@ -4739,13 +4803,15 @@ def _render_manual_interaction(
 
     with answer_column:
         _render_answer_column(
-            view
+            view,
+            live_resources,
         )
 
 
 
 def _render_lower_workspace(
     view: MainUIViewModel,
+    live_resources: MainLiveResources,
 ) -> None:
     """Keep secondary session information collapsed by default."""
     with st.expander(
@@ -4753,7 +4819,8 @@ def _render_lower_workspace(
         expanded=False,
     ):
         _render_conversation_history(
-            view
+            view,
+            live_resources.single_turn_tts,
         )
 
 
