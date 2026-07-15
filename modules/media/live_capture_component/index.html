@@ -42,6 +42,8 @@
   const context = canvas.getContext("2d", { alpha: false });
   const eyeTheiaCanvas = document.createElement("canvas");
   const eyeTheiaContext = eyeTheiaCanvas.getContext("2d", { alpha: false });
+  const fatigueCanvas = document.createElement("canvas");
+  const fatigueContext = fatigueCanvas.getContext("2d", { alpha: false });
   const muteTimers = new Map();
   let stream = null;
   let audioContext = null;
@@ -70,6 +72,9 @@
   let gazeInFlight = false;
   let latestGaze = null;
   let lastGazeUploadAt = -Infinity;
+  let fatigueInFlight = false;
+  let lastFatigueUploadAt = -Infinity;
+  const FATIGUE_INTERVAL_MS = 500;
   const energyVadThreshold = 250;
 
   function publishDebug(message) {
@@ -294,6 +299,81 @@
     }, "image/jpeg", 0.9);
   }
 
+  function uploadFatigueCrop(landmarks) {
+    const now = performance.now();
+    if (
+      !running
+      || fatigueInFlight
+      || now - lastFatigueUploadAt < FATIGUE_INTERVAL_MS
+      || eyeTheiaCanvas.width === 0
+      || eyeTheiaCanvas.height === 0
+    ) return;
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const landmark of landmarks) {
+      const x = Number(landmark.x);
+      const y = Number(landmark.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+    const sourceWidth = eyeTheiaCanvas.width;
+    const sourceHeight = eyeTheiaCanvas.height;
+    const centerX = ((minX + maxX) / 2) * sourceWidth;
+    const centerY = ((minY + maxY) / 2) * sourceHeight;
+    const faceWidth = (maxX - minX) * sourceWidth;
+    const faceHeight = (maxY - minY) * sourceHeight;
+    const side = Math.min(
+      Math.max(faceWidth, faceHeight) * 1.25,
+      sourceWidth,
+      sourceHeight,
+    );
+    if (!(side >= 1)) return;
+    const sourceX = Math.max(0, Math.min(sourceWidth - side, centerX - side / 2));
+    const sourceY = Math.max(0, Math.min(sourceHeight - side, centerY - side / 2));
+
+    fatigueCanvas.width = 224;
+    fatigueCanvas.height = 224;
+    fatigueContext.drawImage(
+      eyeTheiaCanvas,
+      sourceX,
+      sourceY,
+      side,
+      side,
+      0,
+      0,
+      224,
+      224,
+    );
+    fatigueInFlight = true;
+    lastFatigueUploadAt = now;
+    fatigueCanvas.toBlob(async (blob) => {
+      if (!blob || !running) {
+        fatigueInFlight = false;
+        return;
+      }
+      try {
+        await requireOk(await fetch("/attentive-media/fatigue", {
+          method: "POST",
+          headers: headers({
+            "Content-Type": "image/jpeg",
+            "X-Media-Timestamp": String(performance.now() / 1000),
+          }),
+          body: await blob.arrayBuffer(),
+        }));
+      } catch (error) {
+        console.warn("AttentiveSlides fatigue upload unavailable", error);
+      } finally {
+        fatigueInFlight = false;
+      }
+    }, "image/jpeg", 0.80);
+  }
+
   function startFaceMeshPump() {
     faceMeshTimer = window.setInterval(() => {
       if (
@@ -338,8 +418,12 @@
           && faces[0].length === 478
         ) ? faces[0] : null;
         faceMeshInFlight = false;
-        if (latestLandmarks) sendCurrentEyeTheiaFrame(latestLandmarks);
-        else eyeTheiaFrameBusy = false;
+        if (latestLandmarks) {
+          sendCurrentEyeTheiaFrame(latestLandmarks);
+          uploadFatigueCrop(latestLandmarks);
+        } else {
+          eyeTheiaFrameBusy = false;
+        }
       });
       connectEyeTheia();
       startFaceMeshPump();
@@ -361,6 +445,8 @@
     faceMeshInFlight = false;
     eyeTheiaFrameBusy = false;
     gazeInFlight = false;
+    fatigueInFlight = false;
+    lastFatigueUploadAt = -Infinity;
     screenAcknowledged = false;
     filterResetAcknowledged = false;
     eyeTheiaViewport = null;

@@ -31,6 +31,22 @@ class VideoPacket:
 
 
 @dataclass(frozen=True)
+class FaceCropPacket:
+    """One exact-size BGR face crop for local fatigue inference."""
+
+    image: np.ndarray
+    timestamp: float
+    timestamp_clock: str = "browser_performance_seconds"
+
+    def __post_init__(self) -> None:
+        image = _readonly_copy(self.image, np.uint8)
+        if image.shape != (224, 224, 3):
+            raise ValueError("fatigue face crop must have shape (224, 224, 3)")
+        object.__setattr__(self, "image", image)
+        object.__setattr__(self, "timestamp", float(self.timestamp))
+
+
+@dataclass(frozen=True)
 class AudioPacket:
     """Interleaved signed-16 PCM shaped ``(samples, channels)``."""
 

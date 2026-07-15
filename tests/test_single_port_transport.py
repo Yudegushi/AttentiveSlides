@@ -33,6 +33,12 @@ def jpeg_payload() -> bytes:
     return output.getvalue()
 
 
+def fatigue_jpeg_payload(size=(224, 224)) -> bytes:
+    output = BytesIO()
+    Image.new("RGB", size, color=(10, 20, 30)).save(output, format="JPEG")
+    return output.getvalue()
+
+
 def geometry_payload():
     return {
         "deck_id": "deck-a",
@@ -71,6 +77,7 @@ class SinglePortTransportTest(unittest.TestCase):
             inactive_after_seconds=2.0,
             max_video_bytes=1024,
             max_audio_bytes=64,
+            max_fatigue_bytes=4096,
         )
 
     def test_start_and_same_session_packets_reach_existing_source_contract(self):
@@ -100,6 +107,36 @@ class SinglePortTransportTest(unittest.TestCase):
         self.assertEqual(audio.sample_rate, 16_000)
         self.assertEqual(audio.channels, 1)
         self.assertEqual(audio.timestamp, 1.5)
+
+    def test_exact_face_crop_reaches_one_item_fatigue_queue(self):
+        self.ingress.start("session-a")
+
+        self.ingress.accept_fatigue_jpeg(
+            "session-a", fatigue_jpeg_payload(), timestamp=1.75
+        )
+
+        packet = self.source.face_crop_queue.get_nowait()
+        self.assertEqual(packet.image.shape, (224, 224, 3))
+        self.assertEqual(packet.timestamp, 1.75)
+        self.assertEqual(packet.timestamp_clock, "browser_performance_seconds")
+
+    def test_fatigue_enforces_active_session_dimensions_and_byte_limit(self):
+        self.ingress.start("session-a")
+
+        with self.assertRaises(InactiveMediaSession):
+            self.ingress.accept_fatigue_jpeg(
+                "session-old", fatigue_jpeg_payload(), timestamp=1.0
+            )
+        with self.assertRaises(ValueError):
+            self.ingress.accept_fatigue_jpeg(
+                "session-a", fatigue_jpeg_payload((223, 224)), timestamp=1.0
+            )
+        with self.assertRaises(MediaPayloadTooLarge):
+            self.ingress.accept_fatigue_jpeg(
+                "session-a", bytes(4097), timestamp=1.0
+            )
+
+        self.assertTrue(self.source.face_crop_queue.empty())
 
     def test_replaced_session_cannot_enqueue_stale_packets(self):
         self.ingress.start("session-a")
@@ -147,6 +184,7 @@ class SinglePortTransportTest(unittest.TestCase):
             "/attentive-media/start",
             "/attentive-media/video",
             "/attentive-media/audio",
+            "/attentive-media/fatigue",
             "/attentive-media/geometry",
             "/attentive-media/gaze",
             "/attentive-media/heartbeat",
@@ -194,6 +232,23 @@ class SinglePortTransportTest(unittest.TestCase):
         self.assertEqual(stats["gaze_rejections"], 0)
         self.assertEqual(stats["geometry_slide_id"], 2)
         self.assertEqual(stats["geometry_layout_revision"], 7)
+
+    def test_stats_include_fatigue_freshness_depth_and_drops(self):
+        self.ingress.start("session-a")
+        self.ingress.accept_fatigue_jpeg(
+            "session-a", fatigue_jpeg_payload(), timestamp=1.0
+        )
+        self.ingress.accept_fatigue_jpeg(
+            "session-a", fatigue_jpeg_payload(), timestamp=1.5
+        )
+
+        stats = self.ingress.stats_payload()
+
+        self.assertTrue(stats["fatigue_fresh"])
+        self.assertEqual(stats["face_crop_queue_depth"], 1)
+        self.assertEqual(stats["face_crop_drops"], 1)
+        self.assertEqual(stats["last_face_crop_timestamp"], 1.5)
+        self.assertGreater(stats["face_crop_fps"], 0.0)
 
 
 class LocalEyeTheiaCaptureContractTest(unittest.TestCase):
@@ -262,6 +317,27 @@ class LocalEyeTheiaCaptureContractTest(unittest.TestCase):
             "stopCapture",
             component[failure_start:failure_end],
         )
+
+    def test_fatigue_crop_reuses_face_mesh_and_has_bounded_relative_upload(self):
+        component = self.component_source()
+
+        self.assertEqual(
+            component.count("navigator.mediaDevices.getUserMedia"),
+            1,
+        )
+        self.assertEqual(component.count("new window.FaceMesh("), 1)
+        self.assertIn("const FATIGUE_INTERVAL_MS = 500", component)
+        self.assertIn("fatigueCanvas.width = 224", component)
+        self.assertIn("fatigueCanvas.height = 224", component)
+        self.assertIn("* 1.25", component)
+        self.assertIn('fetch("/attentive-media/fatigue"', component)
+        self.assertIn('}, "image/jpeg", 0.80)', component)
+        self.assertIn("let fatigueInFlight = false", component)
+        self.assertNotIn('fetch("http://127.0.0.1:8501/attentive-media/fatigue', component)
+
+        upload_start = component.index("function uploadFatigueCrop")
+        upload_end = component.index("function startFaceMeshPump", upload_start)
+        self.assertNotIn("stopCapture", component[upload_start:upload_end])
 
 
 class BrowserObservationRouteTest(unittest.IsolatedAsyncioTestCase):

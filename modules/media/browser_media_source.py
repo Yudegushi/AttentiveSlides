@@ -10,7 +10,7 @@ from typing import Any, Callable, Tuple
 
 import numpy as np
 
-from .media_packets import AudioPacket, VideoPacket
+from .media_packets import AudioPacket, FaceCropPacket, VideoPacket
 from .queue_policy import BoundedMediaQueue
 
 
@@ -18,12 +18,16 @@ from .queue_policy import BoundedMediaQueue
 class BrowserMediaStats:
     video_fps: float
     audio_chunks_per_second: float
+    face_crop_fps: float
     last_video_timestamp: float | None
     last_audio_timestamp: float | None
+    last_face_crop_timestamp: float | None
     video_queue_depth: int
     audio_queue_depth: int
+    face_crop_queue_depth: int
     video_drops: int
     audio_drops: int
+    face_crop_drops: int
     audio_overruns: int
     is_running: bool
     cleanup_state: str
@@ -49,8 +53,13 @@ class BrowserMediaSource:
             max_bytes=audio_queue_max_bytes,
             item_size=lambda packet: packet.samples.nbytes,
         )
+        self.face_crop_queue: BoundedMediaQueue[FaceCropPacket] = BoundedMediaQueue(
+            1,
+            item_size=lambda packet: packet.image.nbytes,
+        )
         self.video_queue.close()
         self.audio_queue.close()
+        self.face_crop_queue.close()
         self._clock = clock
         self._lock = RLock()
         self._running = False
@@ -76,6 +85,7 @@ class BrowserMediaSource:
                 return
             self.video_queue.activate(reset_counters=True)
             self.audio_queue.activate(reset_counters=True)
+            self.face_crop_queue.activate(reset_counters=True)
             self._started_at = self._clock()
             self._stopped_at = None
             self._running = True
@@ -89,6 +99,7 @@ class BrowserMediaSource:
             self._stopped_at = self._clock()
             self.video_queue.close()
             self.audio_queue.close()
+            self.face_crop_queue.close()
             self._cleanup_state = f"stopped: {reason}"
             if was_running:
                 self.stop_count += 1
@@ -135,6 +146,22 @@ class BrowserMediaSource:
         )
         return self.audio_queue.push(packet)
 
+    def accept_face_crop(
+        self,
+        image: np.ndarray,
+        *,
+        timestamp: float,
+        timestamp_clock: str,
+    ) -> bool:
+        """Push one exact-size browser face crop without blocking."""
+
+        packet = FaceCropPacket(
+            image=image,
+            timestamp=timestamp,
+            timestamp_clock=timestamp_clock,
+        )
+        return self.face_crop_queue.push(packet)
+
     def video_frame_callback(self, frame: Any) -> Any:
         timestamp, timestamp_clock = self._timestamp(frame)
         self.accept_video_frame(
@@ -168,12 +195,18 @@ class BrowserMediaSource:
                 audio_chunks_per_second=(
                     self.audio_queue.accepted_count / elapsed if elapsed else 0.0
                 ),
+                face_crop_fps=(
+                    self.face_crop_queue.accepted_count / elapsed if elapsed else 0.0
+                ),
                 last_video_timestamp=self.video_queue.last_timestamp,
                 last_audio_timestamp=self.audio_queue.last_timestamp,
+                last_face_crop_timestamp=self.face_crop_queue.last_timestamp,
                 video_queue_depth=self.video_queue.qsize(),
                 audio_queue_depth=self.audio_queue.qsize(),
+                face_crop_queue_depth=self.face_crop_queue.qsize(),
                 video_drops=self.video_queue.dropped_count,
                 audio_drops=self.audio_queue.dropped_count,
+                face_crop_drops=self.face_crop_queue.dropped_count,
                 audio_overruns=self.audio_queue.overrun_count,
                 is_running=self._running,
                 cleanup_state=self._cleanup_state,

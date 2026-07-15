@@ -50,9 +50,11 @@ class MediaIngressSessionSnapshot:
     session_pending: bool
     video_fresh: bool
     audio_fresh: bool
+    fatigue_fresh: bool
     heartbeat_fresh: bool
     last_video_received_at: float | None
     last_audio_received_at: float | None
+    last_fatigue_received_at: float | None
     last_heartbeat_at: float | None
     cleanup_reason: str | None
 
@@ -72,13 +74,14 @@ class FallbackMediaIngress:
         coordinated_activation: bool = False,
         max_video_bytes: int = 512 * 1024,
         max_audio_bytes: int = 128 * 1024,
+        max_fatigue_bytes: int = 256 * 1024,
         max_input_pixels: int = 640 * 480,
     ) -> None:
         if inactive_after_seconds <= 0:
             raise ValueError("inactive_after_seconds must be positive")
         if media_stale_after_seconds <= 0:
             raise ValueError("media_stale_after_seconds must be positive")
-        if max_video_bytes <= 0 or max_audio_bytes <= 0:
+        if max_video_bytes <= 0 or max_audio_bytes <= 0 or max_fatigue_bytes <= 0:
             raise ValueError("media byte limits must be positive")
         self.source = source
         self.observations = observations or BrowserGazeSource(clock=clock)
@@ -87,6 +90,7 @@ class FallbackMediaIngress:
         self.media_stale_after_seconds = float(media_stale_after_seconds)
         self.max_video_bytes = int(max_video_bytes)
         self.max_audio_bytes = int(max_audio_bytes)
+        self.max_fatigue_bytes = int(max_fatigue_bytes)
         self.max_input_pixels = int(max_input_pixels)
         self._lock = RLock()
         self._armed = bool(start_armed)
@@ -98,6 +102,7 @@ class FallbackMediaIngress:
         self._pending_generation: int | None = None
         self._last_video_received_at: float | None = None
         self._last_audio_received_at: float | None = None
+        self._last_fatigue_received_at: float | None = None
         self._last_heartbeat_at: float | None = None
         self._cleanup_reason: str | None = None
 
@@ -179,6 +184,7 @@ class FallbackMediaIngress:
                 return False
             self._last_video_received_at = None
             self._last_audio_received_at = None
+            self._last_fatigue_received_at = None
             self._cleanup_reason = reason
             self.source.start()
             return True
@@ -256,6 +262,29 @@ class FallbackMediaIngress:
             self._last_audio_received_at = self._clock()
             return accepted
 
+    def accept_fatigue_jpeg(
+        self,
+        session_id: str,
+        payload: bytes,
+        *,
+        timestamp: float,
+    ) -> bool:
+        """Decode one bounded exact-size face crop for fatigue inference."""
+
+        if len(payload) > self.max_fatigue_bytes:
+            raise MediaPayloadTooLarge("fatigue payload exceeds byte limit")
+        timestamp = self._validated_timestamp(timestamp)
+        image = self._decode_fatigue(payload)
+        with self._lock:
+            self._require_active_session(session_id)
+            accepted = self.source.accept_face_crop(
+                image,
+                timestamp=timestamp,
+                timestamp_clock="browser_performance_seconds",
+            )
+            self._last_fatigue_received_at = self._clock()
+            return accepted
+
     def accept_geometry_json(
         self,
         payload: Mapping[str, object],
@@ -283,9 +312,11 @@ class FallbackMediaIngress:
                 session_pending=self._pending_session_id is not None,
                 video_fresh=active and self._is_fresh(self._last_video_received_at, now, self.media_stale_after_seconds),
                 audio_fresh=active and self._is_fresh(self._last_audio_received_at, now, self.media_stale_after_seconds),
+                fatigue_fresh=active and self._is_fresh(self._last_fatigue_received_at, now, self.media_stale_after_seconds),
                 heartbeat_fresh=active and self._is_fresh(self._last_heartbeat_at, now, self.inactive_after_seconds),
                 last_video_received_at=self._last_video_received_at,
                 last_audio_received_at=self._last_audio_received_at,
+                last_fatigue_received_at=self._last_fatigue_received_at,
                 last_heartbeat_at=self._last_heartbeat_at,
                 cleanup_reason=self._cleanup_reason,
             )
@@ -302,15 +333,20 @@ class FallbackMediaIngress:
             "generation": session.generation if session.generation is not None else session.pending_generation,
             "video_fresh": session.video_fresh,
             "audio_fresh": session.audio_fresh,
+            "fatigue_fresh": session.fatigue_fresh,
             "heartbeat_fresh": session.heartbeat_fresh,
             "video_fps": stats.video_fps,
             "audio_chunks_per_second": stats.audio_chunks_per_second,
+            "face_crop_fps": stats.face_crop_fps,
             "last_video_timestamp": stats.last_video_timestamp,
             "last_audio_timestamp": stats.last_audio_timestamp,
+            "last_face_crop_timestamp": stats.last_face_crop_timestamp,
             "video_queue_depth": stats.video_queue_depth,
             "audio_queue_depth": stats.audio_queue_depth,
+            "face_crop_queue_depth": stats.face_crop_queue_depth,
             "video_drops": stats.video_drops,
             "audio_drops": stats.audio_drops,
+            "face_crop_drops": stats.face_crop_drops,
             "audio_overruns": stats.audio_overruns,
             "is_running": stats.is_running,
             "cleanup_state": stats.cleanup_state,
@@ -341,6 +377,16 @@ class FallbackMediaIngress:
             )
         return np.ascontiguousarray(frame)
 
+    @staticmethod
+    def _decode_fatigue(payload: bytes) -> np.ndarray:
+        encoded = np.frombuffer(payload, dtype=np.uint8)
+        image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+        if image is None or image.shape != (224, 224, 3):
+            raise MediaIngressError(
+                "fatigue payload must be a decodable 224x224 color JPEG"
+            )
+        return np.ascontiguousarray(image)
+
     def _require_active_session(self, session_id: str) -> None:
         if session_id != self._active_session_id:
             raise InactiveMediaSession("browser media session is not active")
@@ -358,6 +404,7 @@ class FallbackMediaIngress:
     def _reset_receive_times(self) -> None:
         self._last_video_received_at = None
         self._last_audio_received_at = None
+        self._last_fatigue_received_at = None
         self._last_heartbeat_at = None
 
     @staticmethod
@@ -633,7 +680,11 @@ def build_fallback_app(
 
     ingress = ingress or FallbackMediaIngress(BrowserMediaSource())
     app = web.Application(
-        client_max_size=max(ingress.max_video_bytes, ingress.max_audio_bytes)
+        client_max_size=max(
+            ingress.max_video_bytes,
+            ingress.max_audio_bytes,
+            ingress.max_fatigue_bytes,
+        )
     )
     app[MEDIA_INGRESS_KEY] = ingress
 
@@ -682,6 +733,17 @@ def build_fallback_app(
             _raise_http_error(exc)
         return web.json_response(ingress.stats_payload())
 
+    async def fatigue(request: web.Request) -> web.Response:
+        try:
+            ingress.accept_fatigue_jpeg(
+                _session_id(request),
+                await request.read(),
+                timestamp=_header_float(request, TIMESTAMP_HEADER),
+            )
+        except MediaIngressError as exc:
+            _raise_http_error(exc)
+        return web.json_response(ingress.stats_payload())
+
     async def geometry(request: web.Request) -> web.Response:
         try:
             ingress.accept_geometry_json(await _json_object(request))
@@ -722,6 +784,7 @@ def build_fallback_app(
     app.router.add_post("/attentive-media/start", start)
     app.router.add_post("/attentive-media/video", video)
     app.router.add_post("/attentive-media/audio", audio)
+    app.router.add_post("/attentive-media/fatigue", fatigue)
     app.router.add_post("/attentive-media/geometry", geometry)
     app.router.add_post("/attentive-media/gaze", gaze)
     app.router.add_post("/attentive-media/heartbeat", heartbeat)
