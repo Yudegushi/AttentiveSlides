@@ -139,6 +139,30 @@ class FatigueWorkerTest(unittest.TestCase):
         self.assertEqual(store.snapshot().status, "waiting")
         self.assertFalse(store.snapshot().alert_active)
 
+    def test_stop_during_inference_prevents_a_late_publish(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        class BlockingEstimator:
+            def predict(self, _image):
+                entered.set()
+                release.wait(1.0)
+                return 0.9
+
+        worker, media_queue, store, _ = self.build_worker(BlockingEstimator)
+        media_queue.push(face_packet(1))
+        worker.start()
+        self.assertTrue(entered.wait(1.0))
+
+        stop_thread = threading.Thread(target=worker.stop)
+        stop_thread.start()
+        self.assertTrue(self._wait_until(worker._stop_event.is_set))
+        release.set()
+        stop_thread.join(1.0)
+
+        self.assertFalse(stop_thread.is_alive())
+        self.assertEqual(store.snapshot().status, "waiting")
+
     @staticmethod
     def _wait_until(predicate, timeout=1.0):
         deadline = time.monotonic() + timeout

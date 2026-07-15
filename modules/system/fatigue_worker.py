@@ -71,7 +71,9 @@ class FatigueWorker:
         if thread is not None and thread is not current_thread() and thread.is_alive():
             thread.join(timeout=2.0)
         with self._lock:
-            if self._thread is thread:
+            if self._thread is thread and (
+                thread is None or not thread.is_alive()
+            ):
                 self._thread = None
             self._last_success_at = None
             self.tracker.reset()
@@ -112,12 +114,17 @@ class FatigueWorker:
                 ):
                     self.tracker.reset()
                 probability = estimator.predict(packet.image)
+                if self._stop_event.is_set():
+                    break
                 snapshot = self.tracker.update(probability, now)
-                self.store.publish(snapshot)
                 with self._lock:
+                    if self._stop_event.is_set():
+                        break
+                    self.store.publish(snapshot)
                     self._last_success_at = now
         except Exception as exc:
-            self.record_external_error(exc)
+            if not self._stop_event.is_set():
+                self.record_external_error(exc)
 
     def _newest_packet(self) -> Any | None:
         try:
