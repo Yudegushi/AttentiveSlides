@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 
+import html
 import hashlib
 import json
 from io import BytesIO
@@ -385,22 +386,17 @@ def main() -> None:
     )
 
     _render_header(view)
-    _render_fatigue_periodic(live_resources)
-    _render_slide_selector(
-        browser
-    )
     _render_slide_workspace(
         view,
+        browser=browser,
         workspace=workspace,
-    )
-    _render_navigation(
-        browser,
-        view,
-    )
-    _render_manual_interaction(
-        view,
         live_resources=live_resources,
     )
+    with st.container(key="main_interaction_workspace"):
+        _render_manual_interaction(
+            view,
+            live_resources=live_resources,
+        )
     _render_lower_workspace(view)
 
 
@@ -436,7 +432,7 @@ def _initialize_global_state() -> None:
         "main_llm_aoi_error": None,
         "main_show_aoi_overlay": True,
         "main_canvas_revision": 0,
-        "main_slide_width_percent": 100,
+        "main_slide_width_percent": 70,
         "main_selection_matches": [],
         "main_selection_text": "",
         "main_selection_error": None,
@@ -1249,12 +1245,157 @@ def _inject_compact_ui_css() -> None:
         <style>
         .block-container {
             max-width: 96vw;
-            padding-top: 0.8rem;
+            padding-top: 1rem;
             padding-bottom: 1.2rem;
         }
 
-        h1 {
-            margin-bottom: 0.15rem;
+        header[data-testid="stHeader"] {
+            background: rgba(255, 255, 255, 0.98);
+            border-bottom: 1px solid #111111;
+        }
+
+        section[data-testid="stSidebar"] {
+            top: 3.5rem;
+            height: calc(100vh - 3.5rem);
+        }
+
+        .attentive-top-brand {
+            position: fixed;
+            top: 0;
+            left: 5.25rem;
+            right: 8rem;
+            height: 3.5rem;
+            display: flex;
+            align-items: flex-end;
+            gap: 0.7rem;
+            padding-bottom: 0.5rem;
+            overflow: hidden;
+            white-space: nowrap;
+            pointer-events: none;
+            z-index: 999997;
+        }
+
+        .attentive-top-title {
+            flex: 0 0 auto;
+            color: #111111;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 1.45rem;
+            font-weight: 700;
+            line-height: 1;
+            letter-spacing: -0.025em;
+        }
+
+        .attentive-top-tagline {
+            min-width: 0;
+            overflow: hidden;
+            color: #111111;
+            font-family: Palatino, "Palatino Linotype", "Book Antiqua", serif;
+            font-size: 0.82rem;
+            font-style: italic;
+            line-height: 1.05;
+            text-overflow: ellipsis;
+        }
+
+        .attentive-fatigue-status {
+            position: relative;
+            width: 100%;
+        }
+
+        .attentive-fatigue-alert {
+            position: absolute;
+            right: 0;
+            bottom: 1.35rem;
+            width: max-content;
+            max-width: min(28rem, 48vw);
+            padding: 0.3rem 0.58rem;
+            border: 1px solid #8b5e00;
+            border-radius: 0.45rem;
+            background: rgba(255, 244, 204, 0.68);
+            color: #3f2b00;
+            font-size: 0.78rem;
+            font-weight: 600;
+            line-height: 1.2;
+            box-shadow: 0 1px 4px rgba(17, 17, 17, 0.08);
+            backdrop-filter: blur(3px);
+            z-index: 20;
+        }
+
+        .attentive-fatigue-probability {
+            width: 100%;
+            color: rgba(49, 51, 63, 0.62);
+            font-size: 0.82rem;
+            line-height: 1.3;
+            text-align: right;
+        }
+
+        .st-key-main_primary_actions {
+            margin-top: 1.15rem;
+            margin-bottom: -0.35rem;
+        }
+
+        .st-key-main_primary_actions button,
+        .st-key-main_slide_preview_scroll button {
+            font-family: "Avenir Next", "Segoe UI", Arial, sans-serif;
+            font-weight: 700;
+        }
+
+        .st-key-main_slide_scale {
+            margin-top: -0.35rem;
+            margin-bottom: -0.3rem;
+        }
+
+        .st-key-main_slide_stage {
+            position: relative;
+        }
+
+        .st-key-main_previous_slide_button,
+        .st-key-main_next_slide_button {
+            position: absolute;
+            top: 50%;
+            width: 3rem !important;
+            transform: translateY(-50%);
+            z-index: 20;
+        }
+
+        .st-key-main_previous_slide_button {
+            left: 4.5%;
+        }
+
+        .st-key-main_next_slide_button {
+            right: 4.5%;
+        }
+
+        .st-key-main_previous_slide_button button,
+        .st-key-main_next_slide_button button {
+            min-height: 3rem;
+            padding: 0;
+            border: 0 !important;
+            background: transparent !important;
+            color: #111111 !important;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 2.35rem;
+            font-weight: 400;
+            box-shadow: none !important;
+            opacity: 0.34;
+            transition: opacity 150ms ease;
+        }
+
+        .st-key-main_previous_slide_button button:hover,
+        .st-key-main_next_slide_button button:hover {
+            opacity: 0.68;
+        }
+
+        .st-key-main_previous_slide_button button:disabled,
+        .st-key-main_next_slide_button button:disabled {
+            opacity: 0.11;
+        }
+
+        .st-key-main_interaction_workspace h3 {
+            margin-bottom: 0.35rem;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 1.05rem;
+            font-weight: 600;
+            line-height: 1.2;
         }
 
         div[data-testid="stImage"] {
@@ -1274,6 +1415,16 @@ def _inject_compact_ui_css() -> None:
 
         div[data-testid="stExpander"] details {
             border-radius: 0.7rem;
+        }
+
+        @media (max-width: 900px) {
+            .attentive-top-brand {
+                right: 7rem;
+            }
+
+            .attentive-top-tagline {
+                font-size: 0.76rem;
+            }
         }
         </style>
         """,
@@ -1405,11 +1556,20 @@ def _render_slide_selector(
         """
         <style>
         .st-key-main_slides_popover {
-            position: fixed;
-            top: 3.5rem;
-            right: 0.75rem;
-            width: auto;
-            z-index: 999998;
+            width: 100%;
+        }
+
+        div[data-testid="stPopoverBody"]:has(.st-key-main_slide_preview_scroll) {
+            width: 13.5rem !important;
+            min-width: 13.5rem !important;
+            max-width: 64vw !important;
+        }
+
+        .st-key-main_slide_preview_scroll button {
+            min-height: 1.72rem !important;
+            height: 1.72rem !important;
+            padding: 0.12rem 0.35rem !important;
+            font-size: 0.72rem !important;
         }
         </style>
         """,
@@ -1418,7 +1578,7 @@ def _render_slide_selector(
     with st.popover(
         "Slides",
         key="main_slides_popover",
-        width="content",
+        width="stretch",
     ):
         st.caption(
             f"{len(slide_ids)} slides"
@@ -1429,7 +1589,7 @@ def _render_slide_selector(
             width=0,
         )
         with st.container(
-            height=720,
+            height=850,
             border=False,
             key="main_slide_preview_scroll",
         ):
@@ -1716,16 +1876,23 @@ def _render_header(
 ) -> None:
     del view
 
-    st.title("AttentiveSlides")
-
-    st.caption(
-        "Select a slide region, state your learning goal, "
-        "and receive a grounded tutor response."
+    st.markdown(
+        """
+        <div class="attentive-top-brand">
+            <span class="attentive-top-title">AttentiveSlides</span>
+            <span class="attentive-top-tagline">
+                Select a slide region, state your learning goal, and receive a grounded tutor response.
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 
 @st.fragment(run_every=0.5)
-def _render_fatigue_periodic(resources: MainLiveResources) -> None:
+def _render_fatigue_probability_periodic(
+    resources: MainLiveResources,
+) -> None:
     snapshot = resources.fatigue_store.snapshot()
     view = build_fatigue_status_view(
         snapshot,
@@ -1734,9 +1901,21 @@ def _render_fatigue_periodic(resources: MainLiveResources) -> None:
             and st.session_state.get("main_live_master_enabled")
         ),
     )
-    st.caption(view.probability_text)
-    if view.show_alert:
-        st.warning(view.alert_text)
+    alert_html = (
+        '<div class="attentive-fatigue-alert" role="status">'
+        f"{html.escape(view.alert_text)}"
+        "</div>"
+        if view.show_alert
+        else ""
+    )
+    st.markdown(
+        '<div class="attentive-fatigue-status">'
+        f"{alert_html}"
+        '<div class="attentive-fatigue-probability">'
+        f"{html.escape(view.probability_text)}"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
 
 
 
@@ -1756,33 +1935,20 @@ def _render_navigation(
         )
     )
 
-    (
-        left_spacer,
-        previous_column,
-        next_column,
-        right_spacer,
-    ) = st.columns(
-        [0.26, 0.24, 0.24, 0.26],
-        gap="small",
-    )
-
-    del left_spacer
-    del right_spacer
-
-    previous_column.button(
-        "← Previous",
+    st.button(
+        "❮",
         disabled=previous_id is None,
-        width="stretch",
         key="main_previous_slide_button",
+        help="Previous slide",
         on_click=_navigate_to_slide,
         args=(previous_id,),
     )
 
-    next_column.button(
-        "Next →",
+    st.button(
+        "❯",
         disabled=next_id is None,
-        width="stretch",
         key="main_next_slide_button",
+        help="Next slide",
         on_click=_navigate_to_slide,
         args=(next_id,),
     )
@@ -2004,7 +2170,9 @@ def _render_current_slide_llm_aoi_action(
 def _render_slide_workspace(
     view: MainUIViewModel,
     *,
+    browser: Any,
     workspace: UploadedDeckWorkspace,
+    live_resources: MainLiveResources,
 ) -> None:
     drawing_enabled = (
         st.session_state["main_target_scope"]
@@ -2013,50 +2181,62 @@ def _render_slide_workspace(
     if not drawing_enabled:
         _set_whole_slide_target(view)
 
-    _render_current_slide_llm_aoi_action(view, workspace)
+    with st.container(key="main_primary_actions"):
+        llm_column, fatigue_column, slides_column = st.columns(
+            [0.56, 0.29, 0.15],
+            gap="small",
+            vertical_alignment="center",
+        )
+        with llm_column:
+            _render_current_slide_llm_aoi_action(view, workspace)
+        with fatigue_column:
+            _render_fatigue_probability_periodic(live_resources)
+        with slides_column:
+            _render_slide_selector(browser)
 
-    st.slider(
-        "Slide size",
-        min_value=50,
-        max_value=100,
-        step=5,
-        key="main_slide_width_percent",
-        help=(
-            "Resize the displayed slide while preserving normalized AOI "
-            "geometry."
-        ),
-    )
-    payload = render_slide_viewport(
-        deck_id=view.deck_id,
-        slide=view.active_slide,
-        layout_revision=int(
-            st.session_state.get(
-                "main_canvas_revision",
-                0,
-            )
-        ),
-        drawing_enabled=drawing_enabled,
-        show_aoi_overlay=bool(
-            st.session_state["main_show_aoi_overlay"]
-        ),
-        display_width_percent=int(
-            st.session_state["main_slide_width_percent"]
-        ),
-        clear_server_match=(
-            not isinstance(
-                st.session_state.get("main_live_proposal"),
-                LiveInteractionProposal,
-            )
-            and not isinstance(
-                st.session_state.get("main_confirmed_interaction"),
-                dict,
-            )
-        ),
-        key=(
-            "main_slide_viewport_"
-            f"{view.deck_id}_{view.active_slide_id}"
-        ),
-    )
+    with st.container(key="main_slide_scale"):
+        st.slider(
+            "Slide size",
+            min_value=50,
+            max_value=100,
+            step=5,
+            key="main_slide_width_percent",
+            label_visibility="collapsed",
+        )
+
+    with st.container(key="main_slide_stage"):
+        _render_navigation(browser, view)
+        payload = render_slide_viewport(
+            deck_id=view.deck_id,
+            slide=view.active_slide,
+            layout_revision=int(
+                st.session_state.get(
+                    "main_canvas_revision",
+                    0,
+                )
+            ),
+            drawing_enabled=drawing_enabled,
+            show_aoi_overlay=bool(
+                st.session_state["main_show_aoi_overlay"]
+            ),
+            display_width_percent=int(
+                st.session_state["main_slide_width_percent"]
+            ),
+            clear_server_match=(
+                not isinstance(
+                    st.session_state.get("main_live_proposal"),
+                    LiveInteractionProposal,
+                )
+                and not isinstance(
+                    st.session_state.get("main_confirmed_interaction"),
+                    dict,
+                )
+            ),
+            key=(
+                "main_slide_viewport_"
+                f"{view.deck_id}_{view.active_slide_id}"
+            ),
+        )
     if payload is None:
         _render_static_slide(view.active_slide)
         return
@@ -3075,10 +3255,6 @@ def _render_tutor_generation_panel(
     view: MainUIViewModel,
 ) -> None:
     """Render explicit grounded generation with history gates."""
-    st.markdown(
-        "#### Grounded tutor"
-    )
-
     api_configured = bool(
         os.environ.get(
             "DASHSCOPE_API_KEY"
@@ -3115,7 +3291,7 @@ def _render_tutor_generation_panel(
         st.error(
             assessment.message
         )
-    else:
+    elif assessment.code != "confirmation_missing":
         st.info(
             assessment.message
         )
@@ -4030,6 +4206,7 @@ def _render_live_target_column(
             else value
         ),
         on_change=_invalidate_confirmation,
+        label_visibility="collapsed",
     )
     if proposal.predicted_aoi_id:
         st.caption(
@@ -4072,6 +4249,7 @@ def _render_live_interaction(
             height=110,
             placeholder="Speak a request after enabling camera and microphone.",
             on_change=_on_typed_command_change,
+            label_visibility="collapsed",
         )
         if proposal is not None:
             edited = (

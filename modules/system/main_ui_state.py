@@ -106,7 +106,7 @@ def normalize_main_slide_width_percent(value: object) -> int:
     try:
         numeric = float(value)
     except (TypeError, ValueError):
-        return 100
+        return 70
     snapped = int(round(numeric / 5.0) * 5)
     return max(50, min(100, snapped))
 
