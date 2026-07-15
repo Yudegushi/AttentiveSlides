@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from json import JSONDecodeError
 from pathlib import Path
 from threading import RLock
@@ -22,7 +22,9 @@ from .aoi_grouping import (
 )
 from .ocr import OCREngine, TextBox, clamp
 from .slide_parser import SlideParser
-from .llm_aoi import LLMAOIGenerator, sanitized_llm_error
+from modules.common.schemas import VisualContextItem
+
+from .llm_aoi import LLMAOIGenerator, LLMAOIResult, sanitized_llm_error
 
 
 AUTO_AOI_SCHEMA_VERSION = "pdf-semantic-v2"
@@ -328,21 +330,21 @@ class AOIManager:
             return False
         return abs(first.bbox[0] - second.bbox[0]) <= 0.025 and max(0.0, second.bbox[1] - first.bbox[3]) <= 0.025
 
-    def build_llm_guided_aois(
+    def build_llm_guided_slide(
         self,
         image_path: str,
         slide_text: str,
         rule_aois: list[AOI],
         text_aois: list[AOI],
-    ) -> list[AOI]:
-        raw = self.llm_aoi_generator.generate(
+    ) -> tuple[list[AOI], LLMAOIResult]:
+        generation = self.llm_aoi_generator.generate(
             image_path,
             slide_text,
             [self._llm_prompt_aoi(aoi, grounding=False) for aoi in rule_aois],
             [self._llm_prompt_aoi(aoi) for aoi in text_aois],
         )
         aois: list[AOI] = []
-        for item in raw:
+        for item in generation.aois:
             bbox = [float(value) for value in item.get("bbox", [])]
             aoi_type = str(item.get("type", "mixed"))
             anchor_ids = list(dict.fromkeys(
@@ -363,7 +365,7 @@ class AOIManager:
                 include_in_learning=bool(item.get("include_in_learning", True)),
                 anchor_ids=anchor_ids or None,
             ))
-        return aois
+        return aois, generation
 
     @staticmethod
     def _llm_prompt_aoi(aoi: AOI, *, grounding: bool = True) -> dict[str, Any]:
@@ -401,16 +403,33 @@ class AOIManager:
                     self._validate_bbox(aoi.bbox)
                 except ValueError:
                     continue
-                if self._bbox_area(aoi.bbox) < 0.90:
+                width = aoi.bbox[2] - aoi.bbox[0]
+                height = aoi.bbox[3] - aoi.bbox[1]
+                if (
+                    width >= 0.04
+                    and height >= 0.025
+                    and self._bbox_area(aoi.bbox) >= 0.002
+                    and self._bbox_area(aoi.bbox) < 0.90
+                ):
                     candidates.append(aoi)
 
         candidates = self._collapse_same_anchor_outputs(candidates, grounding_aois)
         candidates = self._merge_llm_text_fragments(candidates, grounding_aois)
         candidates.sort(key=lambda aoi: aoi.group_confidence or 0.0, reverse=True)
         resolved: list[AOI] = []
+        visual_count = 0
         for candidate in candidates:
-            if not any(self._same_aoi_category(candidate, other) and self._bbox_iou(candidate.bbox, other.bbox) >= 0.85 for other in resolved):
-                resolved.append(candidate)
+            if any(
+                self._same_aoi_category(candidate, other)
+                and self._bbox_iou(candidate.bbox, other.bbox) >= 0.85
+                for other in resolved
+            ):
+                continue
+            if candidate.type in VISUAL_AOI_TYPES:
+                if visual_count >= 8:
+                    continue
+                visual_count += 1
+            resolved.append(candidate)
         resolved.sort(key=lambda aoi: (aoi.bbox[1], aoi.bbox[0]))
         grounding_tokens = self._learning_tokens([
             aoi for aoi in grounding_aois if aoi.role not in EXCLUDED_ROLES
@@ -628,6 +647,43 @@ class AOIManager:
         union = first_area + second_area - intersection
         return intersection / union if union else 0.0
 
+    @classmethod
+    def _link_visual_context(
+        cls,
+        visual_context: tuple[VisualContextItem, ...],
+        aois: list[AOI],
+    ) -> tuple[VisualContextItem, ...]:
+        compatible_types = {
+            "formula": {"formula"},
+            "chart": {"figure", "diagram"},
+            "diagram": {"diagram", "figure"},
+            "table": {"table"},
+            "image": {"figure"},
+            "code": {"code"},
+            "other": {"mixed", "figure"},
+        }
+        linked: list[VisualContextItem] = []
+        for item in visual_context:
+            matches = [
+                (cls._bbox_iou(item.bbox, aoi.bbox), aoi)
+                for aoi in aois
+                if aoi.type in compatible_types.get(item.type, set())
+            ]
+            best_iou, best_aoi = max(
+                matches,
+                key=lambda match: match[0],
+                default=(0.0, None),
+            )
+            linked.append(replace(
+                item,
+                linked_aoi_id=(
+                    best_aoi.aoi_id
+                    if best_aoi is not None and best_iou >= 0.65
+                    else None
+                ),
+            ))
+        return tuple(linked)
+
     def build_pdf_semantic_aois(
         self,
         text_boxes: list[TextBox],
@@ -676,12 +732,15 @@ class AOIManager:
             if previous.get("llm_aoi_status") == "used" and previous.get("llm_aoi_profile") == expected:
                 for field in (
                     "llm_aois", "llm_aoi_status", "llm_aoi_model", "llm_aoi_profile",
-                    "llm_aoi_anchor_digest", "llm_aoi_error",
+                    "llm_aoi_anchor_digest", "llm_aoi_error", "llm_visual_context",
+                    "llm_visual_context_status",
                 ):
                     data[field] = previous.get(field)
             else:
                 data.update({
                     "llm_aois": [],
+                    "llm_visual_context": [],
+                    "llm_visual_context_status": "empty",
                     "llm_aoi_status": "not_requested",
                     "llm_aoi_model": None,
                     "llm_aoi_profile": None,
@@ -741,14 +800,19 @@ class AOIManager:
             if self._is_content_grounding_aoi(candidate):
                 anchor_aois.append(candidate)
         try:
-            llm_aois = self.reconcile_llm_aois(
-                self.build_llm_guided_aois(
-                    str(slide_data.get("slide_image_path", "")),
-                    str(slide_data.get("ocr_text", "")),
-                    rule_aois,
-                    anchor_aois,
-                ),
+            generated_aois, generation = self.build_llm_guided_slide(
+                str(slide_data.get("slide_image_path", "")),
+                str(slide_data.get("ocr_text", "")),
+                rule_aois,
                 anchor_aois,
+            )
+            llm_aois = self.reconcile_llm_aois(
+                generated_aois,
+                anchor_aois,
+            )
+            visual_context = self._link_visual_context(
+                generation.visual_context,
+                llm_aois,
             )
             with self._lock:
                 current = self.manifest[key]
@@ -756,6 +820,10 @@ class AOIManager:
                     raise RuntimeError("Deterministic AOIs changed during LLM generation")
                 current.update({
                     "llm_aois": [aoi.to_dict() for aoi in llm_aois],
+                    "llm_visual_context": [
+                        item.to_dict() for item in visual_context
+                    ],
+                    "llm_visual_context_status": generation.visual_context_status,
                     "llm_aoi_status": "used",
                     "llm_aoi_model": str(self.llm_aoi_generator.config.model),
                     "llm_aoi_profile": expected_profile,
@@ -771,6 +839,8 @@ class AOIManager:
                 if self._anchor_digest(current) == anchor_digest:
                     current.update({
                         "llm_aois": [],
+                        "llm_visual_context": [],
+                        "llm_visual_context_status": "empty",
                         "llm_aoi_status": "fallback_used",
                         "llm_aoi_model": str(self.llm_aoi_generator.config.model),
                         "llm_aoi_profile": None,
@@ -800,6 +870,8 @@ class AOIManager:
                 "expected_profile": None,
                 "eligible": False,
                 "aoi_count": 0,
+                "visual_count": 0,
+                "visual_context_status": "empty",
                 "error": None,
             }
         digest = self._anchor_digest(slide_data)
@@ -816,6 +888,10 @@ class AOIManager:
             "expected_profile": expected_profile,
             "eligible": eligible,
             "aoi_count": len(llm_aois),
+            "visual_count": len(slide_data.get("llm_visual_context", [])),
+            "visual_context_status": str(
+                slide_data.get("llm_visual_context_status", "empty")
+            ),
             "error": slide_data.get("llm_aoi_error"),
         }
 

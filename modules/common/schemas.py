@@ -46,6 +46,21 @@ class AOI:
 
 
 @dataclass(frozen=True)
+class VisualContextItem:
+    visual_id: str
+    type: str
+    bbox: list[float]
+    description: str
+    transcription: str = ""
+    confidence: float = 0.7
+    linked_aoi_id: str | None = None
+    provenance: str = "llm_visual_analysis"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class GazePrediction:
     slide_id: int
     gaze_grid: str

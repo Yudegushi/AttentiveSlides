@@ -8,11 +8,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from modules.common.schemas import VisualContextItem
 from modules.slide.aoi_manager import AOI, AOIManager, SlideAOIData
 from modules.slide.llm_aoi import (
     PROMPT_SCHEMA_VERSION,
     LLMAOIConfig,
     LLMAOIGenerator,
+    LLMAOIResult,
     sanitized_llm_error,
 )
 
@@ -27,7 +29,11 @@ PNG = (
 
 class FakeLLMGenerator:
     def __init__(self, *, result=None, error=None, profile="profile-a"):
-        self.result = result or []
+        self.result = result if isinstance(result, LLMAOIResult) else LLMAOIResult(
+            aois=tuple(result or []),
+            visual_context=(),
+            visual_context_status="empty",
+        )
         self.error = error
         self.calls = 0
         self.config = SimpleNamespace(model="fake-vlm")
@@ -47,7 +53,7 @@ class FakeLLMGenerator:
         self.last_text_aois = list(text_aois)
         if self.error is not None:
             raise self.error
-        return list(self.result)
+        return self.result
 
 
 def llm_item(text="alpha beta gamma delta", *, aoi_type="text", bbox=None, anchor_ids=None):
@@ -65,6 +71,37 @@ def llm_item(text="alpha beta gamma delta", *, aoi_type="text", bbox=None, ancho
     elif aoi_type in {"title", "text", "caption", "footer", "axis_label"}:
         item["anchor_ids"] = ["pdf_paragraph_1"]
     return item
+
+
+def visual_item(
+    *,
+    item_type="formula",
+    bbox=None,
+    description="Conditional probability formula.",
+    transcription="p(y | x)",
+    confidence=0.9,
+):
+    return {
+        "type": item_type,
+        "bbox": bbox or [0.2, 0.3, 0.7, 0.45],
+        "description": description,
+        "transcription": transcription,
+        "confidence": confidence,
+    }
+
+
+class FakeHTTPResponse:
+    def __init__(self, body):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self):
+        return self.body
 
 
 def grounding_anchor(
@@ -101,6 +138,99 @@ def grounding_anchor(
 
 
 class LLMAOIGeneratorValidationTest(unittest.TestCase):
+    def test_generator_returns_aois_and_formula_visual_context(self):
+        provider_payload = {
+            "choices": [{"message": {"content": json.dumps({
+                "aois": [{
+                    "type": "formula",
+                    "bbox": [0.2, 0.3, 0.7, 0.45],
+                    "text": "",
+                    "confidence": 0.91,
+                }],
+                "visual_context": {"items": [visual_item(
+                    description="A conditional-probability formula.",
+                    transcription="p(y | x)",
+                    confidence=0.91,
+                )]},
+            })}}],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "slide.png"
+            image_path.write_bytes(PNG)
+            generator = LLMAOIGenerator(LLMAOIConfig(
+                endpoint="https://example.invalid/chat/completions",
+                api_key="secret",
+                model="fake-vlm",
+            ))
+            with patch(
+                "modules.slide.llm_aoi.urllib.request.urlopen",
+                return_value=FakeHTTPResponse(json.dumps(provider_payload).encode()),
+            ) as urlopen:
+                result = generator.generate(str(image_path), "", [], [])
+
+        self.assertEqual(urlopen.call_count, 1)
+        self.assertEqual(len(result.aois), 1)
+        self.assertEqual(result.visual_context_status, "used")
+        self.assertEqual(result.visual_context[0].description, "A conditional-probability formula.")
+        self.assertEqual(result.visual_context[0].transcription, "p(y | x)")
+
+    def test_malformed_visual_context_does_not_reject_valid_aois(self):
+        generator = LLMAOIGenerator()
+        aois = tuple(generator._validate_aois([{
+            "type": "diagram",
+            "bbox": [0.1, 0.1, 0.5, 0.5],
+            "text": "",
+        }]))
+        visual_context, status = generator._validate_visual_context(
+            {"items": "not-a-list"},
+            field_present=True,
+        )
+
+        self.assertEqual(len(aois), 1)
+        self.assertEqual(visual_context, ())
+        self.assertEqual(status, "invalid")
+
+    def test_visual_context_filters_tiny_low_confidence_and_duplicate_items(self):
+        generator = LLMAOIGenerator()
+        items, status = generator._validate_visual_context({"items": [
+            visual_item(confidence=0.91),
+            visual_item(bbox=[0.205, 0.302, 0.695, 0.448], confidence=0.8),
+            visual_item(bbox=[0.1, 0.1, 0.12, 0.12], confidence=0.99),
+            visual_item(bbox=[0.1, 0.6, 0.4, 0.8], confidence=0.54),
+        ]}, field_present=True)
+
+        self.assertEqual(status, "used")
+        self.assertEqual(len(items), 1)
+        self.assertGreaterEqual(items[0].bbox[2] - items[0].bbox[0], 0.04)
+        self.assertGreaterEqual(items[0].bbox[3] - items[0].bbox[1], 0.025)
+        self.assertGreaterEqual(
+            (items[0].bbox[2] - items[0].bbox[0])
+            * (items[0].bbox[3] - items[0].bbox[1]),
+            0.002,
+        )
+
+    def test_visual_context_is_capped_at_six_items(self):
+        generator = LLMAOIGenerator()
+        raw_items = [
+            visual_item(
+                item_type="chart",
+                bbox=[0.05 + index * 0.1, 0.2, 0.12 + index * 0.1, 0.3],
+                description=f"Chart {index}",
+                transcription="",
+                confidence=0.99 - index * 0.01,
+            )
+            for index in range(8)
+        ]
+
+        items, status = generator._validate_visual_context(
+            {"items": raw_items},
+            field_present=True,
+        )
+
+        self.assertEqual(status, "used")
+        self.assertEqual(len(items), 6)
+        self.assertEqual([item.visual_id for item in items], [f"visual_{i}" for i in range(1, 7)])
+
     def test_sanitized_error_never_echoes_arbitrary_exception_text(self):
         sentinel = "SENTINEL_ENDPOINT_TOKEN"
 
@@ -128,7 +258,7 @@ class LLMAOIGeneratorValidationTest(unittest.TestCase):
         self.assertEqual(result[0]["group_confidence"], 0.8)
 
 
-class LLMAOIPromptV2Test(unittest.TestCase):
+class LLMAOIPromptV3Test(unittest.TestCase):
     def prompt(self) -> str:
         return LLMAOIGenerator._prompt("slide text", [], [])
 
@@ -170,8 +300,15 @@ class LLMAOIPromptV2Test(unittest.TestCase):
         v1_profile = hashlib.sha256(
             json.dumps(v1_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        self.assertEqual(PROMPT_SCHEMA_VERSION, "attentive-llm-aoi-v2")
+        self.assertEqual(PROMPT_SCHEMA_VERSION, "attentive-llm-aoi-v3-visual-context")
         self.assertNotEqual(generator.profile(anchor_digest), v1_profile)
+
+    def test_prompt_requests_visual_context_in_same_response(self) -> None:
+        prompt = self.prompt()
+        self.assertIn("In the same JSON object, optionally return visual_context.items.", prompt)
+        self.assertIn("transcription", prompt)
+        self.assertIn("description", prompt)
+        self.assertIn("Do not duplicate overlapping visual items or AOIs.", prompt)
 
     def test_anchored_text_without_bbox_is_valid(self) -> None:
         result = LLMAOIGenerator()._validate_aois([
@@ -253,6 +390,67 @@ class LLMAOIManagerTest(unittest.TestCase):
         self.assertEqual(json.dumps(first["aois"], ensure_ascii=False), before)
         manager.process_llm_aoi("deck", 1, allow_ocr=False, force=True)
         self.assertEqual(generator.calls, 2)
+
+    def test_successful_cache_persists_visual_context_and_status(self):
+        generator = FakeLLMGenerator(result=LLMAOIResult(
+            aois=(
+                llm_item("alpha beta gamma delta epsilon zeta eta theta"),
+                llm_item("visual", aoi_type="formula", bbox=[0.2, 0.3, 0.7, 0.45]),
+            ),
+            visual_context=(VisualContextItem(
+                visual_id="visual_1",
+                type="formula",
+                bbox=[0.2, 0.3, 0.7, 0.45],
+                description="A conditional-probability formula.",
+                transcription="p(y | x)",
+                confidence=0.91,
+            ),),
+            visual_context_status="used",
+        ))
+        manager = self.seeded_manager(generator)
+
+        result = manager.process_llm_aoi("deck", 1, allow_ocr=False)
+
+        self.assertEqual(result["llm_visual_context_status"], "used")
+        self.assertEqual(result["llm_visual_context"][0]["description"], "A conditional-probability formula.")
+        self.assertEqual(result["llm_visual_context"][0]["transcription"], "p(y | x)")
+        self.assertEqual(result["llm_visual_context"][0]["linked_aoi_id"], "llm_aoi_2")
+
+    def test_aoi_fallback_clears_visual_context_without_leaking_error_details(self):
+        sentinel = "SENTINEL_PROVIDER_SECRET"
+        manager = self.seeded_manager(FakeLLMGenerator(error=RuntimeError(sentinel)))
+
+        result = manager.process_llm_aoi("deck", 1, allow_ocr=False)
+
+        self.assertEqual(result["llm_aoi_status"], "fallback_used")
+        self.assertEqual(result["llm_visual_context"], [])
+        self.assertEqual(result["llm_visual_context_status"], "empty")
+        self.assertNotIn(sentinel, json.dumps(result))
+
+    def test_cached_profile_returns_visual_count_without_second_generation(self):
+        generator = FakeLLMGenerator(result=LLMAOIResult(
+            aois=(
+                llm_item("alpha beta gamma delta epsilon zeta eta theta"),
+                llm_item("visual", aoi_type="diagram", bbox=[0.2, 0.3, 0.7, 0.6]),
+            ),
+            visual_context=(VisualContextItem(
+                visual_id="visual_1",
+                type="diagram",
+                bbox=[0.2, 0.3, 0.7, 0.6],
+                description="A flow diagram.",
+            ),),
+            visual_context_status="used",
+        ))
+        manager = self.seeded_manager(generator)
+
+        manager.process_llm_aoi("deck", 1, allow_ocr=False)
+        manager.process_llm_aoi("deck", 1, allow_ocr=False)
+        state = manager.get_llm_aoi_state("deck", 1)
+
+        self.assertEqual(generator.calls, 1)
+        self.assertTrue(state["eligible"])
+        self.assertEqual(state["visual_count"], 1)
+        self.assertEqual(state["visual_context_status"], "used")
 
     def test_generator_receives_only_flat_stable_anchor_fields(self):
         generator = FakeLLMGenerator(result=[llm_item("alpha beta gamma delta epsilon zeta eta theta")])
@@ -482,6 +680,62 @@ class LLMAOIProvenanceReconciliationTest(unittest.TestCase):
 
         self.assertEqual(result[0].bbox, [0.55, 0.25, 0.90, 0.70])
         self.assertEqual(result[0].type, "figure")
+
+    def test_reconciliation_links_visual_item_to_final_visual_aoi(self) -> None:
+        aois = self.manager.reconcile_llm_aois([
+            AOI("model", [0.2, 0.3, 0.7, 0.45], "formula", "", source="llm_guided"),
+        ], [])
+        items = self.manager._link_visual_context((VisualContextItem(
+            visual_id="visual_1",
+            type="formula",
+            bbox=[0.2, 0.3, 0.7, 0.45],
+            description="A formula.",
+        ),), aois)
+
+        self.assertEqual(aois[0].aoi_id, "llm_aoi_1")
+        self.assertEqual(items[0].linked_aoi_id, "llm_aoi_1")
+
+    def test_unmatched_visual_item_remains_without_linked_aoi(self) -> None:
+        aois = self.manager.reconcile_llm_aois([
+            AOI("model", [0.7, 0.7, 0.9, 0.9], "figure", "", source="llm_guided"),
+        ], [])
+        items = self.manager._link_visual_context((VisualContextItem(
+            visual_id="visual_1",
+            type="formula",
+            bbox=[0.1, 0.1, 0.4, 0.2],
+            description="A formula.",
+        ),), aois)
+
+        self.assertIsNone(items[0].linked_aoi_id)
+
+    def test_visual_aoi_candidates_are_deduplicated_and_capped_at_eight(self) -> None:
+        candidates = [
+            AOI(
+                f"visual_{index}",
+                [0.03 + (index % 5) * 0.19, 0.05 + (index // 5) * 0.3,
+                 0.15 + (index % 5) * 0.19, 0.18 + (index // 5) * 0.3],
+                "figure",
+                "",
+                source="llm_guided",
+                group_confidence=0.99 - index * 0.01,
+            )
+            for index in range(10)
+        ]
+        candidates.append(AOI(
+            "duplicate",
+            list(candidates[0].bbox),
+            "diagram",
+            "",
+            source="llm_guided",
+            group_confidence=0.5,
+        ))
+
+        result = self.manager.reconcile_llm_aois(candidates, [])
+
+        self.assertEqual(len(result), 8)
+        for index, first in enumerate(result):
+            for second in result[index + 1:]:
+                self.assertLess(self.manager._bbox_iou(first.bbox, second.bbox), 0.85)
 
     def test_anchored_title_type_is_canonicalized_to_text(self) -> None:
         grounding = [grounding_anchor("a", "Body paragraph", [0.10, 0.20, 0.70, 0.30])]
