@@ -1,6 +1,6 @@
 import unittest
 
-from modules.common.schemas import AOI, GazePrediction, LearningState
+from modules.common.schemas import AOI, GazePrediction, LearningState, VisualContextItem
 from modules.system.adapters import (
     MockManifestSlideProvider,
     PipelineInputBundle,
@@ -9,6 +9,7 @@ from modules.system.adapters import (
     ScenarioTranscriptProvider,
     build_pipeline_input_bundle,
     run_interaction_from_bundle,
+    SlideFrame,
 )
 from modules.system.pipeline import run_interaction
 from modules.system.scenarios import load_scenarios
@@ -50,6 +51,30 @@ class SystemAdaptersTest(unittest.TestCase):
         self.assertIn("neighbor_slide_text", slide)
         self.assertIn("aois", slide)
         self.assertTrue(all(isinstance(aoi, AOI) for aoi in aois))
+
+    def test_provider_backed_store_preserves_visual_context(self):
+        visual = VisualContextItem(
+            visual_id="visual_1",
+            type="diagram",
+            bbox=[0.2, 0.3, 0.7, 0.6],
+            description="A flow diagram.",
+        )
+
+        class Provider:
+            deck_id = "deck"
+
+            def get_slide_frame(self, slide_id):
+                return SlideFrame(
+                    deck_id="deck",
+                    slide_id=slide_id,
+                    aois=[],
+                    slide_text="text",
+                    visual_context=(visual,),
+                )
+
+        slide = ProviderBackedDeckStore(Provider()).get_slide(1)
+
+        self.assertEqual(slide["visual_context"], [visual.to_dict()])
 
     def test_build_pipeline_input_bundle_can_run_existing_pipeline(self):
         scenario = load_scenarios()[0]

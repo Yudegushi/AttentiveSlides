@@ -40,6 +40,26 @@ TutorGenerationStatus = Literal[
 ]
 
 
+def _linked_visual_context_text(
+    slide: MainUISlide,
+    aoi_id: str,
+) -> str:
+    for item in slide.visual_context:
+        if item.linked_aoi_id != aoi_id:
+            continue
+        parts = []
+        if item.transcription.strip():
+            parts.append(
+                f"Visible transcription: {item.transcription.strip()}"
+            )
+        if item.description.strip():
+            parts.append(
+                f"Visual description: {item.description.strip()}"
+            )
+        return "\n".join(parts)
+    return ""
+
+
 @dataclass(frozen=True)
 class TutorGenerationAssessment:
     """Whether the current Main UI turn can call the tutor."""
@@ -384,6 +404,10 @@ def build_main_tutor_context(
         wrapper_context
         or metadata_context
         or current_aoi.text.strip()
+        or _linked_visual_context_text(
+            slide,
+            current_aoi.aoi_id,
+        )
         or slide.slide_text.strip()
     )
 
@@ -419,6 +443,9 @@ def build_main_tutor_context(
         interaction_history=history_items,
         adaptive_strategy=(
             resolved_query.adaptive_strategy
+        ),
+        visual_context=list(
+            slide.visual_context
         ),
     )
 

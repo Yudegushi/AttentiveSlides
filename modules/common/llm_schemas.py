@@ -23,6 +23,7 @@ from modules.common.schemas import AdaptiveStrategy, IntentName
 SourceKind = Literal[
     "confirmed_aoi",
     "current_slide",
+    "visual_observation",
     "neighbor_slide",
     "interaction_history",
 ]
@@ -50,6 +51,7 @@ TutorResponseMode = Literal[
 _ALLOWED_SOURCE_KINDS = {
     "confirmed_aoi",
     "current_slide",
+    "visual_observation",
     "neighbor_slide",
     "interaction_history",
 }

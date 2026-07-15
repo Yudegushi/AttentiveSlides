@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from modules.common.schemas import AOI
+from modules.common.schemas import AOI, VisualContextItem
 from modules.slide.aoi_manager import (
     AOIManager,
 )
@@ -494,6 +494,32 @@ class UploadedDeckWorkspace:
             )
         ).strip()
 
+        visual_context: tuple[VisualContextItem, ...] = ()
+        if (
+            aoi_profile != "deterministic"
+            and slide_data.get("llm_visual_context_status") == "used"
+        ):
+            loaded_items: list[VisualContextItem] = []
+            for raw_item in slide_data.get("llm_visual_context", []):
+                if not isinstance(raw_item, dict):
+                    continue
+                try:
+                    item = VisualContextItem(**raw_item)
+                    x1, y1, x2, y2 = (
+                        float(value) for value in item.bbox
+                    )
+                except (TypeError, ValueError):
+                    continue
+                if (
+                    not item.visual_id.strip()
+                    or not item.description.strip()
+                    or item.provenance != "llm_visual_analysis"
+                    or not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1)
+                ):
+                    continue
+                loaded_items.append(item)
+            visual_context = tuple(loaded_items)
+
         return MainUISlide(
             slide_id=slide_id,
             slide_text=str(
@@ -514,6 +540,7 @@ class UploadedDeckWorkspace:
                 else None
             ),
             aoi_profile=aoi_profile,
+            visual_context=visual_context,
         )
 
     def _get_or_process_slide(

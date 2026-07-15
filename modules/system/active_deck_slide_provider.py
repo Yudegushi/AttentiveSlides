@@ -34,4 +34,5 @@ class ActiveDeckSlideProvider:
             slide_text=slide.slide_text,
             neighbor_slide_text=slide.neighbor_slide_text,
             slide_image_path=slide.image_path,
+            visual_context=slide.visual_context,
         )

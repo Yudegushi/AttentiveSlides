@@ -8,7 +8,7 @@ from pathlib import Path
 from collections.abc import Callable, MutableMapping
 from typing import Any
 
-from modules.common.schemas import AOI
+from modules.common.schemas import AOI, VisualContextItem
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,7 @@ class MainUISlide:
     aois: tuple[AOI, ...]
     image_path: str | None = None
     aoi_profile: str = "deterministic"
+    visual_context: tuple[VisualContextItem, ...] = ()
 
     @property
     def image_available(self) -> bool:
@@ -39,6 +40,10 @@ class MainUISlide:
             "image_path": self.image_path,
             "image_available": self.image_available,
             "aoi_profile": self.aoi_profile,
+            "visual_context": [
+                item.to_dict()
+                for item in self.visual_context
+            ],
             "aois": [
                 asdict(aoi)
                 for aoi in self.aois

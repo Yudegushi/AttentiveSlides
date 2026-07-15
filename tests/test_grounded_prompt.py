@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from dataclasses import replace
 
 from modules.common.llm_schemas import (
     ContextSource,
@@ -107,6 +108,45 @@ class TestGroundedPromptBuilder(unittest.TestCase):
             "Do not reveal hidden chain-of-thought",
             prompt.system_prompt,
         )
+
+    def test_grounded_prompt_marks_visual_observation_as_model_derived(self) -> None:
+        visual = ContextSource(
+            source_id="slide_002_visual_01",
+            slide_id=2,
+            source_kind="visual_observation",
+            text=(
+                "Description: A conditional-probability formula.\n"
+                "Visible transcription: p(y | x)"
+            ),
+            metadata={
+                "confidence": 0.91,
+                "provenance": "llm_visual_analysis",
+            },
+        )
+        request = replace(
+            self.make_request(),
+            sources=[
+                self.current_slide_source,
+                visual,
+                self.confirmed_source,
+            ],
+        )
+
+        prompt = GroundedPromptBuilder().build(request)
+
+        self.assertIn(
+            "model-derived reading of the slide",
+            prompt.system_prompt,
+        )
+        self.assertIn(
+            "may contain transcription errors",
+            prompt.system_prompt,
+        )
+        self.assertIn(
+            "Never interpret a visual observation as evidence of the learner's",
+            prompt.system_prompt,
+        )
+        self.assertIn('"provenance": "llm_visual_analysis"', prompt.user_prompt)
 
     def test_confirmed_aoi_source_is_ordered_first(self) -> None:
         prompt = GroundedPromptBuilder().build(

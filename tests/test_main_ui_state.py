@@ -6,6 +6,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from modules.common.schemas import VisualContextItem
+from modules.slide.aoi_manager import AUTO_AOI_SCHEMA_VERSION
+from modules.system.uploaded_deck_service import UploadedDeckWorkspace
 
 from modules.system.main_ui_state import (
     ManifestDeckBrowser,
@@ -85,6 +90,64 @@ class TestMainUIState(unittest.TestCase):
         self.assertEqual(default.aoi_profile, "deterministic")
         self.assertEqual(default.to_dict()["aoi_profile"], "deterministic")
         self.assertEqual(selected.to_dict()["aoi_profile"], "profile-a")
+
+    def test_uploaded_slide_exposes_visual_context_only_for_eligible_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = UploadedDeckWorkspace(directory)
+            workspace.slide_parser.metadata["deck"] = {
+                "deck_id": "deck",
+                "original_name": "deck.pdf",
+                "pdf_path": str(Path(directory) / "deck.pdf"),
+                "page_count": 1,
+            }
+            visual = VisualContextItem(
+                visual_id="visual_1",
+                type="formula",
+                bbox=[0.2, 0.3, 0.7, 0.45],
+                description="A conditional-probability formula.",
+                transcription="p(y | x)",
+                confidence=0.91,
+                linked_aoi_id="llm_aoi_1",
+            )
+            slide_data = {
+                "slide_id": 1,
+                "slide_image_path": "",
+                "ocr_text": "Slide text",
+                "auto_aoi_version": AUTO_AOI_SCHEMA_VERSION,
+                "llm_visual_context": [visual.to_dict()],
+                "llm_visual_context_status": "used",
+            }
+            raw_aois = [{
+                "aoi_id": "llm_aoi_1",
+                "bbox": [0.2, 0.3, 0.7, 0.45],
+                "type": "formula",
+                "text": "",
+            }]
+
+            with patch.object(
+                workspace,
+                "_get_or_process_slide",
+                return_value=slide_data,
+            ), patch.object(
+                workspace.aoi_manager,
+                "get_effective_aois",
+                return_value=(raw_aois, "eligible-profile"),
+            ):
+                enhanced = workspace.get_slide("deck", 1, use_llm_aoi=True)
+
+            with patch.object(
+                workspace,
+                "_get_or_process_slide",
+                return_value=slide_data,
+            ), patch.object(
+                workspace.aoi_manager,
+                "get_effective_aois",
+                return_value=(raw_aois, "deterministic"),
+            ):
+                deterministic = workspace.get_slide("deck", 1, use_llm_aoi=True)
+
+            self.assertEqual(enhanced.visual_context, (visual,))
+            self.assertEqual(deterministic.visual_context, ())
 
     def test_slide_width_is_clamped_and_snapped(self) -> None:
         from modules.system.main_ui_state import (

@@ -7,7 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from modules.common.schemas import AOI, GazePrediction, InteractionResult, LearningState, Transcript
+from modules.common.schemas import (
+    AOI,
+    GazePrediction,
+    InteractionResult,
+    LearningState,
+    Transcript,
+    VisualContextItem,
+)
 from modules.interaction.interaction_history import InteractionHistory
 from modules.logging.interaction_logger import InteractionLogger
 from modules.system.pipeline import run_interaction
@@ -24,6 +31,7 @@ class SlideFrame:
     slide_text: str
     neighbor_slide_text: str = ""
     slide_image_path: str | None = None
+    visual_context: tuple[VisualContextItem, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -79,6 +87,10 @@ class MockManifestSlideProvider:
             slide_text=str(slide["ocr_text"]),
             neighbor_slide_text=str(slide.get("neighbor_slide_text", "")),
             slide_image_path=_optional_string(slide.get("slide_image_path")),
+            visual_context=tuple(
+                VisualContextItem(**item)
+                for item in slide.get("visual_context", [])
+            ),
         )
 
     def _load_manifest(self) -> dict[str, Any]:
@@ -148,6 +160,10 @@ class ProviderBackedDeckStore:
             "slide_image_path": frame.slide_image_path,
             "ocr_text": frame.slide_text,
             "neighbor_slide_text": frame.neighbor_slide_text,
+            "visual_context": [
+                item.to_dict()
+                for item in frame.visual_context
+            ],
             "aois": [
                 {
                     "aoi_id": aoi.aoi_id,

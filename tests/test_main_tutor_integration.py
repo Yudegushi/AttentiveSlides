@@ -17,6 +17,7 @@ from modules.common.llm_schemas import (
 )
 from modules.common.schemas import (
     AOI,
+    VisualContextItem,
 )
 from modules.system.main_tutor_integration import (
     assess_tutor_generation,
@@ -378,6 +379,66 @@ class TestMainTutorIntegration(
                 "on a single location."
             ),
         )
+
+    def test_linked_visual_context_precedes_whole_slide_fallback_for_visual_aoi(self) -> None:
+        slide = MainUISlide(
+            slide_id=5,
+            slide_text="Whole-slide fallback text.",
+            neighbor_slide_text="",
+            aois=(AOI(
+                aoi_id="formula_aoi",
+                bbox=[0.2, 0.3, 0.7, 0.45],
+                type="formula",
+                text="",
+            ),),
+            visual_context=(VisualContextItem(
+                visual_id="visual_1",
+                type="formula",
+                bbox=[0.2, 0.3, 0.7, 0.45],
+                description="A conditional-probability formula.",
+                transcription="p(y | x)",
+                confidence=0.91,
+                linked_aoi_id="formula_aoi",
+            ),),
+        )
+        interaction = InteractionInput(
+            interaction_id="visual_001",
+            deck_id="demo_deck",
+            slide_id=5,
+            mode="manual",
+            target=TargetInput(
+                source="manual_rectangle",
+                slide_id=5,
+                bbox=(0.2, 0.3, 0.7, 0.45),
+                selected_aoi_id="formula_aoi",
+                alternatives=(TargetCandidate(
+                    aoi_id="formula_aoi",
+                    score=0.95,
+                ),),
+            ),
+            intent=IntentInput(
+                source="typed_text",
+                text="explain this formula",
+            ),
+            confirmation=ConfirmationInput(
+                confirmed=True,
+                source="explicit_user_confirmation",
+                confirmed_aoi_id="formula_aoi",
+            ),
+        )
+
+        build = build_main_tutor_context(
+            {"interaction": interaction.to_dict()},
+            slide=slide,
+        )
+
+        self.assertEqual(
+            build.confirmed_context,
+            "Visible transcription: p(y | x)\n"
+            "Visual description: A conditional-probability formula.",
+        )
+        self.assertNotEqual(build.confirmed_context, slide.slide_text)
+        self.assertEqual(build.context.visual_context, list(slide.visual_context))
 
     def test_whole_slide_aoi_is_synthesized(
         self,

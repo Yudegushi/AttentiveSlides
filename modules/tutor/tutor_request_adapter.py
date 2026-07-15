@@ -144,6 +144,36 @@ class TutorRequestAdapter:
                 )
             )
 
+        for index, item in enumerate(
+            context.visual_context,
+            start=1,
+        ):
+            text_parts = [
+                f"Description: {item.description.strip()}"
+            ]
+            if item.transcription.strip():
+                text_parts.append(
+                    "Visible transcription: "
+                    f"{item.transcription.strip()}"
+                )
+            sources.append(ContextSource(
+                source_id=(
+                    f"slide_{context.slide_id:03d}"
+                    f"_visual_{index:02d}"
+                ),
+                slide_id=context.slide_id,
+                source_kind="visual_observation",
+                text="\n".join(text_parts),
+                aoi_id=item.linked_aoi_id,
+                title=f"Visual observation {index}",
+                metadata={
+                    "visual_type": item.type,
+                    "bbox": list(item.bbox),
+                    "confidence": item.confidence,
+                    "provenance": item.provenance,
+                },
+            ))
+
         if context.neighbor_slide_text.strip():
             sources.append(
                 ContextSource(

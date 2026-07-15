@@ -126,6 +126,7 @@ class TutorContext:
     resolved_query: ResolvedQuery
     interaction_history: list[dict[str, Any]] = field(default_factory=list)
     adaptive_strategy: AdaptiveStrategy = "normal"
+    visual_context: list[VisualContextItem] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

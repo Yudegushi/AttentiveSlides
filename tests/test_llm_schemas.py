@@ -42,6 +42,17 @@ class TestContextSource(unittest.TestCase):
         )
         self.assertEqual(payload["aoi_id"], "aoi_1")
 
+    def test_visual_observation_source_kind_is_supported(self) -> None:
+        source = ContextSource(
+            source_id="slide_007_visual_01",
+            slide_id=7,
+            source_kind="visual_observation",
+            text="Description: A visible formula.",
+            metadata={"provenance": "llm_visual_analysis"},
+        )
+
+        self.assertEqual(source.source_kind, "visual_observation")
+
 
 class TestTutorLLMRequest(unittest.TestCase):
     def setUp(self) -> None:
