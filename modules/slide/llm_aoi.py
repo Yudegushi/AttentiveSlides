@@ -15,7 +15,7 @@ from typing import Any, Literal
 from modules.common.schemas import VisualContextItem
 
 
-PROMPT_SCHEMA_VERSION = "attentive-llm-aoi-v3-visual-context"
+PROMPT_SCHEMA_VERSION = "attentive-llm-aoi-v4-visual-aoi-promotion"
 ALLOWED_AOI_TYPES = {
     "title", "text", "figure", "diagram", "table", "formula", "code",
     "caption", "footer", "axis_label", "mixed", "whole_slide",
@@ -170,6 +170,8 @@ class LLMAOIGenerator:
             "For each item return type,bbox,description,transcription,confidence. "
             "For formulas and readable code, preserve the visible content in transcription and explain its visible role separately in description. "
             "For each self-contained targetable visual item, also return one matching visual AOI with the same region. "
+            "Every formula visual_context item must also appear as one type=formula AOI with the same bbox. "
+            "Every targetable chart, diagram, table, or code visual_context item must likewise have one matching visual AOI. "
             "Do not duplicate overlapping visual items or AOIs. "
             "Return {\"aois\":[{\"aoi_id\":\"llm_aoi_1\",\"type\":\"text\","
             "\"anchor_ids\":[\"pdf_paragraph_1\"],\"text\":\"...\",\"confidence\":0.85},"

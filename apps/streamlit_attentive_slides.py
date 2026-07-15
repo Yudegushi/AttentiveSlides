@@ -26,6 +26,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     )
 
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import (
     Image,
     ImageDraw,
@@ -1296,6 +1297,57 @@ def _target_scope_label(
     return "Select region"
 
 
+def _slide_selector_scroll_html(
+    active_slide_id: int,
+) -> str:
+    active_id = json.dumps(str(active_slide_id))
+    return f"""
+    <script>
+    (() => {{
+      const doc = window.parent.document;
+      const state = window.parent.__attentiveSlideSelectorScroll || {{}};
+      state.activeSlideId = {active_id};
+      state.position = () => {{
+        const root = doc.querySelector('.st-key-main_slide_preview_scroll');
+        if (!root || root.getClientRects().length === 0) return;
+        const target = root.querySelector(
+          `.st-key-main_slide_preview_${{CSS.escape(state.activeSlideId)}}`
+        );
+        if (!target) return;
+        const candidates = [root, ...root.querySelectorAll('*')];
+        const scroller = candidates.find((node) => {{
+          const overflowY = window.parent.getComputedStyle(node).overflowY;
+          return /(auto|scroll)/.test(overflowY)
+            && node.scrollHeight > node.clientHeight + 8;
+        }});
+        if (!scroller) return;
+        const targetBox = target.getBoundingClientRect();
+        const scrollerBox = scroller.getBoundingClientRect();
+        const centeredTop = scroller.scrollTop
+          + targetBox.top - scrollerBox.top
+          - (scroller.clientHeight - targetBox.height) / 2;
+        scroller.scrollTop = Math.max(0, centeredTop);
+      }};
+      state.onPopoverClick = state.onPopoverClick || (() => {{
+        [40, 120, 260].forEach((delay) =>
+          window.parent.setTimeout(() => state.position(), delay)
+        );
+      }});
+      const trigger = doc.querySelector('.st-key-main_slides_popover button');
+      if (trigger && state.boundTrigger !== trigger) {{
+        if (state.boundTrigger) {{
+          state.boundTrigger.removeEventListener('click', state.onPopoverClick);
+        }}
+        trigger.addEventListener('click', state.onPopoverClick);
+        state.boundTrigger = trigger;
+      }}
+      window.parent.__attentiveSlideSelectorScroll = state;
+      window.parent.setTimeout(() => state.position(), 80);
+    }})();
+    </script>
+    """
+
+
 
 def _render_slide_selector(
     browser: Any,
@@ -1340,9 +1392,15 @@ def _render_slide_selector(
         st.caption(
             f"{len(slide_ids)} slides"
         )
+        components.html(
+            _slide_selector_scroll_html(active_slide_id),
+            height=0,
+            width=0,
+        )
         with st.container(
             height=720,
             border=False,
+            key="main_slide_preview_scroll",
         ):
             for slide_id in slide_ids:
                 with st.container(

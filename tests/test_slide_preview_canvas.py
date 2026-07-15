@@ -45,6 +45,18 @@ class TestSlidePreviewCanvas(unittest.TestCase):
         self.assertIn("main_slide_preview_", ast.unparse(selector))
         self.assertIn("_navigate_to_slide", ast.unparse(selector))
 
+    def test_selector_scrolls_to_active_slide_when_popover_opens(self) -> None:
+        selector = ast.unparse(self.functions["_render_slide_selector"])
+        scroll_helper = ast.unparse(
+            self.functions["_slide_selector_scroll_html"]
+        )
+
+        self.assertIn("main_slide_preview_scroll", selector)
+        self.assertIn("_slide_selector_scroll_html(active_slide_id)", selector)
+        self.assertIn("main_slide_preview_", scroll_helper)
+        self.assertIn("addEventListener('click'", scroll_helper)
+        self.assertIn("scrollTop", scroll_helper)
+
     def test_viewport_component_replaces_region_sliders(self) -> None:
         workspace = self.functions["_render_slide_workspace"]
         rendered = ast.unparse(workspace)

@@ -30,6 +30,13 @@ from .llm_aoi import LLMAOIGenerator, LLMAOIResult, sanitized_llm_error
 AUTO_AOI_SCHEMA_VERSION = "pdf-semantic-v2"
 TEXT_AOI_TYPES = frozenset({"title", "text", "caption", "footer", "axis_label"})
 VISUAL_AOI_TYPES = frozenset({"code", "diagram", "figure", "table", "formula", "mixed"})
+VISUAL_CONTEXT_AOI_TYPES = {
+    "formula": "formula",
+    "chart": "figure",
+    "diagram": "diagram",
+    "table": "table",
+    "code": "code",
+}
 
 
 @dataclass
@@ -684,6 +691,42 @@ class AOIManager:
             ))
         return tuple(linked)
 
+    @classmethod
+    def _promote_visual_context_aois(
+        cls,
+        aois: list[AOI],
+        visual_context: tuple[VisualContextItem, ...],
+    ) -> list[AOI]:
+        """Add conservative AOI fallbacks for targetable visual observations."""
+        promoted = list(aois)
+        compatible_types = {
+            "formula": {"formula"},
+            "chart": {"figure", "diagram"},
+            "diagram": {"diagram", "figure"},
+            "table": {"table"},
+            "code": {"code"},
+        }
+        for item in visual_context:
+            aoi_type = VISUAL_CONTEXT_AOI_TYPES.get(item.type)
+            if aoi_type is None:
+                continue
+            if any(
+                aoi.type in compatible_types[item.type]
+                and cls._bbox_iou(item.bbox, aoi.bbox) >= 0.65
+                for aoi in promoted
+            ):
+                continue
+            promoted.append(AOI(
+                aoi_id="",
+                bbox=list(item.bbox),
+                type=aoi_type,
+                text=item.transcription or item.description,
+                source="llm_visual_context",
+                group_confidence=item.confidence,
+                include_in_learning=True,
+            ))
+        return promoted
+
     def build_pdf_semantic_aois(
         self,
         text_boxes: list[TextBox],
@@ -812,6 +855,10 @@ class AOIManager:
                 str(slide_data.get("ocr_text", "")),
                 rule_aois,
                 anchor_aois,
+            )
+            generated_aois = self._promote_visual_context_aois(
+                generated_aois,
+                generation.visual_context,
             )
             llm_aois = self.reconcile_llm_aois(
                 generated_aois,

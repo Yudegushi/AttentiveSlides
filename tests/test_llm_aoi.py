@@ -315,7 +315,7 @@ class LLMAOIPromptV3Test(unittest.TestCase):
         v1_profile = hashlib.sha256(
             json.dumps(v1_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        self.assertEqual(PROMPT_SCHEMA_VERSION, "attentive-llm-aoi-v3-visual-context")
+        self.assertEqual(PROMPT_SCHEMA_VERSION, "attentive-llm-aoi-v4-visual-aoi-promotion")
         self.assertNotEqual(generator.profile(anchor_digest), v1_profile)
 
     def test_prompt_requests_visual_context_in_same_response(self) -> None:
@@ -323,6 +323,7 @@ class LLMAOIPromptV3Test(unittest.TestCase):
         self.assertIn("In the same JSON object, optionally return visual_context.items.", prompt)
         self.assertIn("transcription", prompt)
         self.assertIn("description", prompt)
+        self.assertIn("Every formula visual_context item must also appear", prompt)
         self.assertIn("Do not duplicate overlapping visual items or AOIs.", prompt)
 
     def test_anchored_text_without_bbox_is_valid(self) -> None:
@@ -430,6 +431,37 @@ class LLMAOIManagerTest(unittest.TestCase):
         self.assertEqual(result["llm_visual_context"][0]["description"], "A conditional-probability formula.")
         self.assertEqual(result["llm_visual_context"][0]["transcription"], "p(y | x)")
         self.assertEqual(result["llm_visual_context"][0]["linked_aoi_id"], "llm_aoi_2")
+
+    def test_visual_context_formula_is_promoted_when_model_omits_visual_aoi(self):
+        generator = FakeLLMGenerator(result=LLMAOIResult(
+            aois=(
+                llm_item("alpha beta gamma delta epsilon zeta eta theta"),
+            ),
+            visual_context=(VisualContextItem(
+                visual_id="visual_1",
+                type="formula",
+                bbox=[0.2, 0.3, 0.7, 0.45],
+                description="A conditional-probability formula.",
+                transcription="p(y | x)",
+                confidence=0.91,
+            ),),
+            visual_context_status="used",
+        ))
+        manager = self.seeded_manager(generator)
+
+        result = manager.process_llm_aoi("deck", 1, allow_ocr=False)
+
+        promoted = [
+            item for item in result["llm_aois"]
+            if item["type"] == "formula"
+        ]
+        self.assertEqual(len(promoted), 1)
+        self.assertEqual(promoted[0]["bbox"], [0.2, 0.3, 0.7, 0.45])
+        self.assertEqual(promoted[0]["source"], "llm_visual_context")
+        self.assertEqual(
+            result["llm_visual_context"][0]["linked_aoi_id"],
+            promoted[0]["aoi_id"],
+        )
 
     def test_aoi_fallback_clears_visual_context_without_leaking_error_details(self):
         sentinel = "SENTINEL_PROVIDER_SECRET"
