@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from modules.common.schemas import AOI
 from modules.slide.aoi_manager import (
@@ -50,8 +50,6 @@ class UploadedDeckBrowser:
         self,
         workspace: "UploadedDeckWorkspace",
         summary: UploadedDeckSummary,
-        *,
-        use_llm_aoi: bool = False,
     ) -> None:
         self.workspace = workspace
         self.deck_id = summary.deck_id
@@ -60,7 +58,6 @@ class UploadedDeckBrowser:
         self.content_digest = (
             summary.content_digest
         )
-        self.use_llm_aoi = use_llm_aoi
         self.manifest_path = (
             workspace.aoi_manager.manifest_file
         )
@@ -82,7 +79,7 @@ class UploadedDeckBrowser:
         return self.workspace.get_slide(
             self.deck_id,
             slide_id,
-            use_llm_aoi=self.use_llm_aoi,
+            use_llm_aoi=True,
         )
 
     def slide_index(
@@ -315,8 +312,6 @@ class UploadedDeckWorkspace:
     def open_browser(
         self,
         deck_id: str,
-        *,
-        use_llm_aoi: bool = False,
     ) -> UploadedDeckBrowser:
         deck_info = (
             self.slide_parser
@@ -354,7 +349,6 @@ class UploadedDeckWorkspace:
         return UploadedDeckBrowser(
             self,
             summary,
-            use_llm_aoi=use_llm_aoi,
         )
 
     def prepare_llm_aoi(
@@ -386,57 +380,6 @@ class UploadedDeckWorkspace:
 
     def get_llm_aoi_state(self, deck_id: str, slide_id: int) -> dict[str, Any]:
         return self.aoi_manager.get_llm_aoi_state(deck_id, slide_id)
-
-    def prepare_llm_deck(
-        self,
-        deck_id: str,
-        *,
-        progress_callback: Callable[[int, int, dict[str, Any]], None] | None = None,
-    ) -> dict[str, int]:
-        total = self.slide_parser.get_page_count(deck_id)
-        counts = {
-            "successful": 0,
-            "fallback": 0,
-            "skipped": 0,
-            "total": total,
-        }
-
-        for completed, slide_id in enumerate(range(1, total + 1), start=1):
-            try:
-                state = self.get_llm_aoi_state(deck_id, slide_id)
-                if state.get("eligible"):
-                    result = {
-                        **state,
-                        "slide_id": slide_id,
-                        "status": "skipped",
-                    }
-                    counts["skipped"] += 1
-                else:
-                    result = {
-                        **self.prepare_llm_aoi(
-                            deck_id,
-                            slide_id,
-                            force=True,
-                        ),
-                        "slide_id": slide_id,
-                    }
-                    if result.get("status") == "used":
-                        counts["successful"] += 1
-                    else:
-                        counts["fallback"] += 1
-            except Exception:
-                result = {
-                    "slide_id": slide_id,
-                    "status": "fallback_used",
-                    "eligible": False,
-                    "error": "Unable to prepare LLM AOIs for this slide.",
-                }
-                counts["fallback"] += 1
-
-            if progress_callback is not None:
-                progress_callback(completed, total, result)
-
-        return counts
 
     def get_slide(
         self,

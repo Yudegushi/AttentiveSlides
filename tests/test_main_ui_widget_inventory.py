@@ -193,9 +193,7 @@ class TestMainUIWidgetInventory(
 
         required = {
             "main_pdf_upload",
-            "main_llm_aoi_enabled",
             "main_process_current_llm_aoi",
-            "main_process_deck_llm_aoi",
             "main_cloud_text_allowed",
             "main_interaction_mode",
             "main_live_master_enabled",

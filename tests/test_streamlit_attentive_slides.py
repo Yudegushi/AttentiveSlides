@@ -439,115 +439,36 @@ class TestStreamlitAttentiveSlides(
         self.assertNotIn("geometry=", manual)
         self.assertIn("latest_geometry_for", consume)
 
-    def test_llm_opt_in_precedes_browser_resolution_and_live_binding(self) -> None:
-        statement_calls = [
-            {
-                dotted_name(node.func).split(".")[-1]
-                for node in ast.walk(statement)
-                if isinstance(node, ast.Call)
-            }
-            for statement in self.functions["main"].body
-        ]
-        checkbox = next(i for i, names in enumerate(statement_calls) if "_render_llm_aoi_opt_in" in names)
-        resolve = next(i for i, names in enumerate(statement_calls) if "_resolve_active_browser" in names)
-        signature = next(i for i, names in enumerate(statement_calls) if "_sync_active_aoi_signature" in names)
-        bind = next(i for i, names in enumerate(statement_calls) if "_bind_main_live_resources" in names)
-        self.assertLess(checkbox, resolve)
-        self.assertLess(signature, bind)
+    def test_main_contains_no_global_llm_checkbox_or_deck_batch_action(self) -> None:
+        self.assertNotIn("main_llm_aoi_enabled", self.source)
+        self.assertNotIn("main_process_deck_llm_aoi", self.source)
+        self.assertNotIn("Process entire deck with LLM", self.source)
+        self.assertNotIn("prepare_llm_deck", self.source)
+        self.assertNotIn("_render_llm_aoi_opt_in", self.functions)
+        self.assertNotIn("_render_llm_aoi_deck_batch", self.functions)
 
-    def test_llm_deck_batch_sidebar_contract_and_persistent_summary(self) -> None:
-        function = self.functions["_render_llm_aoi_deck_batch"]
-        source = self.function_source("_render_llm_aoi_deck_batch")
-
-        built_in_guard = function.body[0]
-        self.assertIsInstance(built_in_guard, ast.If)
-        self.assertIn(
-            "main_uploaded_deck_id",
-            ast.get_source_segment(self.source, built_in_guard.test) or "",
-        )
-        self.assertTrue(
-            any(isinstance(statement, ast.Return) for statement in built_in_guard.body)
-        )
-
-        batch_buttons = [
-            node
-            for node in ast.walk(function)
-            if (
-                isinstance(node, ast.Call)
-                and dotted_name(node.func) == "st.sidebar.button"
-                and keyword_string(node, "key") == "main_process_deck_llm_aoi"
-            )
-        ]
-        self.assertEqual(len(batch_buttons), 1)
-        batch_button = batch_buttons[0]
-        self.assertEqual(
-            constant_string(batch_button.args[0]),
-            "Process entire deck with LLM",
-        )
-        self.assertEqual(keyword_string(batch_button, "width"), "stretch")
-        disabled = keyword_node(batch_button, "disabled")
-        self.assertIsNotNone(disabled)
-        self.assertIn("main_llm_aoi_enabled", ast.unparse(disabled))
-        self.assertTrue(ast.unparse(disabled).startswith("not "))
-
+    def test_current_slide_action_is_available_without_global_opt_in(self) -> None:
+        source = self.function_source("_render_current_slide_llm_aoi_action")
         self.assertIn("main_uploaded_deck_id", source)
-        self.assertIn("browser.page_count", source)
-        self.assertIn("pages will be processed sequentially", source)
-        self.assertIn("cached successful pages are skipped", source)
-        self.assertIn("main_process_deck_llm_aoi", source)
-        self.assertIn("main_llm_aoi_enabled", source)
-        self.assertIn("disabled", source)
-        self.assertIn("st.sidebar.progress", source)
-        self.assertIn("st.sidebar.empty", source)
-        self.assertIn("completed / total", source)
-        self.assertIn("status.caption", source)
-        self.assertIn("workspace.prepare_llm_deck", source)
-        self.assertIn("main_llm_aoi_deck_summary", source)
-        self.assertIn("LLM AOI deck processing finished", source)
-        self.assertIn("successful", source)
-        self.assertIn("fallback", source)
-        self.assertIn("skipped", source)
-        self.assertIn("_reset_turn_state", source)
-        self.assertIn("main_active_aoi_signature", source)
-        self.assertEqual(source.count("st.rerun"), 1)
+        self.assertNotIn("main_llm_aoi_enabled", source)
+        self.assertIn("Enhance this slide with LLM", source)
+        self.assertIn("Retry this slide with LLM", source)
+        self.assertIn("main_process_current_llm_aoi", source)
 
-        uploaded_guard = source.index("main_uploaded_deck_id")
-        button = source.index("main_process_deck_llm_aoi")
-        self.assertLess(uploaded_guard, button)
+    def test_eligible_slide_renders_compact_aoi_and_visual_status(self) -> None:
+        source = self.function_source("_render_current_slide_llm_aoi_action")
+        self.assertIn("LLM-enhanced ·", source)
+        self.assertIn("AOIs ·", source)
+        self.assertIn("visual notes", source)
 
-        clear_summary = source.index(
-            'st.session_state["main_llm_aoi_deck_summary"] = None'
+    def test_invalid_visual_context_status_does_not_hide_valid_llm_aoi_status(self) -> None:
+        source = self.function_source("_render_current_slide_llm_aoi_action")
+        self.assertIn('visual_status == "invalid"', source)
+        self.assertIn("visual context unavailable", source)
+        self.assertLess(
+            source.index("LLM-enhanced ·"),
+            source.index("visual context unavailable"),
         )
-        prepare = source.index("workspace.prepare_llm_deck")
-        store_summary = source.index(
-            'st.session_state["main_llm_aoi_deck_summary"] = summary_message'
-        )
-        self.assertLess(clear_summary, prepare)
-        self.assertLess(prepare, store_summary)
-
-    def test_llm_deck_batch_renders_after_uploaded_browser_resolution(self) -> None:
-        statement_calls = [
-            {
-                dotted_name(node.func).split(".")[-1]
-                for node in ast.walk(statement)
-                if isinstance(node, ast.Call)
-            }
-            for statement in self.functions["main"].body
-        ]
-
-        resolve = next(
-            i for i, names in enumerate(statement_calls) if "_resolve_active_browser" in names
-        )
-        ensure = next(
-            i for i, names in enumerate(statement_calls) if "_ensure_deck_state" in names
-        )
-        batch = next(
-            i
-            for i, names in enumerate(statement_calls)
-            if "_render_llm_aoi_deck_batch" in names
-        )
-        self.assertLess(resolve, ensure)
-        self.assertLess(ensure, batch)
 
     def test_production_live_graph_has_no_second_tutor_path(self) -> None:
         source = self.function_source("build_main_live_resources")
