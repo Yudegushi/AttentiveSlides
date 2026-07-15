@@ -143,32 +143,10 @@ class TestStreamlitAttentiveSlides(
     def test_single_main_title(
         self,
     ) -> None:
-        title_calls = []
-
-        for node in ast.walk(
-            self.tree
-        ):
-            if not isinstance(
-                node,
-                ast.Call,
-            ):
-                continue
-
-            if dotted_name(
-                node.func
-            ) != "st.title":
-                continue
-
-            if node.args:
-                title_calls.append(
-                    constant_string(
-                        node.args[0]
-                    )
-                )
-
+        header = self.function_source("_render_header")
         self.assertEqual(
-            title_calls.count(
-                "AttentiveSlides"
+            header.count(
+                '<span class="attentive-top-title">AttentiveSlides</span>'
             ),
             1,
         )
@@ -223,9 +201,7 @@ class TestStreamlitAttentiveSlides(
 
         required = [
             "_render_header",
-            "_render_slide_selector",
             "_render_slide_workspace",
-            "_render_navigation",
             "_render_manual_interaction",
             "_render_lower_workspace",
         ]
@@ -275,6 +251,11 @@ class TestStreamlitAttentiveSlides(
         self.assertEqual(
             ordered,
             sorted(ordered),
+        )
+        workspace = self.function_source("_render_slide_workspace")
+        self.assertLess(
+            workspace.index("_render_slide_selector(browser)"),
+            workspace.index("_render_navigation(browser, view)"),
         )
 
     def test_slide_workspace_heading_removed(
@@ -681,6 +662,27 @@ class TestStreamlitAttentiveSlides(
             violations,
             [],
         )
+
+    def test_voice_runtime_extends_the_existing_single_resource_graph(self) -> None:
+        builder = self.function_source("build_main_live_resources")
+        self.assertEqual(builder.count("BrowserMediaSource()"), 1)
+        self.assertEqual(builder.count("LiveIngressService("), 1)
+        self.assertEqual(builder.count("SystemController("), 1)
+        self.assertEqual(builder.count("VoiceOrchestrator("), 1)
+        self.assertIn("voice_transport=voice", builder)
+        self.assertIn("fatigue_worker=fatigue_worker", builder)
+
+    def test_live_binding_synchronizes_voice_after_provider_binding(self) -> None:
+        binding = self.function_source("_bind_main_live_resources")
+        provider_position = binding.index("resources.provider.set_browser(browser)")
+        voice_position = binding.index("_sync_main_live_voice_resources(resources, view)")
+        self.assertLess(provider_position, voice_position)
+
+    def test_omni_ui_preserves_three_column_interaction_layout(self) -> None:
+        source = self.function_source("_render_omni_interaction")
+        self.assertIn("st.columns", source)
+        self.assertIn("[1.05, 1.20, 1.35]", source)
+        self.assertIn("_render_voice_component(view)", source)
 
 
 if __name__ == "__main__":

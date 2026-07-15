@@ -151,6 +151,10 @@ def build_main_live_defaults() -> dict[str, Any]:
         "main_live_master_enabled": False,
         "main_confirmation_policy": "Always confirm",
         "main_auto_confirm_threshold": 0.80,
+        "main_voice_engine": "single_turn",
+        "main_speech_mode": "continuous",
+        "main_answer_audio_enabled": True,
+        "main_voice_status_message": None,
         "main_live_proposal": None,
         "main_live_original_transcript": None,
         "main_live_predicted_aoi_id": None,
@@ -177,6 +181,7 @@ def reset_main_live_turn_state(
         "main_live_original_transcript",
         "main_live_predicted_aoi_id",
         "main_live_layout_revision",
+        "main_voice_status_message",
     ):
         state[key] = None
 

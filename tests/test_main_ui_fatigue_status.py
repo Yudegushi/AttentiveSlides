@@ -91,28 +91,33 @@ class MainFatigueUIContractTest(unittest.TestCase):
             encoding="utf-8"
         )
 
-    def test_fragment_is_half_second_and_between_header_and_slide_picker(self):
-        header_call = self.source.index("    _render_header(view)\n")
-        fatigue_call = self.source.index(
-            "    _render_fatigue_periodic(live_resources)\n"
+    def test_fragment_is_half_second_and_between_llm_action_and_slide_picker(self):
+        llm_call = self.source.index(
+            "            _render_current_slide_llm_aoi_action(view, workspace)\n"
         )
-        picker_call = self.source.index("    _render_slide_selector(\n")
+        fatigue_call = self.source.index(
+            "            _render_fatigue_probability_periodic(live_resources)\n"
+        )
+        picker_call = self.source.index(
+            "            _render_slide_selector(browser)\n"
+        )
 
-        self.assertLess(header_call, fatigue_call)
+        self.assertLess(llm_call, fatigue_call)
         self.assertLess(fatigue_call, picker_call)
         self.assertIn(
-            "@st.fragment(run_every=0.5)\ndef _render_fatigue_periodic",
+            "@st.fragment(run_every=0.5)\ndef _render_fatigue_probability_periodic",
             self.source,
         )
 
-    def test_fragment_uses_caption_and_conditional_warning_without_rerun(self):
-        start = self.source.index("def _render_fatigue_periodic")
+    def test_fragment_uses_safe_html_and_conditional_alert_without_rerun(self):
+        start = self.source.index("def _render_fatigue_probability_periodic")
         end = self.source.index("def _render_navigation", start)
         fragment = self.source[start:end]
 
-        self.assertIn("st.caption(view.probability_text)", fragment)
-        self.assertIn("if view.show_alert:", fragment)
-        self.assertIn("st.warning(view.alert_text)", fragment)
+        self.assertIn("html.escape(view.probability_text)", fragment)
+        self.assertIn("if view.show_alert", fragment)
+        self.assertIn("html.escape(view.alert_text)", fragment)
+        self.assertIn("unsafe_allow_html=True", fragment)
         self.assertNotIn("st.rerun", fragment)
 
     def test_fatigue_ui_has_no_tutor_aoi_or_confirmation_path(self):

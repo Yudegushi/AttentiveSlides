@@ -53,6 +53,15 @@ from modules.media import BrowserMediaSource
 from modules.media.browser_gaze_source import BrowserGazeSource
 from modules.media.live_ingress_service import LiveIngressService
 from modules.media.single_port_transport import FallbackMediaIngress
+from modules.realtime.bailian_omni_realtime_client import (
+    BailianOmniRealtimeClient,
+)
+from modules.realtime.realtime_contracts import (
+    SpeechMode,
+    TargetBinding,
+    VoiceEngine,
+    VoicePreferences,
+)
 
 from modules.system.safe_table import (
     records_to_html,
@@ -67,6 +76,7 @@ from modules.system.integrated_pipeline_xai import (
 )
 
 from modules.system.main_tutor_integration import (
+    _linked_visual_context_text,
     assess_tutor_generation,
     generate_main_tutor_response,
 )
@@ -129,12 +139,22 @@ from modules.system.sensing_snapshot_store import SensingSnapshotStore
 from modules.system.sensing_worker import SensingWorker
 from modules.system.slide_geometry import parse_component_geometry
 from modules.system.turn_context import TurnContextCollector
+from modules.system.omni_voice_runtime import OmniVoiceRuntime
+from modules.system.realtime_tutor_context import (
+    RealtimeTutorContext,
+    build_realtime_tutor_instructions,
+)
+from modules.system.single_turn_ptt_runtime import SingleTurnPTTRuntime
+from modules.system.target_switching import TargetSwitchController
+from modules.system.voice_event_hub import VoiceEventHub
+from modules.system.voice_orchestrator import VoiceOrchestrator
 from modules.system.uploaded_deck_service import (
     UploadedDeckWorkspace,
 )
 from modules.ui.slide_viewport_component import render_slide_viewport
 from modules.ui.live_debug_bridge_component import render_live_debug_bridge
 from modules.ui.fatigue_status import build_fatigue_status_view
+from modules.ui.voice_control_component import render_voice_control_component
 
 
 BUILT_IN_MANIFEST_PATH = (
@@ -170,9 +190,13 @@ class MainLiveResources:
     ingress: FallbackMediaIngress
     service: LiveIngressService
     fatigue_store: FatigueStateStore
+    voice: VoiceOrchestrator
+    voice_events: VoiceEventHub
     bound_deck_id: str | None = None
     bound_slide_id: int | None = None
     bound_aoi_signature: str | None = None
+    bound_voice_target_signature: str | None = None
+    bound_voice_preferences: VoicePreferences | None = None
 
 
 @st.cache_resource
@@ -243,6 +267,91 @@ def build_main_live_resources(
         context_collector=collector,
         inbox=inbox,
     )
+    voice_events = VoiceEventHub()
+    target_switching = TargetSwitchController()
+
+    def begin_omni_gaze_window(
+        target: TargetBinding,
+        started_at: float,
+    ):
+        return collector.freeze_start(
+            slide_id=target.slide_id,
+            speech_started_at=started_at,
+        )
+
+    def resolve_omni_gaze_window(
+        context,
+        ended_at: float,
+        current_target: TargetBinding,
+    ) -> TargetBinding | None:
+        frozen = collector.freeze_end(
+            context,
+            speech_ended_at=ended_at,
+            current_slide_id=current_target.slide_id,
+        )
+        if frozen.slide_changed_during_turn:
+            return None
+        aggregated = collector.aggregate(frozen)
+        candidate_id = aggregated.frame.gaze_prediction.predicted_aoi_id
+        if not candidate_id:
+            return None
+        frame = provider.get_slide_frame(current_target.slide_id)
+        return _target_binding_from_slide(
+            deck_id=frame.deck_id,
+            slide=frame,
+            target_id=str(candidate_id),
+        )
+
+    def build_omni_instructions(target: TargetBinding) -> str:
+        frame = provider.get_slide_frame(target.slide_id)
+        visual_derived = (
+            "Visible transcription:" in target.text
+            or "Visual description:" in target.text
+        )
+        return build_realtime_tutor_instructions(
+            RealtimeTutorContext(
+                deck_id=frame.deck_id,
+                slide_number=frame.slide_id,
+                slide_text=frame.slide_text,
+                target=target,
+                visual_observation=target.text if visual_derived else "",
+                visual_observation_is_model_derived=visual_derived,
+            )
+        )
+
+    voice_holder: dict[str, VoiceOrchestrator] = {}
+
+    async def fallback_voice(
+        reason: str,
+        transcript: str | None,
+    ) -> None:
+        await voice_holder["voice"].fallback_to_single_turn(
+            reason,
+            transcript,
+        )
+
+    omni_runtime = OmniVoiceRuntime(
+        events=voice_events,
+        target_switching=target_switching,
+        client_factory=BailianOmniRealtimeClient,
+        begin_gaze_window=begin_omni_gaze_window,
+        resolve_gaze_window=resolve_omni_gaze_window,
+        on_fallback=fallback_voice,
+        build_instructions=build_omni_instructions,
+    )
+    single_turn_ptt = SingleTurnPTTRuntime(
+        transcribe=transcriber.transcribe,
+        context_collector=collector,
+        proposal_runner=runner,
+    )
+    voice = VoiceOrchestrator(
+        events=voice_events,
+        omni=omni_runtime,
+        single_turn_ptt=single_turn_ptt,
+        target_switching=target_switching,
+        publish_single_turn_transcript=lambda transcript: None,
+    )
+    voice_holder["voice"] = voice
     controller = SystemController(
         media_source=media_source,
         sensing_worker=sensing_worker,
@@ -276,6 +385,7 @@ def build_main_live_resources(
         source=media_source,
         ingress=ingress,
         capture_html=capture_html,
+        voice_transport=voice,
     )
     if start_ingress:
         service.ensure_started()
@@ -287,6 +397,8 @@ def build_main_live_resources(
         ingress=ingress,
         service=service,
         fatigue_store=fatigue_store,
+        voice=voice,
+        voice_events=voice_events,
     )
 
 
@@ -604,6 +716,20 @@ def _normalize_widget_state() -> None:
     }:
         st.session_state["main_confirmation_policy"] = "Always confirm"
 
+    if st.session_state.get("main_voice_engine") not in {
+        "single_turn",
+        "omni",
+    }:
+        st.session_state["main_voice_engine"] = "single_turn"
+    if st.session_state.get("main_speech_mode") not in {
+        "push_to_talk",
+        "continuous",
+    }:
+        st.session_state["main_speech_mode"] = "continuous"
+    st.session_state["main_answer_audio_enabled"] = bool(
+        st.session_state.get("main_answer_audio_enabled", True)
+    )
+
     st.session_state[
         "main_widget_error"
     ] = None
@@ -694,6 +820,32 @@ def _on_live_preference_change() -> None:
     st.session_state["main_widget_error"] = None
 
 
+def _sync_main_live_voice_resources(
+    resources: MainLiveResources,
+    view: MainUIViewModel,
+) -> None:
+    preferences = VoicePreferences(
+        engine=VoiceEngine(str(st.session_state["main_voice_engine"])),
+        speech_mode=SpeechMode(str(st.session_state["main_speech_mode"])),
+        answer_audio_enabled=bool(
+            st.session_state["main_answer_audio_enabled"]
+        ),
+    )
+    if resources.bound_voice_preferences != preferences:
+        resources.voice.update_preferences(preferences)
+        resources.bound_voice_preferences = preferences
+
+    target = _voice_target_binding(view)
+    signature = target.signature if target is not None else None
+    if resources.bound_voice_target_signature == signature:
+        return
+    if target is None:
+        resources.voice.clear_target("confirmed target unavailable")
+    else:
+        resources.voice.update_target(target)
+    resources.bound_voice_target_signature = signature
+
+
 def _bind_main_live_resources(
     resources: MainLiveResources,
     *,
@@ -718,6 +870,7 @@ def _bind_main_live_resources(
     # UploadedDeckWorkspace is intentionally recreated on each app rerun.
     # Keep the cached live graph pointed at the current workspace/browser.
     resources.provider.set_browser(browser)
+    _sync_main_live_voice_resources(resources, view)
 
     if deck_changed or aoi_changed:
         resources.inbox.clear()
@@ -762,6 +915,33 @@ def _render_live_controls(
                 "Media remains local to the runtime; only confirmed "
                 "text may be sent to the cloud tutor."
             ),
+        )
+        st.sidebar.radio(
+            "Dialogue engine",
+            options=["single_turn", "omni"],
+            format_func=lambda value: (
+                "Grounded Tutor (single-turn)"
+                if value == "single_turn"
+                else "Omni realtime"
+            ),
+            key="main_voice_engine",
+            on_change=_on_live_preference_change,
+        )
+        st.sidebar.radio(
+            "Speaking style",
+            options=["push_to_talk", "continuous"],
+            format_func=lambda value: (
+                "Push to talk"
+                if value == "push_to_talk"
+                else "Continuous"
+            ),
+            key="main_speech_mode",
+            on_change=_on_live_preference_change,
+        )
+        st.sidebar.checkbox(
+            "Answer audio",
+            key="main_answer_audio_enabled",
+            on_change=_on_live_preference_change,
         )
         st.sidebar.radio(
             "Confirmation policy",
@@ -981,6 +1161,99 @@ def _active_aoi_signature(view: MainUIViewModel) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _target_binding_from_slide(
+    *,
+    deck_id: str,
+    slide: Any,
+    target_id: str,
+) -> TargetBinding | None:
+    """Adapt a canonical slide/AOI to the shared realtime target contract."""
+    normalized_id = str(target_id).strip()
+    if normalized_id in {"whole-slide", "whole_slide"}:
+        return TargetBinding(
+            deck_id=deck_id,
+            slide_id=int(slide.slide_id),
+            target_id="whole-slide",
+            label="Whole slide",
+            text=str(slide.slide_text).strip(),
+        )
+
+    aoi = next(
+        (
+            candidate
+            for candidate in slide.aois
+            if candidate.aoi_id == normalized_id
+        ),
+        None,
+    )
+    if aoi is None:
+        return None
+    native_text = str(aoi.text).strip()
+    linked_visual_text = _linked_visual_context_text(
+        slide,
+        normalized_id,
+    ).strip()
+    return TargetBinding(
+        deck_id=deck_id,
+        slide_id=int(slide.slide_id),
+        target_id=normalized_id,
+        label=str(aoi.name or normalized_id),
+        text=(
+            native_text
+            or linked_visual_text
+            or str(slide.slide_text).strip()
+        ),
+        bbox=tuple(float(value) for value in aoi.bbox),
+    )
+
+
+def _voice_target_binding(
+    view: MainUIViewModel,
+) -> TargetBinding | None:
+    """Resolve the learner-confirmed UI target without reading raw gaze."""
+    if st.session_state.get("main_target_scope") != "Manual region":
+        return _target_binding_from_slide(
+            deck_id=view.deck_id,
+            slide=view.active_slide,
+            target_id="whole-slide",
+        )
+
+    raw_bbox = st.session_state.get("main_manual_bbox")
+    if not isinstance(raw_bbox, (list, tuple)) or len(raw_bbox) != 4:
+        return None
+    try:
+        bbox = tuple(float(value) for value in raw_bbox)
+        bbox_token = json.dumps(
+            bbox,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        target_id = "manual-" + hashlib.sha256(bbox_token).hexdigest()[:16]
+        selected_text = str(
+            st.session_state.get("main_selection_text", "")
+        ).strip()
+        selected_ids = st.session_state.get("main_selected_aoi_ids", [])
+        linked_visual_text = ""
+        if isinstance(selected_ids, list) and len(selected_ids) == 1:
+            linked_visual_text = _linked_visual_context_text(
+                view.active_slide,
+                str(selected_ids[0]),
+            ).strip()
+        return TargetBinding(
+            deck_id=view.deck_id,
+            slide_id=view.active_slide_id,
+            target_id=target_id,
+            label="Manual region",
+            text=(
+                selected_text
+                or linked_visual_text
+                or view.active_slide.slide_text.strip()
+            ),
+            bbox=bbox,
+        )
+    except (TypeError, ValueError):
+        return None
 
 
 def _sync_active_aoi_signature(view: MainUIViewModel) -> None:
@@ -4229,9 +4502,76 @@ def _render_live_target_column(
     return selected
 
 
-def _render_live_interaction(
+def _render_voice_component(
     view: MainUIViewModel,
 ) -> None:
+    render_voice_control_component(
+        engine=str(st.session_state["main_voice_engine"]),
+        speech_mode=str(st.session_state["main_speech_mode"]),
+        key=(
+            "main_voice_control_"
+            f"{view.deck_id}_{view.active_slide_id}"
+        ),
+    )
+
+
+def _render_omni_interaction(
+    view: MainUIViewModel,
+    resources: MainLiveResources,
+) -> None:
+    snapshot = resources.voice.snapshot()
+    target_column, intent_column, answer_column = st.columns(
+        [1.05, 1.20, 1.35],
+        gap="medium",
+    )
+    with target_column:
+        st.markdown("### 1. Locked target")
+        st.checkbox(
+            "Show AOI overlay",
+            key="main_show_aoi_overlay",
+            on_change=_on_live_overlay_change,
+        )
+        target_label = snapshot.get("target_label")
+        if target_label:
+            st.success(str(target_label))
+            st.caption(
+                "Gaze may suggest another AOI, but switching requires "
+                "an explicit request and confirmation."
+            )
+        else:
+            st.warning(
+                "Select a whole-slide or manual-region target before "
+                "starting Omni."
+            )
+    with intent_column:
+        st.markdown("### 2. Realtime dialogue")
+        st.caption(
+            "Speak naturally. Use an explicit phrase such as ‘switch to "
+            "this’ when you want to change the locked target."
+        )
+        st.caption(
+            "Mode: "
+            + (
+                "Push to talk"
+                if st.session_state["main_speech_mode"] == "push_to_talk"
+                else "Continuous"
+            )
+        )
+        status_message = snapshot.get("status_message")
+        if status_message:
+            st.info(str(status_message))
+    with answer_column:
+        st.markdown("### 3. Realtime answer")
+        _render_voice_component(view)
+
+
+def _render_live_interaction(
+    view: MainUIViewModel,
+    resources: MainLiveResources,
+) -> None:
+    if st.session_state.get("main_voice_engine") == "omni":
+        _render_omni_interaction(view, resources)
+        return
     proposal = st.session_state.get("main_live_proposal")
     if not isinstance(proposal, LiveInteractionProposal):
         proposal = None
@@ -4243,6 +4583,7 @@ def _render_live_interaction(
         selected = _render_live_target_column(view, proposal)
     with intent_column:
         st.markdown("### 2. Live command")
+        _render_voice_component(view)
         st.text_area(
             "Speech transcript",
             key="main_typed_command",
@@ -4318,7 +4659,7 @@ def _render_live_periodic(
         f"Media: {'ready' if session.video_fresh and session.audio_fresh else 'waiting'} · "
         f"Local gaze: {'ready' if ingress_stats['gaze_fresh'] else 'fallback'}"
     )
-    _render_live_interaction(view)
+    _render_live_interaction(view, resources)
     proposal = st.session_state.get("main_live_proposal")
     if not isinstance(proposal, LiveInteractionProposal):
         proposal = None
@@ -4374,7 +4715,7 @@ def _render_manual_interaction(
                 view,
             )
         else:
-            _render_live_interaction(view)
+            _render_live_interaction(view, live_resources)
         return
 
     (

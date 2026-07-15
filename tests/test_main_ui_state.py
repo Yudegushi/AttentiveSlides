@@ -173,7 +173,7 @@ class TestMainUIState(unittest.TestCase):
             normalize_main_slide_width_percent,
         )
 
-        self.assertEqual(normalize_main_slide_width_percent(None), 100)
+        self.assertEqual(normalize_main_slide_width_percent(None), 70)
         self.assertEqual(normalize_main_slide_width_percent(49), 50)
         self.assertEqual(normalize_main_slide_width_percent(73), 75)
         self.assertEqual(normalize_main_slide_width_percent(101), 100)
@@ -231,6 +231,10 @@ class TestMainUIState(unittest.TestCase):
                     "Always confirm"
                 ),
                 "main_auto_confirm_threshold": 0.80,
+                "main_voice_engine": "single_turn",
+                "main_speech_mode": "continuous",
+                "main_answer_audio_enabled": True,
+                "main_voice_status_message": None,
                 "main_live_proposal": None,
                 "main_live_original_transcript": None,
                 "main_live_predicted_aoi_id": None,
@@ -255,6 +259,10 @@ class TestMainUIState(unittest.TestCase):
                 "Confidence-based auto"
             ),
             "main_auto_confirm_threshold": 0.91,
+            "main_voice_engine": "omni",
+            "main_speech_mode": "push_to_talk",
+            "main_answer_audio_enabled": False,
+            "main_voice_status_message": "old status",
             "main_live_proposal": {"interaction_id": "live-1"},
             "main_live_original_transcript": "original",
             "main_live_predicted_aoi_id": "aoi-1",
@@ -276,6 +284,10 @@ class TestMainUIState(unittest.TestCase):
             state["main_auto_confirm_threshold"],
             0.91,
         )
+        self.assertEqual(state["main_voice_engine"], "omni")
+        self.assertEqual(state["main_speech_mode"], "push_to_talk")
+        self.assertFalse(state["main_answer_audio_enabled"])
+        self.assertIsNone(state["main_voice_status_message"])
         self.assertEqual(
             state["main_logged_interaction_ids"],
             ["logged-1"],

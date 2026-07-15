@@ -376,6 +376,23 @@ class TestSidebarLayout(
             [],
         )
 
+    def test_voice_controls_are_scoped_to_live_mode(self) -> None:
+        function = next(
+            node
+            for node in self.tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_render_live_controls"
+        )
+        source = ast.get_source_segment(self.app_source, function) or ""
+        self.assertIn('if live_mode:', source)
+        self.assertIn('"Dialogue engine"', source)
+        self.assertIn('"Speaking style"', source)
+        self.assertIn('"Answer audio"', source)
+        self.assertLess(
+            source.index('if live_mode:'),
+            source.index('"Dialogue engine"'),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
