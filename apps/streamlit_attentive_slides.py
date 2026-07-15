@@ -39,6 +39,14 @@ from modules.audio.streaming_vad import EnergyVadBackend
 from modules.audio.transcriber import TranscriptionConfig
 from modules.audio.voice_turn_detector import VoiceTurnDetector
 from modules.logging.interaction_logger import InteractionLogger
+from modules.fatigue import (
+    FatigueStateStore,
+    FatigueTemporalTracker,
+)
+from modules.fatigue.mobilevit_estimator import (
+    DEFAULT_MODEL_PATH,
+    MobileViTFatigueEstimator,
+)
 from modules.slide.llm_aoi import sanitized_llm_error
 from modules.media import BrowserMediaSource
 from modules.media.browser_gaze_source import BrowserGazeSource
@@ -104,6 +112,7 @@ from modules.system.active_deck_slide_provider import (
 )
 from modules.system.audio_worker import AudioWorker
 from modules.system.controller import SystemController
+from modules.system.fatigue_worker import FatigueWorker
 from modules.system.live_ui_bridge import (
     LatestProposalInbox,
     LiveInteractionProposal,
@@ -124,6 +133,7 @@ from modules.system.uploaded_deck_service import (
 )
 from modules.ui.slide_viewport_component import render_slide_viewport
 from modules.ui.live_debug_bridge_component import render_live_debug_bridge
+from modules.ui.fatigue_status import build_fatigue_status_view
 
 
 BUILT_IN_MANIFEST_PATH = (
@@ -158,6 +168,7 @@ class MainLiveResources:
     inbox: LatestProposalInbox
     ingress: FallbackMediaIngress
     service: LiveIngressService
+    fatigue_store: FatigueStateStore
     bound_deck_id: str | None = None
     bound_slide_id: int | None = None
     bound_aoi_signature: str | None = None
@@ -173,6 +184,23 @@ def build_main_live_resources(
     provider = ActiveDeckSlideProvider()
     snapshots = SensingSnapshotStore()
     observations = BrowserGazeSource()
+    fatigue_store = FatigueStateStore()
+    fatigue_tracker = FatigueTemporalTracker()
+    fatigue_worker = FatigueWorker(
+        media_source.face_crop_queue,
+        estimator_factory=lambda: MobileViTFatigueEstimator(
+            os.environ.get(
+                "ATTENTIVE_FATIGUE_MODEL_PATH",
+                str(DEFAULT_MODEL_PATH),
+            ),
+            device=os.environ.get(
+                "ATTENTIVE_FATIGUE_DEVICE",
+                "cuda",
+            ),
+        ),
+        tracker=fatigue_tracker,
+        store=fatigue_store,
+    )
     sensing_worker = SensingWorker(
         media_source=media_source,
         slide_provider=provider,
@@ -220,6 +248,7 @@ def build_main_live_resources(
         audio_worker=audio_worker,
         context_collector=collector,
         turn_runner=runner,
+        fatigue_worker=fatigue_worker,
     )
     runtime = MainUILiveRuntime(
         controller=controller,
@@ -256,6 +285,7 @@ def build_main_live_resources(
         inbox=inbox,
         ingress=ingress,
         service=service,
+        fatigue_store=fatigue_store,
     )
 
 
@@ -355,6 +385,7 @@ def main() -> None:
     )
 
     _render_header(view)
+    _render_fatigue_periodic(live_resources)
     _render_slide_selector(
         browser
     )
@@ -1691,6 +1722,21 @@ def _render_header(
         "Select a slide region, state your learning goal, "
         "and receive a grounded tutor response."
     )
+
+
+@st.fragment(run_every=0.5)
+def _render_fatigue_periodic(resources: MainLiveResources) -> None:
+    snapshot = resources.fatigue_store.snapshot()
+    view = build_fatigue_status_view(
+        snapshot,
+        live_enabled=bool(
+            st.session_state.get("main_interaction_mode") == "Live"
+            and st.session_state.get("main_live_master_enabled")
+        ),
+    )
+    st.caption(view.probability_text)
+    if view.show_alert:
+        st.warning(view.alert_text)
 
 
 
