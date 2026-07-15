@@ -231,6 +231,21 @@ class LLMAOIGeneratorValidationTest(unittest.TestCase):
         self.assertEqual(len(items), 6)
         self.assertEqual([item.visual_id for item in items], [f"visual_{i}" for i in range(1, 7)])
 
+    def test_visual_context_rejects_non_string_description_and_normalizes_null_transcription(self):
+        generator = LLMAOIGenerator()
+        items, status = generator._validate_visual_context({"items": [
+            visual_item(description=None),
+            visual_item(
+                description="A visible formula.",
+                transcription=None,
+            ),
+        ]}, field_present=True)
+
+        self.assertEqual(status, "used")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].description, "A visible formula.")
+        self.assertEqual(items[0].transcription, "")
+
     def test_sanitized_error_never_echoes_arbitrary_exception_text(self):
         sentinel = "SENTINEL_ENDPOINT_TOKEN"
 
@@ -575,6 +590,35 @@ class LLMAOIManagerTest(unittest.TestCase):
         stale = manager.save_slide_data("deck", SlideAOIData(1, str(self.image_path), "different", changed_aois, "pdf_text", "pdf_text_semantic"))
         self.assertEqual(stale["llm_aoi_status"], "not_requested")
         self.assertEqual(stale["llm_aois"], [])
+
+    def test_matching_cache_defaults_missing_visual_fields(self):
+        generator = FakeLLMGenerator()
+        manager = self.seeded_manager(generator)
+        current = manager.manifest["deck:1"]
+        digest = manager._anchor_digest(current)
+        current.update({
+            "llm_aois": [llm_item("alpha beta gamma delta epsilon zeta eta theta")],
+            "llm_aoi_status": "used",
+            "llm_aoi_profile": generator.profile(digest),
+        })
+        current.pop("llm_visual_context", None)
+        current.pop("llm_visual_context_status", None)
+        deterministic = SlideAOIData(
+            1,
+            str(self.image_path),
+            current["ocr_text"],
+            [AOI(**aoi) for aoi in current["aois"]],
+            current["text_source"],
+            current["auto_aoi_method"],
+        )
+
+        preserved = manager.save_slide_data("deck", deterministic)
+        state = manager.get_llm_aoi_state("deck", 1)
+
+        self.assertEqual(preserved["llm_visual_context"], [])
+        self.assertEqual(preserved["llm_visual_context_status"], "empty")
+        self.assertEqual(state["visual_count"], 0)
+        self.assertEqual(state["visual_context_status"], "empty")
 
 
 class LLMAOIProvenanceReconciliationTest(unittest.TestCase):

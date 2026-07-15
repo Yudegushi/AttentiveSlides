@@ -500,24 +500,59 @@ class UploadedDeckWorkspace:
             and slide_data.get("llm_visual_context_status") == "used"
         ):
             loaded_items: list[VisualContextItem] = []
-            for raw_item in slide_data.get("llm_visual_context", []):
+            raw_visual_context = slide_data.get("llm_visual_context")
+            if not isinstance(raw_visual_context, list):
+                raw_visual_context = []
+            for raw_item in raw_visual_context:
                 if not isinstance(raw_item, dict):
                     continue
                 try:
                     item = VisualContextItem(**raw_item)
+                    if (
+                        not isinstance(item.visual_id, str)
+                        or not isinstance(item.type, str)
+                        or not isinstance(item.bbox, list)
+                        or not isinstance(item.description, str)
+                        or not isinstance(item.transcription, str)
+                        or (
+                            item.linked_aoi_id is not None
+                            and not isinstance(item.linked_aoi_id, str)
+                        )
+                    ):
+                        continue
                     x1, y1, x2, y2 = (
                         float(value) for value in item.bbox
                     )
+                    confidence = float(item.confidence)
                 except (TypeError, ValueError):
                     continue
                 if (
                     not item.visual_id.strip()
+                    or item.type not in {
+                        "formula", "chart", "diagram", "table",
+                        "image", "code", "other",
+                    }
                     or not item.description.strip()
                     or item.provenance != "llm_visual_analysis"
+                    or (
+                        item.linked_aoi_id is not None
+                        and not item.linked_aoi_id.strip()
+                    )
                     or not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1)
+                    or not (0 <= confidence <= 1)
                 ):
                     continue
-                loaded_items.append(item)
+                loaded_items.append(VisualContextItem(
+                    visual_id=item.visual_id,
+                    type=item.type,
+                    bbox=[x1, y1, x2, y2],
+                    description=item.description,
+                    transcription=item.transcription,
+                    confidence=confidence,
+                    linked_aoi_id=item.linked_aoi_id,
+                ))
+                if len(loaded_items) == 6:
+                    break
             visual_context = tuple(loaded_items)
 
         return MainUISlide(

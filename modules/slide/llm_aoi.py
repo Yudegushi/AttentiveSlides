@@ -309,7 +309,10 @@ class LLMAOIGenerator:
             if not isinstance(raw_item, dict):
                 continue
             item_type = str(raw_item.get("type", "")).strip().lower()
-            description = str(raw_item.get("description", "")).strip()
+            raw_description = raw_item.get("description", "")
+            if not isinstance(raw_description, str):
+                continue
+            description = raw_description.strip()
             bbox = raw_item.get("bbox")
             if (
                 item_type not in ALLOWED_VISUAL_CONTEXT_TYPES
@@ -332,12 +335,18 @@ class LLMAOIGenerator:
                 confidence = 0.7
             if confidence < MIN_VISUAL_CONFIDENCE:
                 continue
+            raw_transcription = raw_item.get("transcription", "")
+            transcription = (
+                raw_transcription.strip()
+                if isinstance(raw_transcription, str)
+                else ""
+            )
             candidates.append(VisualContextItem(
                 visual_id="",
                 type=item_type,
                 bbox=normalized_bbox,
                 description=description[:600],
-                transcription=str(raw_item.get("transcription", "")).strip()[:1200],
+                transcription=transcription[:1200],
                 confidence=round(confidence, 3),
             ))
 

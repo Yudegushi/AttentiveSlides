@@ -114,7 +114,10 @@ class TestMainUIState(unittest.TestCase):
                 "slide_image_path": "",
                 "ocr_text": "Slide text",
                 "auto_aoi_version": AUTO_AOI_SCHEMA_VERSION,
-                "llm_visual_context": [visual.to_dict()],
+                "llm_visual_context": [{
+                    **visual.to_dict(),
+                    "description": 42,
+                }, visual.to_dict()],
                 "llm_visual_context_status": "used",
             }
             raw_aois = [{
@@ -146,8 +149,24 @@ class TestMainUIState(unittest.TestCase):
             ):
                 deterministic = workspace.get_slide("deck", 1, use_llm_aoi=True)
 
+            corrupt_data = dict(
+                slide_data,
+                llm_visual_context=None,
+            )
+            with patch.object(
+                workspace,
+                "_get_or_process_slide",
+                return_value=corrupt_data,
+            ), patch.object(
+                workspace.aoi_manager,
+                "get_effective_aois",
+                return_value=(raw_aois, "eligible-profile"),
+            ):
+                corrupt = workspace.get_slide("deck", 1, use_llm_aoi=True)
+
             self.assertEqual(enhanced.visual_context, (visual,))
             self.assertEqual(deterministic.visual_context, ())
+            self.assertEqual(corrupt.visual_context, ())
 
     def test_slide_width_is_clamped_and_snapped(self) -> None:
         from modules.system.main_ui_state import (

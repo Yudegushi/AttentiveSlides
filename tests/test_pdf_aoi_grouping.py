@@ -289,7 +289,7 @@ class PDFParagraphGroupingTest(unittest.TestCase):
             manager.manifest["deck:1"] = stale
             with patch.object(manager, "process_slide", return_value=refreshed) as process_slide, patch.object(
                 manager,
-                "build_llm_guided_aois",
+                "build_llm_guided_slide",
                 side_effect=ValueError("stop after regeneration"),
             ):
                 manager.process_llm_aoi("deck", 1, allow_ocr=False)

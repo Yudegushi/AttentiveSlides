@@ -730,12 +730,19 @@ class AOIManager:
             digest = self._anchor_digest(data)
             expected = self.llm_aoi_generator.profile(digest)
             if previous.get("llm_aoi_status") == "used" and previous.get("llm_aoi_profile") == expected:
-                for field in (
-                    "llm_aois", "llm_aoi_status", "llm_aoi_model", "llm_aoi_profile",
-                    "llm_aoi_anchor_digest", "llm_aoi_error", "llm_visual_context",
-                    "llm_visual_context_status",
-                ):
-                    data[field] = previous.get(field)
+                preserved_defaults = {
+                    "llm_aois": [],
+                    "llm_aoi_status": "used",
+                    "llm_aoi_model": None,
+                    "llm_aoi_profile": expected,
+                    "llm_aoi_anchor_digest": digest,
+                    "llm_aoi_error": None,
+                    "llm_visual_context": [],
+                    "llm_visual_context_status": "empty",
+                }
+                for field, default in preserved_defaults.items():
+                    value = previous.get(field)
+                    data[field] = default if value is None else value
             else:
                 data.update({
                     "llm_aois": [],
@@ -878,7 +885,20 @@ class AOIManager:
         expected_profile = self.llm_aoi_generator.profile(digest) if configured else None
         stored_profile = slide_data.get("llm_aoi_profile")
         status = str(slide_data.get("llm_aoi_status", "not_requested"))
-        llm_aois = list(slide_data.get("llm_aois", []))
+        raw_llm_aois = slide_data.get("llm_aois")
+        llm_aois = list(raw_llm_aois) if isinstance(raw_llm_aois, list) else []
+        raw_visual_context = slide_data.get("llm_visual_context")
+        visual_context = (
+            raw_visual_context
+            if isinstance(raw_visual_context, list)
+            else []
+        )
+        raw_visual_status = slide_data.get("llm_visual_context_status", "empty")
+        visual_status = (
+            raw_visual_status
+            if raw_visual_status in {"used", "empty", "invalid"}
+            else "empty"
+        )
         eligible = configured and status == "used" and bool(llm_aois) and stored_profile == expected_profile
         return {
             "configured": configured,
@@ -888,10 +908,8 @@ class AOIManager:
             "expected_profile": expected_profile,
             "eligible": eligible,
             "aoi_count": len(llm_aois),
-            "visual_count": len(slide_data.get("llm_visual_context", [])),
-            "visual_context_status": str(
-                slide_data.get("llm_visual_context_status", "empty")
-            ),
+            "visual_count": len(visual_context),
+            "visual_context_status": visual_status,
             "error": slide_data.get("llm_aoi_error"),
         }
 
