@@ -46,6 +46,10 @@ class LiveSinglePortLauncherSpikeTest(unittest.TestCase):
             select_origin("/attentive-media/video", streamlit, ingress),
             ingress,
         )
+        self.assertEqual(
+            select_origin("/attentive-voice/events", streamlit, ingress),
+            ingress,
+        )
         self.assertEqual(select_origin("/media/thumbnail.jpg", streamlit, ingress), streamlit)
         self.assertEqual(select_origin("/_stcore/stream", streamlit, ingress), streamlit)
         self.assertEqual(select_origin("/", streamlit, ingress), streamlit)
@@ -154,6 +158,15 @@ class LiveSinglePortProxyTest(unittest.IsolatedAsyncioTestCase):
 
         async def ingress_handler(request):
             self.seen.append(("ingress", request.path))
+            if request.path == "/attentive-voice/events":
+                socket_response = web.WebSocketResponse()
+                await socket_response.prepare(request)
+                async for message in socket_response:
+                    if message.type == WSMsgType.BINARY:
+                        await socket_response.send_bytes(message.data)
+                    elif message.type == WSMsgType.TEXT:
+                        await socket_response.send_str(message.data)
+                return socket_response
             return web.Response(text=f"ingress:{request.path}")
 
         streamlit_app = web.Application(client_max_size=8 * 1024**2)
@@ -225,6 +238,16 @@ class LiveSinglePortProxyTest(unittest.IsolatedAsyncioTestCase):
             message = await websocket.receive(timeout=2)
             self.assertEqual(message.type, WSMsgType.BINARY)
             self.assertEqual(message.data, b"streamlit-frame")
+
+    async def test_voice_binary_websocket_routes_to_existing_ingress_proxy(self):
+        async with self.client.ws_connect(
+            self.proxy_url("/attentive-voice/events?session=session-a")
+        ) as websocket:
+            await websocket.send_bytes(b"voice-pcm")
+            message = await websocket.receive(timeout=2)
+            self.assertEqual(message.type, WSMsgType.BINARY)
+            self.assertEqual(message.data, b"voice-pcm")
+        self.assertIn(("ingress", "/attentive-voice/events"), self.seen)
 
     async def test_compressed_component_body_stays_compressed_through_proxy(self):
         async with self.client.get(

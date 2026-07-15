@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: transparent; color: #1f2937; font: 14px/1.4 system-ui, sans-serif; }
+    #root { border: 1px solid #dbe4ee; border-radius: 10px; padding: 10px; background: #f8fafc; }
+    #controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    button { border: 1px solid #94a3b8; border-radius: 8px; padding: 7px 11px; background: #fff; cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+    #ptt.active { background: #dc2626; border-color: #b91c1c; color: #fff; }
+    #status { font-weight: 650; }
+    .copy { margin: 7px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .label { color: #64748b; font-size: 12px; }
+    #switch { margin-top: 8px; padding-top: 8px; border-top: 1px solid #dbe4ee; }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div id="controls">
+      <span id="status">Waiting for live media…</span>
+      <button id="ptt" type="button" hidden>Hold to talk</button>
+      <button id="playback" type="button">Enable playback</button>
+    </div>
+    <div class="copy"><span class="label">You: </span><span id="transcript"></span></div>
+    <div class="copy"><span class="label">Tutor: </span><span id="answer"></span></div>
+    <div id="switch" hidden>
+      <span id="switch-message"></span>
+      <button id="confirm" type="button">Confirm</button>
+      <button id="reject" type="button">Keep current</button>
+    </div>
+  </div>
+  <script>
+    window.parent.postMessage({
+      isStreamlitMessage: true,
+      type: "streamlit:componentReady",
+      apiVersion: 1,
+    }, "*");
+    (() => {
+      const MEDIA_SESSION_KEY = "attentive-media-session";
+      const root = document.getElementById("root");
+      const status = document.getElementById("status");
+      const ptt = document.getElementById("ptt");
+      const playback = document.getElementById("playback");
+      const transcript = document.getElementById("transcript");
+      const answer = document.getElementById("answer");
+      const switchBox = document.getElementById("switch");
+      const switchMessage = document.getElementById("switch-message");
+      const confirm = document.getElementById("confirm");
+      const reject = document.getElementById("reject");
+      let args = { engine: "single_turn", speech_mode: "continuous" };
+      let socket = null;
+      let socketSession = null;
+      let pttActive = false;
+      let continuousSignature = null;
+      let audioContext = null;
+      let playbackCursor = 0;
+      const scheduledNodes = new Set();
+
+      function send(type, payload = {}) {
+        window.parent.postMessage({ isStreamlitMessage: true, type, ...payload }, "*");
+      }
+
+      function setFrameHeight() {
+        send("streamlit:setFrameHeight", { height: Math.ceil(root.getBoundingClientRect().height) });
+      }
+
+      function mediaSession() {
+        try { return globalThis.localStorage.getItem(MEDIA_SESSION_KEY); }
+        catch (_) { return null; }
+      }
+
+      async function command(path) {
+        const session = mediaSession();
+        if (!session) throw new Error("Enable camera and microphone first.");
+        const response = await fetch(path, {
+          method: "POST",
+          headers: { "X-Attentive-Media-Session": session },
+        });
+        if (!response.ok) throw new Error("Voice command failed (" + response.status + ").");
+        return response.json();
+      }
+
+      async function ensureAudioContext() {
+        if (!audioContext) {
+          const AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext;
+          audioContext = new AudioContextClass({ sampleRate: 24000 });
+        }
+        await audioContext.resume();
+        playback.textContent = audioContext.state === "running" ? "Playback enabled" : "Enable playback";
+      }
+
+      function clearPlayback() {
+        for (const node of scheduledNodes) {
+          try { node.stop(); } catch (_) {}
+        }
+        scheduledNodes.clear();
+        playbackCursor = audioContext ? audioContext.currentTime : 0;
+      }
+
+      async function playPcm(arrayBuffer) {
+        await ensureAudioContext().catch(() => {});
+        if (!audioContext || audioContext.state !== "running") return;
+        const view = new DataView(arrayBuffer);
+        const samples = new Float32Array(Math.floor(view.byteLength / 2));
+        for (let index = 0; index < samples.length; index += 1) {
+          samples[index] = view.getInt16(index * 2, true) / 32768;
+        }
+        const buffer = audioContext.createBuffer(1, samples.length, 24000);
+        buffer.copyToChannel(samples, 0);
+        const source = audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioContext.destination);
+        const startsAt = Math.max(audioContext.currentTime, playbackCursor);
+        playbackCursor = startsAt + buffer.duration;
+        scheduledNodes.add(source);
+        source.addEventListener("ended", () => scheduledNodes.delete(source), { once: true });
+        source.start(startsAt);
+      }
+
+      function handleJson(message) {
+        const payload = message.payload || {};
+        if (message.type === "audio.config") return;
+        if (message.type === "voice.state") status.textContent = String(payload.state || "ready");
+        if (message.type === "user.transcript.delta" || message.type === "user.transcript.done") {
+          transcript.textContent = String(payload.text || "");
+        }
+        if (message.type === "assistant.text.delta" || message.type === "assistant.text.done") {
+          answer.textContent = String(payload.text || "");
+        }
+        if (message.type === "playback.clear") clearPlayback();
+        if (message.type === "voice.error" || message.type === "voice.notice") {
+          status.textContent = String(payload.message || "Voice unavailable");
+        }
+        if (message.type === "target.switch.pending") {
+          switchMessage.textContent = String(payload.message || "Confirm target switch?");
+          switchBox.hidden = false;
+        }
+        if (message.type === "target.switch.completed") switchBox.hidden = true;
+        setFrameHeight();
+      }
+
+      function websocketUrl(session) {
+        const url = new URL("/attentive-voice/events", window.location.href);
+        url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+        url.searchParams.set("session", session);
+        return url.toString();
+      }
+
+      function ensureSocket() {
+        const session = mediaSession();
+        if (!session) {
+          status.textContent = "Enable camera and microphone first.";
+          ptt.disabled = true;
+          if (socket) socket.close();
+          socket = null;
+          socketSession = null;
+          return;
+        }
+        ptt.disabled = false;
+        if (socket && socketSession === session && socket.readyState <= WebSocket.OPEN) return;
+        if (socket) socket.close();
+        socketSession = session;
+        socket = new WebSocket(websocketUrl(session));
+        socket.binaryType = "arraybuffer";
+        socket.addEventListener("open", () => { status.textContent = "Voice ready"; });
+        socket.addEventListener("message", (event) => {
+          if (event.data instanceof ArrayBuffer) {
+            void playPcm(event.data);
+            return;
+          }
+          try { handleJson(JSON.parse(event.data)); }
+          catch (_) { status.textContent = "Voice event could not be read."; }
+        });
+        socket.addEventListener("close", () => {
+          if (socketSession === session) status.textContent = "Voice connection closed.";
+        });
+      }
+
+      async function startPtt(event) {
+        event.preventDefault();
+        if (pttActive) return;
+        try {
+          await ensureAudioContext();
+          await command("/attentive-voice/ptt/start");
+          pttActive = true;
+          ptt.classList.add("active");
+          ptt.textContent = "Release to send";
+        } catch (error) { status.textContent = error.message; }
+      }
+
+      async function stopPtt(event) {
+        if (event) event.preventDefault();
+        if (!pttActive) return;
+        pttActive = false;
+        ptt.classList.remove("active");
+        ptt.textContent = "Hold to talk";
+        try { await command("/attentive-voice/ptt/stop"); }
+        catch (error) { status.textContent = error.message; }
+      }
+
+      ptt.addEventListener("pointerdown", (event) => void startPtt(event));
+      ptt.addEventListener("pointerup", (event) => void stopPtt(event));
+      ptt.addEventListener("pointercancel", (event) => void stopPtt(event));
+      ptt.addEventListener("keydown", (event) => {
+        if ((event.code === "Space" || event.code === "Enter") && !event.repeat) void startPtt(event);
+      });
+      ptt.addEventListener("keyup", (event) => {
+        if (event.code === "Space" || event.code === "Enter") void stopPtt(event);
+      });
+      playback.addEventListener("click", () => void ensureAudioContext());
+      confirm.addEventListener("click", () => void command("/attentive-voice/target/confirm"));
+      reject.addEventListener("click", () => void command("/attentive-voice/target/reject"));
+
+      async function render(nextArgs) {
+        const previousMode = args.speech_mode;
+        args = nextArgs;
+        ptt.hidden = args.speech_mode !== "push_to_talk";
+        ensureSocket();
+        const session = mediaSession();
+        const signature = session ? session + ":" + args.engine + ":" + args.speech_mode : null;
+        if (previousMode === "continuous" && args.speech_mode !== "continuous" && session) {
+          await command("/attentive-voice/continuous/stop").catch(() => {});
+        }
+        if (args.speech_mode === "continuous" && signature && continuousSignature !== signature) {
+          continuousSignature = signature;
+          await command("/attentive-voice/continuous/start").catch((error) => {
+            status.textContent = error.message;
+          });
+        }
+        setFrameHeight();
+      }
+
+      window.addEventListener("message", (event) => {
+        if (event.data && event.data.type === "streamlit:render") {
+          void render(event.data.args || {});
+        }
+      });
+      window.addEventListener("pagehide", () => {
+        clearPlayback();
+        if (socket) socket.close();
+      });
+      setFrameHeight();
+      window.setInterval(ensureSocket, 1000);
+    })();
+  </script>
+</body>
+</html>

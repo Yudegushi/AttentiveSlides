@@ -46,7 +46,11 @@ def build_streamlit_command(app: str, host: str, port: int) -> list[str]:
 
 
 def select_origin(path: str, streamlit_origin: str, ingress_origin: str) -> str:
-    is_capture_path = path == "/capture" or path.startswith("/attentive-media/")
+    is_capture_path = (
+        path == "/capture"
+        or path.startswith("/attentive-media/")
+        or path.startswith("/attentive-voice/")
+    )
     return ingress_origin if is_capture_path else streamlit_origin
 
 

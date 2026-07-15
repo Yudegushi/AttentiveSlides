@@ -4,7 +4,7 @@ import unittest
 import warnings
 
 import numpy as np
-from aiohttp import web
+from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 from PIL import Image
 
@@ -173,6 +173,29 @@ class SinglePortTransportTest(unittest.TestCase):
             )
 
         self.assertTrue(self.source.audio_queue.empty())
+
+    def test_audio_can_update_freshness_without_entering_audio_worker_queue(self):
+        self.ingress.start("session-a")
+        accepted = self.ingress.accept_audio_pcm(
+            "session-a",
+            np.array([1, -2, 3, -4], dtype="<i2").tobytes(),
+            timestamp=1.0,
+            sample_rate=16_000,
+            channels=1,
+            enqueue=False,
+        )
+        self.assertTrue(accepted)
+        self.assertTrue(self.ingress.session_snapshot().audio_fresh)
+        self.assertTrue(self.source.audio_queue.empty())
+        with self.assertRaises(ValueError):
+            self.ingress.accept_audio_pcm(
+                "session-a",
+                b"\x00",
+                timestamp=1.0,
+                sample_rate=16_000,
+                channels=1,
+                enqueue=False,
+            )
 
     def test_app_exposes_one_origin_media_routes(self):
         with warnings.catch_warnings():
@@ -411,3 +434,100 @@ class SinglePortHealthRouteTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, 503)
         self.assertEqual(await response.json(), payload)
+
+
+class FakeVoiceTransport:
+    def __init__(self, *, consume=True) -> None:
+        self.consume = consume
+        self.audio = []
+        self.commands = []
+
+    def should_consume_audio(self):
+        return self.consume
+
+    async def accept_pcm(self, session_id, pcm):
+        self.audio.append((session_id, pcm))
+
+    async def handle_http_command(self, command, session_id):
+        self.commands.append((command, session_id))
+        return {"command": command, "session_id": session_id}
+
+    def snapshot(self):
+        return {"state": "ready", "engine": "omni"}
+
+    async def stop(self, reason):
+        return None
+
+    async def websocket(self, request):
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        await socket.send_json(
+            {
+                "type": "audio.config",
+                "payload": {"sample_rate": 24000, "channels": 1, "sample_width": 2},
+            }
+        )
+        await socket.send_bytes(b"pcm")
+        await socket.close()
+        return socket
+
+
+class VoiceTransportRouteTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.clock = FakeClock()
+        self.source = BrowserMediaSource(clock=self.clock)
+        self.ingress = FallbackMediaIngress(self.source, clock=self.clock)
+        self.voice = FakeVoiceTransport()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", web.NotAppKeyWarning)
+            app = build_fallback_app(self.ingress, voice_transport=self.voice)
+        self.client = TestClient(TestServer(app))
+        await self.client.start_server()
+        self.addAsyncCleanup(self.client.close)
+        self.ingress.start("session-a")
+
+    async def test_selected_voice_route_consumes_pcm_once_without_audio_enqueue(self):
+        payload = np.array([1, -2, 3, -4], dtype="<i2").tobytes()
+        response = await self.client.post(
+            "/attentive-media/audio",
+            data=payload,
+            headers={
+                SESSION_HEADER: "session-a",
+                "X-Media-Timestamp": "1.0",
+                "X-Media-Sample-Rate": "16000",
+                "X-Media-Channels": "1",
+            },
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.voice.audio, [("session-a", payload)])
+        self.assertTrue(self.source.audio_queue.empty())
+        self.assertTrue(self.ingress.session_snapshot().audio_fresh)
+
+    async def test_commands_state_and_websocket_reject_stale_sessions(self):
+        stale = await self.client.post(
+            "/attentive-voice/ptt/start",
+            headers={SESSION_HEADER: "stale"},
+        )
+        self.assertEqual(stale.status, 409)
+
+        command = await self.client.post(
+            "/attentive-voice/ptt/start",
+            headers={SESSION_HEADER: "session-a"},
+        )
+        state = await self.client.get(
+            "/attentive-voice/state",
+            headers={SESSION_HEADER: "session-a"},
+        )
+        self.assertEqual(command.status, 200)
+        self.assertEqual((await command.json())["command"], "ptt/start")
+        self.assertEqual((await state.json())["state"], "ready")
+
+        socket = await self.client.ws_connect(
+            "/attentive-voice/events?session=session-a"
+        )
+        first = await socket.receive(timeout=2)
+        second = await socket.receive(timeout=2)
+        self.assertEqual(first.type, WSMsgType.TEXT)
+        self.assertEqual(first.json()["payload"]["sample_rate"], 24000)
+        self.assertEqual(second.type, WSMsgType.BINARY)
+        self.assertEqual(second.data, b"pcm")

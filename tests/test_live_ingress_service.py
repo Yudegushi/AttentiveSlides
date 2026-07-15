@@ -45,6 +45,35 @@ class FakeRuntime:
         self.is_running = False
 
 
+class FakeVoiceTransport:
+    def __init__(self):
+        self.state = "off"
+        self.stop_reasons = []
+        self.loop = None
+
+    def attach_loop(self, loop):
+        self.loop = loop
+
+    def snapshot(self):
+        return {"state": self.state, "ptt_active": False}
+
+    async def stop(self, reason):
+        self.stop_reasons.append(reason)
+        self.state = "off"
+
+    def should_consume_audio(self):
+        return False
+
+    async def accept_pcm(self, session_id, pcm):
+        return None
+
+    async def handle_http_command(self, command, session_id):
+        return {}
+
+    async def websocket(self, request):
+        raise RuntimeError("not used")
+
+
 def jpeg_payload() -> bytes:
     output = BytesIO()
     Image.new("RGB", (4, 2), color=(255, 0, 0)).save(output, format="JPEG")
@@ -365,6 +394,7 @@ class LiveIngressCoordinatorHealthTest(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(fail())
         with self.assertRaisesRegex(RuntimeError, "reconcile exploded"):
             await task
+
         service._coordinator_task = task
         service._coordinator_last_error = "RuntimeError: reconcile exploded"
 
@@ -378,6 +408,51 @@ class LiveIngressCoordinatorHealthTest(unittest.IsolatedAsyncioTestCase):
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await task
+
+
+class LiveIngressVoiceLifecycleTest(unittest.TestCase):
+    def setUp(self):
+        from modules.media.live_ingress_service import LiveIngressService
+
+        self.clock = FakeClock()
+        self.source = BrowserMediaSource(clock=self.clock)
+        self.ingress = FallbackMediaIngress(
+            self.source,
+            clock=self.clock,
+            start_armed=False,
+            coordinated_activation=True,
+        )
+        self.voice = FakeVoiceTransport()
+        self.service = LiveIngressService(
+            runtime=FakeRuntime(),
+            source=self.source,
+            ingress=self.ingress,
+            voice_transport=self.voice,
+            reconcile_interval_seconds=10.0,
+            port=0,
+        )
+        self.service.ensure_started()
+        self.addCleanup(self.service.shutdown)
+
+    def test_server_loop_is_attached_and_master_off_stops_voice(self):
+        self.assertIs(self.voice.loop, self.service._server_loop)
+        self.service.set_master_enabled(True)
+        self.voice.state = "ready"
+        self.service.set_master_enabled(False)
+        self.service.reconcile_once()
+        self.assertEqual(self.voice.stop_reasons, ["master switch off"])
+
+    def test_session_replacement_stops_voice_before_pending_activation(self):
+        self.service.set_master_enabled(True)
+        self.ingress.start("session-a")
+        self.service.reconcile_once()
+        self.voice.state = "ready"
+        self.ingress.start("session-b")
+        self.service.reconcile_once()
+        self.assertEqual(self.voice.stop_reasons, ["browser session replaced"])
+        snapshot = self.ingress.session_snapshot()
+        self.assertTrue(snapshot.active)
+        self.assertFalse(snapshot.session_pending)
 
 
 if __name__ == "__main__":

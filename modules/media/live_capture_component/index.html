@@ -28,6 +28,7 @@
     "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619";
   const EYETHEIA_URL = "ws://127.0.0.1:8001/ws/predict_gaze";
   const DEBUG_CHANNEL_NAME = "attentiveslides-gaze-debug-v1";
+  const MEDIA_SESSION_KEY = "attentive-media-session";
   const debugChannel = typeof BroadcastChannel === "function"
     ? new BroadcastChannel(DEBUG_CHANNEL_NAME)
     : null;
@@ -88,6 +89,20 @@
 
   function headers(extra = {}) {
     return { "X-Attentive-Media-Session": sessionId, ...extra };
+  }
+
+  function rememberMediaSession() {
+    try {
+      globalThis.localStorage.setItem(MEDIA_SESSION_KEY, sessionId);
+    } catch (_) {}
+  }
+
+  function forgetMediaSession() {
+    try {
+      if (globalThis.localStorage.getItem(MEDIA_SESSION_KEY) === sessionId) {
+        globalThis.localStorage.removeItem(MEDIA_SESSION_KEY);
+      }
+    } catch (_) {}
   }
 
   async function requireOk(response) {
@@ -604,6 +619,7 @@
       ).json();
       generation = started.generation;
       await waitForActivation(generation);
+      rememberMediaSession();
       preview.srcObject = stream;
       await preview.play();
       running = true;
@@ -622,6 +638,7 @@
   async function stopCapture(notifyServer, message) {
     const hadCapture = running || stream;
     running = false;
+    forgetMediaSession();
     stopLocalGaze();
     generation = null;
     window.clearInterval(videoTimer);
@@ -664,6 +681,7 @@
   permissionButton.addEventListener("click", () => void startCapture(true));
   window.addEventListener("pagehide", () => {
     running = false;
+    forgetMediaSession();
     stopLocalGaze();
     clearDebugGaze();
     if (debugChannel) debugChannel.close();

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import math
 from threading import RLock
 import time
-from typing import Callable
+from typing import Callable, Protocol
 
 import cv2
 import numpy as np
@@ -39,6 +39,24 @@ class InactiveMediaSession(MediaIngressError):
 
 class MediaPayloadTooLarge(MediaIngressError):
     """A browser media body exceeds the documented bounded request size."""
+
+
+class VoiceTransport(Protocol):
+    """Loop-owned voice extension mounted on the existing ingress app."""
+
+    def should_consume_audio(self) -> bool: ...
+
+    async def accept_pcm(self, session_id: str, pcm: bytes) -> None: ...
+
+    async def handle_http_command(
+        self, command: str, session_id: str
+    ) -> dict[str, object]: ...
+
+    async def websocket(self, request: web.Request) -> web.WebSocketResponse: ...
+
+    async def stop(self, reason: str) -> None: ...
+
+    def snapshot(self) -> dict[str, object]: ...
 
 
 @dataclass(frozen=True)
@@ -236,6 +254,7 @@ class FallbackMediaIngress:
         timestamp: float,
         sample_rate: int,
         channels: int,
+        enqueue: bool = True,
     ) -> bool:
         """Accept one bounded 16 kHz mono little-endian signed-16 PCM chunk."""
 
@@ -249,9 +268,12 @@ class FallbackMediaIngress:
         if not payload or len(payload) % sample_width:
             raise MediaIngressError("audio payload is not aligned signed-16 PCM")
         timestamp = self._validated_timestamp(timestamp)
-        samples = np.frombuffer(payload, dtype="<i2").reshape(-1, channels)
         with self._lock:
             self._require_active_session(session_id)
+            self._last_audio_received_at = self._clock()
+            if not enqueue:
+                return True
+            samples = np.frombuffer(payload, dtype="<i2").reshape(-1, channels)
             accepted = self.source.accept_audio_samples(
                 samples,
                 timestamp=timestamp,
@@ -259,8 +281,13 @@ class FallbackMediaIngress:
                 channels=channels,
                 timestamp_clock="browser_performance_seconds",
             )
-            self._last_audio_received_at = self._clock()
             return accepted
+
+    def require_active_session(self, session_id: str) -> None:
+        """Validate voice commands without mutating media freshness."""
+
+        with self._lock:
+            self._require_active_session(session_id)
 
     def accept_fatigue_jpeg(
         self,
@@ -675,6 +702,7 @@ def build_fallback_app(
     *,
     capture_html: str | None = None,
     health_check: Callable[[], tuple[bool, dict[str, object]]] | None = None,
+    voice_transport: VoiceTransport | None = None,
 ) -> web.Application:
     """Build the one-origin fallback application without starting a device."""
 
@@ -722,15 +750,32 @@ def build_fallback_app(
 
     async def audio(request: web.Request) -> web.Response:
         try:
+            session_id = _session_id(request)
+            payload = await request.read()
+            consume = bool(
+                voice_transport is not None
+                and voice_transport.should_consume_audio()
+            )
             ingress.accept_audio_pcm(
-                _session_id(request),
-                await request.read(),
+                session_id,
+                payload,
                 timestamp=_header_float(request, TIMESTAMP_HEADER),
                 sample_rate=_header_int(request, SAMPLE_RATE_HEADER),
                 channels=_header_int(request, CHANNELS_HEADER),
+                enqueue=not consume,
             )
         except MediaIngressError as exc:
             _raise_http_error(exc)
+        except Exception:
+            raise web.HTTPServiceUnavailable(text="voice transport unavailable")
+        if consume:
+            try:
+                assert voice_transport is not None
+                await voice_transport.accept_pcm(session_id, payload)
+            except web.HTTPException:
+                raise
+            except Exception:
+                raise web.HTTPServiceUnavailable(text="voice transport unavailable")
         return web.json_response(ingress.stats_payload())
 
     async def fatigue(request: web.Request) -> web.Response:
@@ -778,6 +823,46 @@ def build_fallback_app(
     async def stats(_request: web.Request) -> web.Response:
         return web.json_response(ingress.stats_payload())
 
+    async def voice_state(request: web.Request) -> web.Response:
+        assert voice_transport is not None
+        try:
+            ingress.require_active_session(_session_id(request))
+            payload = voice_transport.snapshot()
+        except MediaIngressError as exc:
+            _raise_http_error(exc)
+        except Exception:
+            raise web.HTTPServiceUnavailable(text="voice transport unavailable")
+        return web.json_response(payload)
+
+    async def voice_command(request: web.Request) -> web.Response:
+        assert voice_transport is not None
+        command = request.path.removeprefix("/attentive-voice/")
+        session_id = _session_id(request)
+        try:
+            ingress.require_active_session(session_id)
+            payload = await voice_transport.handle_http_command(command, session_id)
+        except MediaIngressError as exc:
+            _raise_http_error(exc)
+        except web.HTTPException:
+            raise
+        except ValueError as exc:
+            raise web.HTTPBadRequest(text="invalid voice command") from exc
+        except Exception:
+            raise web.HTTPServiceUnavailable(text="voice transport unavailable")
+        return web.json_response(payload)
+
+    async def voice_websocket(request: web.Request) -> web.WebSocketResponse:
+        assert voice_transport is not None
+        try:
+            ingress.require_active_session(_session_id(request))
+            return await voice_transport.websocket(request)
+        except MediaIngressError as exc:
+            _raise_http_error(exc)
+        except web.HTTPException:
+            raise
+        except Exception:
+            raise web.HTTPServiceUnavailable(text="voice transport unavailable")
+
     app.router.add_get("/", page)
     app.router.add_get("/health", health)
     app.router.add_get("/capture", capture)
@@ -790,6 +875,15 @@ def build_fallback_app(
     app.router.add_post("/attentive-media/heartbeat", heartbeat)
     app.router.add_post("/attentive-media/stop", stop)
     app.router.add_get("/attentive-media/stats", stats)
+    if voice_transport is not None:
+        app.router.add_get("/attentive-voice/state", voice_state)
+        app.router.add_get("/attentive-voice/events", voice_websocket)
+        app.router.add_post("/attentive-voice/ptt/start", voice_command)
+        app.router.add_post("/attentive-voice/ptt/stop", voice_command)
+        app.router.add_post("/attentive-voice/continuous/start", voice_command)
+        app.router.add_post("/attentive-voice/continuous/stop", voice_command)
+        app.router.add_post("/attentive-voice/target/confirm", voice_command)
+        app.router.add_post("/attentive-voice/target/reject", voice_command)
     app.on_startup.append(_start_watchdog)
     app.on_cleanup.append(_stop_watchdog)
     return app
