@@ -110,6 +110,31 @@ class SystemController:
             self._state = RuntimeState.ERROR
         self.stop(reason="browser disconnected")
 
+    def reset_audio_turn(self, reason: str = "voice routing changed") -> None:
+        """Flush a partial single-turn VAD turn without touching media or sensing."""
+        del reason
+        with self._lock:
+            if self._state == RuntimeState.STOPPED:
+                return
+            preserve_confirmation = self._state == RuntimeState.WAITING_CONFIRMATION
+            if not preserve_confirmation:
+                self._state = RuntimeState.STARTING
+                self._active_context = None
+            self._ignored_started_at.clear()
+
+        # AudioWorker.stop() cancels its detector and clears the shared audio
+        # queue; restarting only this worker preserves the single media source,
+        # sensing worker, fatigue worker, and public port.
+        self.audio_worker.stop()
+        with self._lock:
+            if self._state == RuntimeState.STOPPED:
+                return
+        self.audio_worker.start()
+        with self._lock:
+            if self._state == RuntimeState.STARTING:
+                self._state = RuntimeState.MONITORING
+        self._apply_deferred_sensing_slide()
+
     def poll(self) -> list[Any]:
         outcomes: list[Any] = []
         while True:

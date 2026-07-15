@@ -37,6 +37,7 @@ class OmniVoiceRuntime:
         begin_gaze_window: Callable[[TargetBinding, float], object],
         resolve_gaze_window: Callable[[object, float, TargetBinding], TargetBinding | None],
         on_fallback: Callable[[str, str | None], Awaitable[None]],
+        on_target_confirmed: Callable[[TargetBinding], None] | None = None,
         build_instructions: Callable[[TargetBinding], str] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -46,6 +47,7 @@ class OmniVoiceRuntime:
         self._begin_gaze_window = begin_gaze_window
         self._resolve_gaze_window = resolve_gaze_window
         self._on_fallback = on_fallback
+        self._on_target_confirmed = on_target_confirmed or (lambda target: None)
         self._build_instructions = build_instructions or self._default_instructions
         self._clock = clock
         self._snapshot_lock = RLock()
@@ -70,6 +72,10 @@ class OmniVoiceRuntime:
         self._response_audio_bytes = 0
         self._last_transcript = ""
         self._last_answer_text = ""
+        self._active_response_id = ""
+        self._cancelled_response_ids: set[str] = set()
+        self._ignore_unidentified_response_done = False
+        self._pending_speech_mode_update: SpeechMode | None = None
 
     async def start_session(self, *, target: TargetBinding, speech_mode: SpeechMode) -> None:
         if self._client is not None and self._target is not None:
@@ -84,6 +90,9 @@ class OmniVoiceRuntime:
         self._speech_mode = speech_mode
         self._fallback_triggered = False
         self._stopping = False
+        self._pending_speech_mode_update = None
+        self._cancelled_response_ids.clear()
+        self._ignore_unidentified_response_done = False
         self._reset_turn(clear_last=True)
         client = self._client_factory()
         self._client = client
@@ -112,8 +121,16 @@ class OmniVoiceRuntime:
         if self._speech_mode is mode:
             return
         client = self._require_client()
-        await client.update_speech_mode(mode)
+        previous_mode = self._speech_mode
         self._speech_mode = mode
+        self._pending_speech_mode_update = mode
+        try:
+            await client.update_speech_mode(mode)
+        except Exception:
+            if self._pending_speech_mode_update is mode:
+                self._pending_speech_mode_update = None
+                self._speech_mode = previous_mode
+            raise
         self._ptt_active = False
         self._ptt_has_audio = False
         self._gaze_window = None
@@ -170,19 +187,10 @@ class OmniVoiceRuntime:
                 {"switched": False, "message": decision.user_message or ""},
             )
             return
-        mode = self._speech_mode
-        await self._events.publish_json(
-            "target.switch.completed",
-            {
-                "switched": True,
-                "target_signature": decision.active_target.signature,
-                "message": decision.user_message or "",
-            },
+        await self._switch_to_confirmed_target(
+            decision.active_target,
+            decision.user_message or "",
         )
-        await self._close_client()
-        self._client = None
-        self._target = None
-        await self.start_session(target=decision.active_target, speech_mode=mode)
 
     async def reject_target_switch(self) -> None:
         decision = self._target_switching.reject()
@@ -200,6 +208,11 @@ class OmniVoiceRuntime:
         client = self._client
         if client is not None:
             await client.cancel_response()
+        if self._active_response_id:
+            self._cancelled_response_ids.add(self._active_response_id)
+        else:
+            self._ignore_unidentified_response_done = True
+        self._reset_turn(clear_last=False)
         await self._events.clear_playback()
         await self._set_state(
             OmniSessionState.LISTENING
@@ -217,6 +230,9 @@ class OmniVoiceRuntime:
         await self._close_client()
         self._client = None
         self._target = None
+        self._pending_speech_mode_update = None
+        self._cancelled_response_ids.clear()
+        self._ignore_unidentified_response_done = False
         self._reset_turn(clear_last=True)
         await self._set_state(OmniSessionState.OFF)
         self._stopping = False
@@ -261,6 +277,16 @@ class OmniVoiceRuntime:
     async def _handle_event(self, event: RealtimeEvent) -> None:
         event_type = event.type
         payload = event.payload
+        response_id = self._response_id(payload)
+        if (
+            event_type.startswith("response.")
+            and event_type != "response.created"
+            and response_id
+            and response_id in self._cancelled_response_ids
+        ):
+            if event_type == "response.done":
+                self._cancelled_response_ids.discard(response_id)
+            return
         if event_type == "input_audio_buffer.speech_started":
             await self._handle_speech_started()
             return
@@ -286,6 +312,7 @@ class OmniVoiceRuntime:
             return
         if event_type == "response.created":
             self._ensure_turn()
+            self._active_response_id = response_id
             await self._set_state(OmniSessionState.RESPONDING)
             return
         if event_type in {"response.audio_transcript.delta", "response.text.delta"}:
@@ -313,9 +340,23 @@ class OmniVoiceRuntime:
                 await self._events.publish_audio(audio)
             return
         if event_type == "response.done":
+            if not response_id and self._ignore_unidentified_response_done:
+                self._ignore_unidentified_response_done = False
+                return
+            if (
+                self._active_response_id
+                and response_id
+                and response_id != self._active_response_id
+            ):
+                return
             await self._finish_response()
             return
+        if event_type == "session.updated":
+            self._pending_speech_mode_update = None
+            return
         if event_type == "error":
+            if await self._recover_rejected_speech_mode_update():
+                return
             await self._trigger_fallback("omni_protocol_error")
 
     async def _handle_speech_started(self) -> None:
@@ -343,6 +384,12 @@ class OmniVoiceRuntime:
                     "label": decision.pending.candidate.label,
                     "message": decision.user_message or "",
                 },
+            )
+            return
+        if decision.intent is SwitchIntent.CONFIRM:
+            await self._switch_to_confirmed_target(
+                decision.active_target,
+                decision.user_message or "",
             )
             return
         if decision.should_create_response:
@@ -395,6 +442,7 @@ class OmniVoiceRuntime:
         self._answer_text = ""
         self._response_audio_bytes = 0
         self._gaze_window = None
+        self._active_response_id = ""
         if clear_last:
             self._last_transcript = ""
             self._last_answer_text = ""
@@ -422,7 +470,7 @@ class OmniVoiceRuntime:
         if self._fallback_triggered:
             return
         self._fallback_triggered = True
-        transcript = self._final_transcript or self._transcript or None
+        transcript = self._final_transcript or None
         await self._set_state(OmniSessionState.ERROR)
         await self._events.clear_playback()
         await self._events.publish_json(
@@ -434,6 +482,42 @@ class OmniVoiceRuntime:
         )
         await self._close_client()
         await self._on_fallback(reason, transcript)
+
+    async def _switch_to_confirmed_target(
+        self,
+        target: TargetBinding,
+        message: str,
+    ) -> None:
+        mode = self._speech_mode
+        self._on_target_confirmed(target)
+        await self._events.publish_json(
+            "target.switch.completed",
+            {
+                "switched": True,
+                "target_signature": target.signature,
+                "message": message,
+            },
+        )
+        await self._close_client()
+        self._client = None
+        self._target = None
+        await self.start_session(target=target, speech_mode=mode)
+
+    async def _recover_rejected_speech_mode_update(self) -> bool:
+        if self._pending_speech_mode_update is None or self._target is None:
+            return False
+        target = self._target
+        mode = self._speech_mode
+        self._pending_speech_mode_update = None
+        await self._events.publish_json(
+            "voice.notice",
+            {"message": "说话方式已切换，对话上下文已重置。"},
+        )
+        await self._close_client()
+        self._client = None
+        self._target = None
+        await self.start_session(target=target, speech_mode=mode)
+        return True
 
     async def _close_client(self) -> None:
         task = self._receiver_task
@@ -454,6 +538,13 @@ class OmniVoiceRuntime:
         if self._client is None:
             raise RuntimeError("Omni session is not active")
         return self._client
+
+    @staticmethod
+    def _response_id(payload: dict[str, Any]) -> str:
+        response = payload.get("response")
+        if isinstance(response, dict):
+            return str(response.get("id") or "")
+        return str(payload.get("response_id") or "")
 
     @staticmethod
     def _default_instructions(target: TargetBinding) -> str:

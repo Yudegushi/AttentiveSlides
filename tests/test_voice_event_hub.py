@@ -44,6 +44,22 @@ class VoiceEventHubTests(unittest.IsolatedAsyncioTestCase):
         await hub.publish_json("voice.state", {})
         self.assertTrue(subscription.queue.empty())
 
+    async def test_active_session_filters_json_and_audio_after_handoff(self) -> None:
+        hub = VoiceEventHub()
+        stale = await hub.subscribe("old")
+        active = await hub.subscribe("new")
+        await hub.set_active_session("new")
+        await hub.publish_json("assistant.text.delta", {"text": "private"})
+        await hub.publish_audio(b"private-audio")
+        self.assertTrue(stale.queue.empty())
+        self.assertEqual((await active.receive()).payload["text"], "private")
+        self.assertEqual(await active.receive(), b"private-audio")
+
+        await hub.set_active_session(None)
+        await hub.publish_json("voice.state", {"state": "off"})
+        self.assertTrue(stale.queue.empty())
+        self.assertTrue(active.queue.empty())
+
 
 if __name__ == "__main__":
     unittest.main()

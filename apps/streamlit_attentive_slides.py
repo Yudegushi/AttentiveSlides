@@ -322,6 +322,7 @@ def build_main_live_resources(
         )
 
     voice_holder: dict[str, VoiceOrchestrator] = {}
+    controller_holder: dict[str, SystemController] = {}
 
     async def fallback_voice(
         reason: str,
@@ -332,6 +333,16 @@ def build_main_live_resources(
             transcript,
         )
 
+    def adopt_omni_target(target: TargetBinding) -> None:
+        orchestrator = voice_holder.get("voice")
+        if orchestrator is not None:
+            orchestrator.adopt_confirmed_target(target)
+
+    def reset_single_turn_audio(reason: str) -> None:
+        controller = controller_holder.get("controller")
+        if controller is not None:
+            controller.reset_audio_turn(reason)
+
     omni_runtime = OmniVoiceRuntime(
         events=voice_events,
         target_switching=target_switching,
@@ -339,6 +350,7 @@ def build_main_live_resources(
         begin_gaze_window=begin_omni_gaze_window,
         resolve_gaze_window=resolve_omni_gaze_window,
         on_fallback=fallback_voice,
+        on_target_confirmed=adopt_omni_target,
         build_instructions=build_omni_instructions,
     )
     single_turn_ptt = SingleTurnPTTRuntime(
@@ -359,6 +371,7 @@ def build_main_live_resources(
         single_turn_ptt=single_turn_ptt,
         target_switching=target_switching,
         publish_single_turn_transcript=publish_fallback_transcript,
+        on_single_turn_boundary=reset_single_turn_audio,
     )
     voice_holder["voice"] = voice
     single_turn_tts = SingleTurnTTSController(
@@ -372,6 +385,7 @@ def build_main_live_resources(
         turn_runner=runner,
         fatigue_worker=fatigue_worker,
     )
+    controller_holder["controller"] = controller
     runtime = MainUILiveRuntime(
         controller=controller,
         inbox=inbox,
@@ -907,6 +921,8 @@ def _bind_main_live_resources(
     # UploadedDeckWorkspace is intentionally recreated on each app rerun.
     # Keep the cached live graph pointed at the current workspace/browser.
     resources.provider.set_browser(browser)
+    if aoi_changed:
+        resources.bound_voice_target_signature = None
     _sync_main_live_voice_resources(resources, view)
 
     if deck_changed or aoi_changed:
@@ -3840,7 +3856,11 @@ def _render_tutor_result(
             st.session_state.get("main_last_generated_interaction_id") or ""
         ),
         text=str(result["answer"]),
-        enabled=bool(st.session_state["main_answer_audio_enabled"]),
+        enabled=bool(
+            st.session_state.get("main_interaction_mode") == "Live"
+            and st.session_state.get("main_voice_engine") == "single_turn"
+            and st.session_state["main_answer_audio_enabled"]
+        ),
     )
     if speech.audio_path is not None:
         st.audio(str(speech.audio_path), format="audio/wav")
@@ -4388,11 +4408,19 @@ def _store_live_confirmation(
         ),
         None,
     )
-    confirmed_context = (
+    native_context = (
         selected_aoi.text.strip()
         if selected_aoi is not None
-        and selected_aoi.text.strip()
-        else view.active_slide.slide_text.strip()
+        else ""
+    )
+    linked_visual_context = _linked_visual_context_text(
+        view.active_slide,
+        selected_aoi_id,
+    ).strip()
+    confirmed_context = (
+        native_context
+        or linked_visual_context
+        or view.active_slide.slide_text.strip()
     )
     wrapper = {
         "interaction": interaction.to_dict(),
@@ -4472,7 +4500,21 @@ def _consume_live_proposal(
             view.active_slide.aois,
         )
 
+    preserved_manual_state = {}
+    if raw.gaze_source == "voice_locked_target":
+        preserved_manual_state = {
+            key: st.session_state.get(key)
+            for key in (
+                "main_target_scope",
+                "main_manual_bbox",
+                "main_manual_region_active",
+                "main_selected_aoi_ids",
+                "main_selection_matches",
+                "main_selection_text",
+            )
+        }
     reset_main_turn_state(st.session_state)
+    st.session_state.update(preserved_manual_state)
     st.session_state["main_live_proposal"] = proposal
     st.session_state["main_live_original_transcript"] = (
         proposal.original_speech_transcript

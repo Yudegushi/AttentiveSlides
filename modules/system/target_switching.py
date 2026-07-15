@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from threading import RLock
@@ -28,7 +29,17 @@ WEAK_DEICTIC_PATTERNS = (
     "this one",
 )
 CONFIRM_PATTERNS = ("对", "是的", "确认", "切换", "yes", "confirm")
-REJECT_PATTERNS = ("不是", "不换", "不用换", "继续刚才", "no", "cancel")
+REJECT_PATTERNS = (
+    "不对",
+    "不是",
+    "不换",
+    "不用换",
+    "不要切换",
+    "不想换",
+    "继续刚才",
+    "no",
+    "cancel",
+)
 
 
 class SwitchIntent(str, Enum):
@@ -59,7 +70,16 @@ def _normalize(transcript: str) -> str:
 
 
 def _contains_any(transcript: str, patterns: tuple[str, ...]) -> bool:
-    return any(pattern in transcript for pattern in patterns)
+    for pattern in patterns:
+        if pattern.isascii():
+            if re.search(
+                rf"(?<![a-z0-9_]){re.escape(pattern)}(?![a-z0-9_])",
+                transcript,
+            ):
+                return True
+        elif pattern in transcript:
+            return True
+    return False
 
 
 class TargetSwitchController:

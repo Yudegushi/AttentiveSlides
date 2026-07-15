@@ -67,6 +67,7 @@ class OmniVoiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.fallbacks = []
         self.gaze_starts = []
         self.gaze_candidate = None
+        self.confirmed_targets = []
 
         def factory():
             client = FakeClient()
@@ -92,6 +93,7 @@ class OmniVoiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             begin_gaze_window=begin,
             resolve_gaze_window=resolve,
             on_fallback=fallback,
+            on_target_confirmed=self.confirmed_targets.append,
         )
         self.a = make_target("a")
         self.addAsyncCleanup(self.runtime.stop_session, "test_cleanup")
@@ -160,6 +162,41 @@ class OmniVoiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.gaze_starts), 1)
         self.assertTrue(any(isinstance(item, VoiceJSONEvent) and item.type == "playback.clear" for item in events))
 
+    async def test_barge_in_isolates_new_answer_and_ignores_cancelled_response_done(self) -> None:
+        await self.runtime.start_session(target=self.a, speech_mode=SpeechMode.CONTINUOUS)
+        client = self.clients[0]
+        await client.emit("response.created", response={"id": "old"})
+        await client.emit("response.text.delta", response_id="old", delta="old partial")
+        await client.emit("input_audio_buffer.speech_started")
+        await client.emit("conversation.item.input_audio_transcription.completed", transcript="new question")
+        await client.emit("response.created", response={"id": "new"})
+        await client.emit("response.text.delta", response_id="new", delta="new answer")
+        await client.emit("response.done", response={"id": "old"})
+        await client.emit("response.done", response={"id": "new"})
+        await self.drain()
+        self.assertEqual(self.runtime.snapshot()["user_transcript"], "new question")
+        self.assertEqual(self.runtime.snapshot()["answer_text"], "new answer")
+
+    async def test_voice_confirmation_rebinds_target_and_provider_session(self) -> None:
+        b = make_target("b")
+        await self.runtime.start_session(target=self.a, speech_mode=SpeechMode.CONTINUOUS)
+        first_client = self.clients[0]
+        self.controller.observe_candidate(b)
+        await first_client.emit(
+            "conversation.item.input_audio_transcription.completed",
+            transcript="讲这里",
+        )
+        await self.drain()
+        await first_client.emit(
+            "conversation.item.input_audio_transcription.completed",
+            transcript="是的",
+        )
+        await self.drain()
+        self.assertEqual(self.confirmed_targets, [b])
+        self.assertEqual(first_client.closed, 1)
+        self.assertEqual(len(self.clients), 2)
+        self.assertEqual(self.runtime.snapshot()["target_signature"], b.signature)
+
     async def test_audio_off_keeps_answer_text_without_binary_playback(self) -> None:
         await self.runtime.start_session(target=self.a, speech_mode=SpeechMode.CONTINUOUS)
         await self.runtime.set_answer_audio_enabled(False)
@@ -193,6 +230,34 @@ class OmniVoiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
         errors = [item for item in events if isinstance(item, VoiceJSONEvent) and item.type == "voice.error"]
         self.assertEqual(len(errors), 1)
         self.assertNotIn("Authorization", str(errors[0].payload))
+
+    async def test_rejected_speech_mode_update_rebuilds_without_generic_fallback(self) -> None:
+        await self.runtime.start_session(target=self.a, speech_mode=SpeechMode.CONTINUOUS)
+        first_client = self.clients[0]
+        await self.runtime.set_speech_mode(SpeechMode.PUSH_TO_TALK)
+        await first_client.emit("error", error={"message": "unsupported update"})
+        events = await self.drain()
+        self.assertEqual(self.fallbacks, [])
+        self.assertEqual(first_client.closed, 1)
+        self.assertEqual(len(self.clients), 2)
+        self.assertEqual(self.runtime.snapshot()["speech_mode"], "push_to_talk")
+        self.assertTrue(
+            any(
+                isinstance(item, VoiceJSONEvent) and item.type == "voice.notice"
+                for item in events
+            )
+        )
+
+    async def test_partial_transcript_is_not_recovered_on_provider_failure(self) -> None:
+        await self.runtime.start_session(target=self.a, speech_mode=SpeechMode.CONTINUOUS)
+        client = self.clients[0]
+        await client.emit(
+            "conversation.item.input_audio_transcription.delta",
+            delta="partial only",
+        )
+        await client.emit("error", error={"message": "failed"})
+        await self.drain()
+        self.assertEqual(self.fallbacks, [("omni_protocol_error", None)])
 
     async def test_connect_failure_uses_sanitized_fallback(self) -> None:
         async def fallback(reason, transcript):

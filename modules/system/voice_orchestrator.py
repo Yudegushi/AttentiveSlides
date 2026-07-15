@@ -33,6 +33,7 @@ class VoiceOrchestrator:
         target_switching: TargetSwitchController,
         publish_single_turn_transcript: Callable[[str], None],
         on_target_changed: Callable[[TargetBinding], None] | None = None,
+        on_single_turn_boundary: Callable[[str], None] | None = None,
     ) -> None:
         self._events = events
         self._omni = omni
@@ -40,6 +41,7 @@ class VoiceOrchestrator:
         self._target_switching = target_switching
         self._publish_single_turn_transcript = publish_single_turn_transcript
         self._on_target_changed = on_target_changed or (lambda target: None)
+        self._on_single_turn_boundary = on_single_turn_boundary or (lambda reason: None)
         self._lock = RLock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._preferences = VoicePreferences()
@@ -62,6 +64,15 @@ class VoiceOrchestrator:
             self._preferences = preferences
             if preferences.engine is VoiceEngine.OMNI:
                 self._status_message = None
+        if (
+            previous.engine is VoiceEngine.SINGLE_TURN
+            and previous.speech_mode is SpeechMode.CONTINUOUS
+            and (
+                preferences.engine is not VoiceEngine.SINGLE_TURN
+                or preferences.speech_mode is not SpeechMode.CONTINUOUS
+            )
+        ):
+            self._on_single_turn_boundary("voice routing changed")
         self._submit(lambda: self._apply_preferences(previous, preferences))
 
     def update_target(self, target: TargetBinding) -> None:
@@ -93,6 +104,15 @@ class VoiceOrchestrator:
     def current_target(self) -> TargetBinding | None:
         with self._lock:
             return self._target
+
+    def adopt_confirmed_target(self, target: TargetBinding) -> None:
+        """Synchronize a target confirmed inside the persistent Omni session."""
+        with self._lock:
+            previous = self._target
+            if previous == target:
+                return
+            self._target = target
+        self._on_target_changed(target)
 
     async def accept_pcm(self, session_id: str, pcm: bytes) -> None:
         with self._lock:
@@ -154,9 +174,7 @@ class VoiceOrchestrator:
             await self._omni.confirm_target_switch()
             active = self._target_switching.active_target
             if active is not None:
-                with self._lock:
-                    self._target = active
-                self._on_target_changed(active)
+                self.adopt_confirmed_target(active)
         elif command == "target/reject":
             if preferences.engine is not VoiceEngine.OMNI:
                 raise ValueError("target switching belongs to Omni mode")
@@ -202,6 +220,7 @@ class VoiceOrchestrator:
         await self._single_turn_ptt.cancel(reason)
         await self._omni.stop_session(reason)
         await self._events.clear_playback()
+        await self._events.set_active_session(None)
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
@@ -244,18 +263,37 @@ class VoiceOrchestrator:
                 }
             )
             await socket.send_json({"type": "voice.snapshot", "payload": self.snapshot()})
-            while not socket.closed:
-                message = await subscription.receive()
-                if isinstance(message, bytes):
-                    await socket.send_bytes(message)
-                else:
-                    await socket.send_json(
-                        {
-                            "sequence": message.sequence,
-                            "type": message.type,
-                            "payload": message.payload,
-                        }
-                    )
+            async def forward_events() -> None:
+                while not socket.closed:
+                    message = await subscription.receive()
+                    if isinstance(message, bytes):
+                        await socket.send_bytes(message)
+                    else:
+                        await socket.send_json(
+                            {
+                                "sequence": message.sequence,
+                                "type": message.type,
+                                "payload": message.payload,
+                            }
+                        )
+
+            async def observe_client_close() -> None:
+                async for _message in socket:
+                    pass
+
+            tasks = {
+                asyncio.create_task(forward_events()),
+                asyncio.create_task(observe_client_close()),
+            }
+            done, pending = await asyncio.wait(
+                tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            for task in done:
+                task.result()
         except (ConnectionError, asyncio.CancelledError):
             pass
         finally:
@@ -291,12 +329,16 @@ class VoiceOrchestrator:
                         "voice.notice",
                         {"message": "说话方式已切换，对话上下文已重置。"},
                     )
+        elif previous.speech_mode is not current.speech_mode:
+            await self._single_turn_ptt.cancel("speaking mode changed")
         await self._omni.set_answer_audio_enabled(current.answer_audio_enabled)
 
     async def _apply_target_change(
         self, previous: TargetBinding | None, target: TargetBinding
     ) -> None:
         preferences = self._preferences_snapshot()
+        if previous is not None and previous.signature != target.signature:
+            await self._single_turn_ptt.cancel("confirmed target changed")
         if preferences.engine is not VoiceEngine.OMNI:
             return
         with self._lock:
@@ -325,6 +367,7 @@ class VoiceOrchestrator:
             await self._single_turn_ptt.cancel("browser session replaced")
             await self._omni.stop_session("browser session replaced")
             await self._events.clear_playback()
+        await self._events.set_active_session(session_id)
 
     async def _ensure_omni(
         self, target: TargetBinding, preferences: VoicePreferences

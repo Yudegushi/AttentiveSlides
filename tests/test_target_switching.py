@@ -69,6 +69,25 @@ class TargetSwitchingTests(unittest.TestCase):
         self.assertIsNone(self.controller.pending)
         self.assertIsNone(self.controller.candidate)
 
+    def test_confirmation_phrases_do_not_match_negative_or_embedded_words(self) -> None:
+        for transcript in ("不对", "不是这个"):
+            with self.subTest(transcript=transcript):
+                self.controller.bind(self.a)
+                self.controller.observe_candidate(self.b)
+                self.controller.handle_transcript("讲这里")
+                decision = self.controller.handle_transcript(transcript)
+                self.assertEqual(decision.intent, SwitchIntent.REJECT)
+                self.assertEqual(decision.active_target, self.a)
+
+        for transcript in ("yesterday", "another"):
+            with self.subTest(transcript=transcript):
+                self.controller.bind(self.a)
+                self.controller.observe_candidate(self.b)
+                self.controller.handle_transcript("讲这里")
+                decision = self.controller.handle_transcript(transcript)
+                self.assertEqual(decision.intent, SwitchIntent.PROPOSE)
+                self.assertEqual(decision.active_target, self.a)
+
     def test_strong_switch_without_candidate_requests_selection(self) -> None:
         decision = self.controller.handle_transcript("look at this")
         self.assertEqual(decision.intent, SwitchIntent.KEEP)

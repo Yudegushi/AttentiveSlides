@@ -677,6 +677,7 @@ class TestStreamlitAttentiveSlides(
         provider_position = binding.index("resources.provider.set_browser(browser)")
         voice_position = binding.index("_sync_main_live_voice_resources(resources, view)")
         self.assertLess(provider_position, voice_position)
+        self.assertIn("resources.bound_voice_target_signature = None", binding)
 
     def test_omni_ui_preserves_three_column_interaction_layout(self) -> None:
         source = self.function_source("_render_omni_interaction")
@@ -691,6 +692,8 @@ class TestStreamlitAttentiveSlides(
             result.index("tts_controller.synthesize_once("),
         )
         self.assertIn("st.audio", result)
+        self.assertIn('main_interaction_mode") == "Live"', result)
+        self.assertIn('main_voice_engine") == "single_turn"', result)
         builder = self.function_source("build_main_live_resources")
         self.assertEqual(builder.count("SingleTurnTTSController("), 1)
 
@@ -700,6 +703,15 @@ class TestStreamlitAttentiveSlides(
         self.assertNotIn("generate_main_tutor_response", builder)
         consumer = self.function_source("_consume_live_proposal")
         self.assertIn('raw.gaze_source == "voice_locked_target"', consumer)
+        self.assertIn("preserved_manual_state", consumer)
+
+    def test_live_confirmation_prefers_linked_visual_context_before_slide(self) -> None:
+        confirmation = self.function_source("_store_live_confirmation")
+        self.assertIn("_linked_visual_context_text(", confirmation)
+        self.assertLess(
+            confirmation.index("native_context\n        or linked_visual_context"),
+            confirmation.index("or view.active_slide.slide_text.strip()"),
+        )
 
 
 if __name__ == "__main__":

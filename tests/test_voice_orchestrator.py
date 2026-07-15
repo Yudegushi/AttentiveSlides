@@ -87,12 +87,14 @@ class VoiceOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.ptt = FakePTT()
         self.switching = TargetSwitchController()
         self.published = []
+        self.boundaries = []
         self.orchestrator = VoiceOrchestrator(
             events=self.events,
             omni=self.omni,
             single_turn_ptt=self.ptt,
             target_switching=self.switching,
             publish_single_turn_transcript=self.published.append,
+            on_single_turn_boundary=self.boundaries.append,
         )
         self.orchestrator.attach_loop(asyncio.get_running_loop())
         self.orchestrator.update_target(target())
@@ -121,6 +123,21 @@ class VoiceOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         await self.orchestrator.handle_http_command("ptt/stop", "session")
         self.assertIn(("pcm", "session", b"keep"), self.ptt.calls)
         self.assertNotIn(("pcm", "stale", b"drop"), self.ptt.calls)
+        self.assertEqual(self.boundaries, ["voice routing changed"])
+
+    async def test_single_turn_ptt_is_cancelled_on_mode_and_target_boundaries(self) -> None:
+        self.orchestrator.update_preferences(
+            VoicePreferences(speech_mode=SpeechMode.PUSH_TO_TALK)
+        )
+        await self.settle()
+        await self.orchestrator.handle_http_command("ptt/start", "session")
+        self.orchestrator.update_target(target("b"))
+        await self.settle()
+        self.assertIn(("cancel", "confirmed target changed"), self.ptt.calls)
+
+        self.orchestrator.update_preferences(VoicePreferences())
+        await self.settle()
+        self.assertIn(("cancel", "speaking mode changed"), self.ptt.calls)
 
     async def test_omni_continuous_starts_once_and_target_change_is_boundary(self) -> None:
         self.orchestrator.update_preferences(

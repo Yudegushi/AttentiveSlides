@@ -54,6 +54,8 @@
       let socket = null;
       let socketSession = null;
       let pttActive = false;
+      let pttStartPromise = null;
+      let pttPointerId = null;
       let continuousSignature = null;
       let audioContext = null;
       let playbackCursor = 0;
@@ -123,6 +125,17 @@
       function handleJson(message) {
         const payload = message.payload || {};
         if (message.type === "audio.config") return;
+        if (message.type === "voice.snapshot") {
+          status.textContent = String(payload.status_message || payload.state || "ready");
+          transcript.textContent = String(payload.user_transcript || "");
+          answer.textContent = String(payload.answer_text || "");
+          if (payload.pending_target) {
+            switchMessage.textContent = "Switch to " + String(payload.pending_target.label || "this target") + "?";
+            switchBox.hidden = false;
+          } else {
+            switchBox.hidden = true;
+          }
+        }
         if (message.type === "voice.state") status.textContent = String(payload.state || "ready");
         if (message.type === "user.transcript.delta" || message.type === "user.transcript.done") {
           transcript.textContent = String(payload.text || "");
@@ -181,29 +194,52 @@
 
       async function startPtt(event) {
         event.preventDefault();
-        if (pttActive) return;
+        if (pttActive || pttStartPromise) return;
+        if (Number.isInteger(event.pointerId) && ptt.setPointerCapture) {
+          pttPointerId = event.pointerId;
+          try { ptt.setPointerCapture(event.pointerId); } catch (_) {}
+        }
+        pttActive = true;
+        ptt.classList.add("active");
+        ptt.textContent = "Release to send";
         try {
-          await ensureAudioContext();
-          await command("/attentive-voice/ptt/start");
-          pttActive = true;
-          ptt.classList.add("active");
-          ptt.textContent = "Release to send";
-        } catch (error) { status.textContent = error.message; }
+          pttStartPromise = (async () => {
+            await ensureAudioContext();
+            return command("/attentive-voice/ptt/start");
+          })();
+          await pttStartPromise;
+        } catch (error) {
+          pttActive = false;
+          ptt.classList.remove("active");
+          ptt.textContent = "Hold to talk";
+          status.textContent = error.message;
+        } finally {
+          pttStartPromise = null;
+        }
       }
 
       async function stopPtt(event) {
         if (event) event.preventDefault();
-        if (!pttActive) return;
+        if (!pttActive && !pttStartPromise) return;
+        const pendingStart = pttStartPromise;
         pttActive = false;
         ptt.classList.remove("active");
         ptt.textContent = "Hold to talk";
-        try { await command("/attentive-voice/ptt/stop"); }
+        if (pttPointerId !== null && ptt.releasePointerCapture) {
+          try { ptt.releasePointerCapture(pttPointerId); } catch (_) {}
+          pttPointerId = null;
+        }
+        try {
+          if (pendingStart) await pendingStart;
+          await command("/attentive-voice/ptt/stop");
+        }
         catch (error) { status.textContent = error.message; }
       }
 
       ptt.addEventListener("pointerdown", (event) => void startPtt(event));
       ptt.addEventListener("pointerup", (event) => void stopPtt(event));
       ptt.addEventListener("pointercancel", (event) => void stopPtt(event));
+      ptt.addEventListener("lostpointercapture", (event) => void stopPtt(event));
       ptt.addEventListener("keydown", (event) => {
         if ((event.code === "Space" || event.code === "Enter") && !event.repeat) void startPtt(event);
       });
@@ -211,8 +247,12 @@
         if (event.code === "Space" || event.code === "Enter") void stopPtt(event);
       });
       playback.addEventListener("click", () => void ensureAudioContext());
-      confirm.addEventListener("click", () => void command("/attentive-voice/target/confirm"));
-      reject.addEventListener("click", () => void command("/attentive-voice/target/reject"));
+      confirm.addEventListener("click", () => void command("/attentive-voice/target/confirm").catch((error) => {
+        status.textContent = error.message;
+      }));
+      reject.addEventListener("click", () => void command("/attentive-voice/target/reject").catch((error) => {
+        status.textContent = error.message;
+      }));
 
       async function render(nextArgs) {
         const previousMode = args.speech_mode;
@@ -240,6 +280,17 @@
       });
       window.addEventListener("pagehide", () => {
         clearPlayback();
+        if (pttActive || pttStartPromise) {
+          const session = mediaSession();
+          if (session) {
+            void fetch("/attentive-voice/ptt/stop", {
+              method: "POST",
+              headers: { "X-Attentive-Media-Session": session },
+              keepalive: true,
+            }).catch(() => {});
+          }
+          pttActive = false;
+        }
         if (socket) socket.close();
       });
       setFrameHeight();

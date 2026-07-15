@@ -40,6 +40,16 @@ class VoiceControlComponentContractTests(unittest.TestCase):
         self.assertIn("textContent", self.component)
         self.assertNotIn("innerHTML", self.component)
 
+    def test_snapshot_reconnect_and_ptt_teardown_contracts_exist(self) -> None:
+        self.assertIn('message.type === "voice.snapshot"', self.component)
+        self.assertIn("payload.user_transcript", self.component)
+        self.assertIn("payload.answer_text", self.component)
+        self.assertIn("payload.pending_target", self.component)
+        self.assertIn("setPointerCapture", self.component)
+        self.assertIn("lostpointercapture", self.component)
+        self.assertIn('fetch("/attentive-voice/ptt/stop"', self.component)
+        self.assertIn("keepalive: true", self.component)
+
     def test_capture_fatigue_contract_is_unchanged(self) -> None:
         self.assertIn("const FATIGUE_INTERVAL_MS = 500", self.capture)
         self.assertIn("fatigueCanvas.width = 224", self.capture)

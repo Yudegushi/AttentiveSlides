@@ -208,6 +208,20 @@ class SystemControllerTest(unittest.TestCase):
         self.assertEqual(self.controller.state, RuntimeState.MONITORING)
         self.assertEqual(self.runner.contexts, [])
 
+    def test_reset_audio_turn_restarts_only_audio_and_clears_active_context(self):
+        self.controller.start()
+        self.audio.emit_started(10.0)
+        self.assertEqual(self.controller.state, RuntimeState.SPEECH_ACTIVE)
+
+        self.controller.reset_audio_turn("voice routing changed")
+
+        self.assertEqual(self.controller.state, RuntimeState.MONITORING)
+        self.assertEqual((self.audio.stops, self.audio.starts), (1, 2))
+        self.assertEqual((self.media.stops, self.sensing.stops), (0, 0))
+        self.audio.results.put(result(10.0, 10.5))
+        self.assertEqual(self.controller.poll(), [])
+        self.assertEqual(self.runner.contexts, [])
+
     def test_exploding_fatigue_start_does_not_prevent_monitoring(self):
         fatigue = FakeFatigue(explode_on_start=True)
         controller = SystemController(

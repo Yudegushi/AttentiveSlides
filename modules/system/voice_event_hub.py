@@ -35,6 +35,14 @@ class VoiceEventHub:
         self._subscriptions: set[VoiceSubscription] = set()
         self._sequence = 0
         self._lock = asyncio.Lock()
+        self._active_session_id: str | None = None
+        self._session_filter_enabled = False
+
+    async def set_active_session(self, session_id: str | None) -> None:
+        """Limit future delivery to the currently adopted browser session."""
+        async with self._lock:
+            self._active_session_id = session_id
+            self._session_filter_enabled = True
 
     async def subscribe(self, session_id: str) -> VoiceSubscription:
         subscription = VoiceSubscription(
@@ -53,7 +61,7 @@ class VoiceEventHub:
         async with self._lock:
             self._sequence += 1
             message = VoiceJSONEvent(self._sequence, type, dict(payload))
-            subscriptions = tuple(self._subscriptions)
+            subscriptions = self._eligible_subscriptions_locked()
         for subscription in subscriptions:
             self._put_json(subscription.queue, message)
 
@@ -61,7 +69,7 @@ class VoiceEventHub:
         if not pcm:
             return
         async with self._lock:
-            subscriptions = tuple(self._subscriptions)
+            subscriptions = self._eligible_subscriptions_locked()
         for subscription in subscriptions:
             self._put_audio(subscription.queue, bytes(pcm))
 
@@ -82,6 +90,15 @@ class VoiceEventHub:
                 items.append(queue.get_nowait())
             except asyncio.QueueEmpty:
                 return items
+
+    def _eligible_subscriptions_locked(self) -> tuple[VoiceSubscription, ...]:
+        if not self._session_filter_enabled:
+            return tuple(self._subscriptions)
+        return tuple(
+            subscription
+            for subscription in self._subscriptions
+            if subscription.session_id == self._active_session_id
+        )
 
     def _put_audio(self, queue: asyncio.Queue[VoiceMessage], message: bytes) -> None:
         if not queue.full():
