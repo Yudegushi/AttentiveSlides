@@ -293,6 +293,11 @@ class TestStreamlitAttentiveSlides(
         self.assertIn('"Loaded PDF"', upload)
         self.assertNotIn("main_upload_message", upload)
         self.assertNotIn("Use built-in demo deck", upload)
+        self.assertEqual(upload.count("st.rerun()"), 1)
+        self.assertLess(
+            upload.index('"main_loaded_pdf_signature"'),
+            upload.index("st.rerun()"),
+        )
         self.assertIn("hashlib.sha256()", signature)
         self.assertIn('digest.update(b"\\0")', signature)
 

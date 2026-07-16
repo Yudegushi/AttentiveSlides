@@ -1718,6 +1718,7 @@ def _render_upload_controls(
                 "main_deck_signature"
             ] = None
             _reset_turn_state()
+            st.rerun()
 
     if st.session_state[
         "main_upload_error"
