@@ -137,10 +137,102 @@ class TestStreamlitAttentiveSlides(
         source = self.function_source("_render_review_workspace")
         self.assertIn("Valid gaze", source)
         self.assertIn("Data coverage", source)
+        self.assertIn('st.expander("Learner state", expanded=False)', source)
         self.assertIn("Region times", source)
         self.assertIn("expanded=False", source)
         self.assertNotIn("Most attended", source)
         self.assertNotIn("Least attended", source)
+
+    def test_review_history_selector_uses_stable_session_ids_newest_first(self):
+        source = self.function_source("_render_review_sidebar")
+        self.assertIn("resources.study_review.list_sessions()", source)
+        self.assertIn("options=session_ids", source)
+        self.assertIn('key="main_review_session"', source)
+        self.assertIn("on_change=_on_review_option_change", source)
+        self.assertIn('args=("session",)', source)
+        self.assertIn("_format_review_session_option", source)
+
+    def test_review_history_selection_does_not_arm_or_replace_collection(self):
+        selected = self.function_source("_selected_study_review")
+        changed = self.function_source("_on_review_option_change")
+        self.assertIn("resources.study_review.get", selected)
+        self.assertNotIn("start_new", selected)
+        self.assertNotIn("start_new", changed)
+        self.assertNotIn("main_live_master_enabled", selected)
+        self.assertNotIn("main_live_master_enabled", changed)
+
+    def test_selected_session_delete_is_confirmed_and_non_arming(self):
+        sidebar = self.function_source("_render_review_sidebar")
+        delete = self.function_source("_delete_selected_study_review")
+        self.assertIn('key="main_review_delete_confirm"', sidebar)
+        self.assertIn("on_change=_on_review_option_change", sidebar)
+        self.assertIn('key="main_review_delete"', sidebar)
+        self.assertEqual(delete.count("resources.study_review.delete("), 1)
+        self.assertIn("OSError", delete)
+        self.assertIn("KeyError", delete)
+        self.assertNotIn("start_new", delete)
+        self.assertNotIn('main_live_master_enabled"] = True', delete)
+
+    def test_review_warnings_do_not_hide_valid_history(self):
+        source = self.function_source("_render_review_sidebar")
+        self.assertLess(source.index("list_sessions()"), source.index("load_warnings()"))
+        self.assertIn("Saved review warning", source)
+
+    def test_open_latest_selects_newest_valid_review(self):
+        source = self.function_source("_open_latest_review")
+        self.assertEqual(source.count("resources.study_review.latest()"), 1)
+        self.assertIn('main_review_session"] = review.session_id', source)
+        self.assertNotIn("latest.json", source)
+
+    def test_review_state_summary_follows_gaze_coverage_and_precedes_regions(self):
+        source = self.function_source("_render_review_workspace")
+        coverage = source.index("Valid gaze")
+        learner = source.index('st.expander("Learner state"')
+        regions = source.index('st.expander("Region times"')
+        self.assertLess(coverage, learner)
+        self.assertLess(learner, regions)
+        for expected in (
+            "Study time",
+            "Interactions",
+            "Engaged",
+            "Top emotion",
+            "Fatigue",
+            "Alerts: distraction",
+            "Model estimates; not a diagnosis.",
+        ):
+            self.assertIn(expected, source)
+        for forbidden in (
+            "AOI entries",
+            "Cognitive load",
+            "Emotion table",
+            "Emotion alert",
+        ):
+            self.assertNotIn(forbidden, source)
+
+    def test_review_state_empty_copy_keeps_gaze_review(self):
+        source = self.function_source("_render_review_workspace")
+        self.assertIn(
+            "No learner-state estimate was available for this slide",
+            source,
+        )
+        self.assertIn("render_review_slide", source)
+        self.assertIn("Show heatmap", source)
+
+    def test_review_json_exports_integrated_selected_session(self):
+        source = self.function_source("_render_review_sidebar")
+        self.assertIn("review.to_json()", source)
+        self.assertIn('f"study_review_{review.session_id}.json"', source)
+        self.assertNotIn("gaze_review.to_json", source)
+
+    def test_missing_deck_still_shows_session_metadata_and_sidebar_actions(self):
+        workspace = self.function_source("_render_review_workspace")
+        sidebar = self.function_source("_render_review_sidebar")
+        self.assertLess(
+            workspace.index("_review_session_caption(review)"),
+            workspace.index("review.deck_id != view.deck_id"),
+        )
+        self.assertIn("main_review_download_json", sidebar)
+        self.assertIn("main_review_delete", sidebar)
 
     def test_live_sidebar_exposes_review_actions(self):
         source = self.function_source("_render_live_controls")
@@ -148,6 +240,22 @@ class TestStreamlitAttentiveSlides(
         self.assertIn("Open latest review", source)
         self.assertIn("is_armed()", source)
         self.assertIn("load_warnings()", source)
+
+    def test_end_review_retains_active_or_armed_overwrite_guard(self):
+        source = self.function_source("_render_live_controls")
+        button = source.index('"End study & review"')
+        guard = source.rfind(
+            "resources.study_review.has_active()",
+            0,
+            button,
+        )
+        armed = source.rfind(
+            "enabled and resources.study_review.is_armed()",
+            0,
+            button,
+        )
+        self.assertGreater(guard, -1)
+        self.assertGreater(armed, guard)
 
     def test_live_sidebar_requires_explicit_new_study_after_deck_change(self):
         source = self.function_source("_render_live_controls")
@@ -158,10 +266,10 @@ class TestStreamlitAttentiveSlides(
     def test_review_lifecycle_errors_stay_inline(self):
         finish = self.function_source("_finish_study_review")
         start_new = self.function_source("_start_new_study_review")
-        clear = self.function_source("_clear_gaze_review")
+        delete = self.function_source("_delete_selected_study_review")
         self.assertIn("RuntimeError", finish)
         self.assertIn("OSError", start_new)
-        self.assertIn("OSError", clear)
+        self.assertIn("OSError", delete)
 
     def test_runtime_data_dir_is_environment_configurable(
         self,
@@ -792,6 +900,7 @@ class TestStreamlitAttentiveSlides(
         self.assertIn("resources.study_review.start_new()", start_new)
         self.assertIn('main_workspace_mode"] = "study"', start_new)
         self.assertIn('main_live_master_enabled"] = False', start_new)
+        self.assertNotIn("delete(", start_new)
 
     def test_live_binding_synchronizes_voice_after_provider_binding(self) -> None:
         binding = self.function_source("_bind_main_live_resources")

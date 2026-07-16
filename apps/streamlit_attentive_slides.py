@@ -1067,6 +1067,7 @@ def _finish_study_review(resources: MainLiveResources, deck_id: str) -> None:
     st.session_state["main_live_master_enabled"] = False
     st.session_state["main_workspace_mode"] = "review"
     st.session_state["main_review_error"] = None
+    st.session_state["main_review_session"] = review.session_id
     if review.gaze_review.slides:
         st.session_state["main_active_slide_id"] = review.gaze_review.slides[0].slide_id
 
@@ -1084,6 +1085,7 @@ def _open_latest_review(resources: MainLiveResources) -> None:
     st.session_state["main_live_master_enabled"] = False
     st.session_state["main_workspace_mode"] = "review"
     st.session_state["main_review_error"] = None
+    st.session_state["main_review_session"] = review.session_id
     if review.gaze_review.slides:
         st.session_state["main_active_slide_id"] = review.gaze_review.slides[0].slide_id
 
@@ -1104,29 +1106,36 @@ def _start_new_study_review(resources: MainLiveResources) -> None:
     st.session_state["main_workspace_mode"] = "study"
     st.session_state["main_live_master_enabled"] = False
     st.session_state["main_review_show_heatmap"] = True
-    st.session_state["main_review_clear_confirm"] = False
+    st.session_state["main_review_delete_confirm"] = False
     st.session_state["main_review_error"] = None
 
 
-def _clear_gaze_review(resources: MainLiveResources) -> None:
+def _delete_selected_study_review(resources: MainLiveResources) -> None:
+    session_id = st.session_state.get("main_review_session")
+    if not session_id:
+        st.session_state["main_review_error"] = "No Study Review session is selected."
+        return
     try:
-        latest = resources.study_review.latest()
-        if latest is not None:
-            resources.study_review.delete(latest.session_id)
-    except OSError as exc:
+        resources.study_review.delete(str(session_id))
+    except (OSError, KeyError) as exc:
         st.session_state["main_review_error"] = (
-            f"Unable to clear saved review: {exc}"
+            f"Unable to delete selected review: {exc}"
         )
         return
-    st.session_state["main_workspace_mode"] = "study"
-    st.session_state["main_live_master_enabled"] = False
-    st.session_state["main_review_show_heatmap"] = True
-    st.session_state["main_review_clear_confirm"] = False
+    sessions = resources.study_review.list_sessions()
+    st.session_state["main_review_session"] = (
+        sessions[0].session_id if sessions else None
+    )
+    if not sessions:
+        st.session_state["main_workspace_mode"] = "study"
+    st.session_state["main_review_delete_confirm"] = False
     st.session_state["main_review_error"] = None
 
 
-def _on_review_option_change() -> None:
+def _on_review_option_change(source: str | None = None) -> None:
     st.session_state["main_review_error"] = None
+    if source == "session":
+        st.session_state["main_review_delete_confirm"] = False
 
 
 def _render_live_controls(
@@ -1281,6 +1290,60 @@ def _render_live_controls(
             st.iframe("/capture", height=340)
 
 
+def _format_review_duration(seconds: float) -> str:
+    total = max(0, round(float(seconds)))
+    minutes, remainder = divmod(total, 60)
+    return f"{minutes:02d}:{remainder:02d}"
+
+
+def _format_review_session_option(review: Any | None) -> str:
+    if review is None:
+        return "Unavailable Study Review"
+    completed = time.strftime(
+        "%Y-%m-%d %H:%M",
+        time.localtime(review.ended_at_epoch),
+    )
+    duration = _format_review_duration(
+        review.ended_at_epoch - review.started_at_epoch
+    )
+    return f"{completed} · {review.deck_id} · {duration}"
+
+
+def _selected_study_review(resources: MainLiveResources):
+    session_id = st.session_state.get("main_review_session")
+    selected = resources.study_review.get(str(session_id)) if session_id else None
+    if selected is not None:
+        return selected
+    latest = resources.study_review.latest()
+    if latest is not None:
+        st.session_state["main_review_session"] = latest.session_id
+    return latest
+
+
+def _review_session_caption(review: Any) -> str:
+    summary = review.learner_state_summary
+    engagement = (
+        "--"
+        if summary.mean_engaged_probability is None
+        else f"{summary.mean_engaged_probability:.0%}"
+    )
+    fatigue = (
+        "--"
+        if summary.mean_fatigue_probability is None
+        else f"{summary.mean_fatigue_probability:.0%}"
+    )
+    emotion = (
+        "--"
+        if summary.top_emotion is None
+        else f"{summary.top_emotion} {summary.top_emotion_probability:.0%}"
+    )
+    return (
+        f"Study {_format_review_duration(summary.study_seconds)} · "
+        f"{summary.interaction_count} interactions · Engaged {engagement} · "
+        f"Top emotion {emotion} · Fatigue {fatigue}"
+    )
+
+
 def _render_review_sidebar(resources: MainLiveResources) -> None:
     st.sidebar.markdown("### Study review")
     st.sidebar.button(
@@ -1298,7 +1361,26 @@ def _render_review_sidebar(resources: MainLiveResources) -> None:
         args=(resources,),
     )
 
-    review = resources.study_review.latest()
+    sessions = resources.study_review.list_sessions()
+    session_ids = tuple(review.session_id for review in sessions)
+    selected_id = st.session_state.get("main_review_session")
+    if selected_id not in session_ids:
+        st.session_state["main_review_session"] = (
+            session_ids[0] if session_ids else None
+        )
+    if session_ids:
+        st.sidebar.selectbox(
+            "Study session",
+            options=session_ids,
+            format_func=lambda session_id: _format_review_session_option(
+                resources.study_review.get(session_id)
+            ),
+            key="main_review_session",
+            on_change=_on_review_option_change,
+            args=("session",),
+        )
+
+    review = _selected_study_review(resources)
     if review is not None:
         st.sidebar.download_button(
             "Download session JSON",
@@ -1316,23 +1398,24 @@ def _render_review_sidebar(resources: MainLiveResources) -> None:
     if load_warnings:
         st.sidebar.error(f"Saved review warning: {load_warnings[-1]}")
         st.sidebar.caption(
-            "Start a new study or clear the saved review to recover."
+            "Valid sessions remain available; delete only an affected session if needed."
         )
 
-    with st.sidebar.expander("Clear saved review", expanded=False):
+    with st.sidebar.expander("Delete selected session", expanded=False):
         st.checkbox(
-            "I understand this deletes the latest review",
-            key="main_review_clear_confirm",
+            "I understand this deletes only the selected session",
+            key="main_review_delete_confirm",
             on_change=_on_review_option_change,
+            args=("confirm",),
         )
         st.button(
-            "Clear review",
-            key="main_review_clear",
+            "Delete selected session",
+            key="main_review_delete",
             disabled=not bool(
-                st.session_state.get("main_review_clear_confirm", False)
+                st.session_state.get("main_review_delete_confirm", False)
             ),
             width="stretch",
-            on_click=_clear_gaze_review,
+            on_click=_delete_selected_study_review,
             args=(resources,),
         )
 
@@ -1349,17 +1432,18 @@ def _render_review_workspace(
     browser: Any,
     resources: MainLiveResources,
 ) -> None:
-    review = resources.study_review.latest()
+    review = _selected_study_review(resources)
     if review is None:
         st.info(
             "No completed gaze review is available. "
             "Start a new study to collect gaze data."
         )
         return
+    st.caption(_review_session_caption(review))
     if review.deck_id != view.deck_id:
         st.warning(
             "The saved review belongs to a deck that is not currently available. "
-            "You can still download its JSON or clear it from the sidebar."
+            "You can still download its JSON or delete it from the sidebar."
         )
         return
 
@@ -1464,6 +1548,47 @@ def _render_review_workspace(
         f"Valid gaze: {slide_review.valid_gaze_seconds:.1f} s · "
         f"Data coverage: {slide_review.coverage:.0%}"
     )
+    learner_slides = {
+        slide.slide_id: slide
+        for slide in review.learner_state_summary.slides
+    }
+    learner_summary = learner_slides.get(slide_review.slide_id)
+    with st.expander("Learner state", expanded=False):
+        if learner_summary is None or learner_summary.observed_seconds <= 0.0:
+            st.caption(
+                "No learner-state estimate was available for this slide"
+            )
+        else:
+            engagement = (
+                "--"
+                if learner_summary.mean_engaged_probability is None
+                else f"{learner_summary.mean_engaged_probability:.0%}"
+            )
+            fatigue = (
+                "--"
+                if learner_summary.mean_fatigue_probability is None
+                else f"{learner_summary.mean_fatigue_probability:.0%}"
+            )
+            emotion = (
+                "--"
+                if learner_summary.top_emotion is None
+                else (
+                    f"{learner_summary.top_emotion} "
+                    f"{learner_summary.top_emotion_probability:.0%}"
+                )
+            )
+            st.caption(
+                f"Study time {_format_review_duration(learner_summary.study_seconds)} · "
+                f"Interactions {learner_summary.interaction_count} · "
+                f"Engaged {engagement}"
+            )
+            st.caption(
+                f"Top emotion {emotion} · Fatigue {fatigue} · "
+                "Alerts: distraction "
+                f"{learner_summary.distraction_alert_count}, fatigue "
+                f"{learner_summary.fatigue_alert_count}"
+            )
+        st.caption("Model estimates; not a diagnosis.")
     if slide_review.valid_gaze_seconds <= 0.0:
         st.info("No valid gaze was captured on this slide.")
     st.checkbox(
