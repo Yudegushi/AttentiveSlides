@@ -76,7 +76,9 @@
   let fatigueInFlight = false;
   let lastFatigueUploadAt = -Infinity;
   const FATIGUE_INTERVAL_MS = 500;
+  const TRANSPORT_FAILURE_GRACE_MS = 8000;
   const energyVadThreshold = 250;
+  const transportFailures = new Map();
 
   function publishDebug(message) {
     if (!debugChannel) return;
@@ -116,6 +118,25 @@
 
   function setGazeStatus(message) {
     gazeStatus.textContent = message;
+  }
+
+  function noteTransportSuccess(channel) {
+    transportFailures.delete(channel);
+  }
+
+  function noteTransportFailure(channel, error) {
+    if (!running) return;
+    const now = performance.now();
+    const firstFailureAt = transportFailures.has(channel)
+      ? transportFailures.get(channel)
+      : now;
+    transportFailures.set(channel, firstFailureAt);
+    const detail = error && error.message ? error.message : String(error || "unavailable");
+    if (now - firstFailureAt >= TRANSPORT_FAILURE_GRACE_MS) {
+      void stopCapture(false, `${channel} unavailable for too long: ${detail}`);
+      return;
+    }
+    setStatus(`${channel} interrupted; retrying…`);
   }
 
   function packEyeTheiaMessage(meta, payload = new ArrayBuffer(0)) {
@@ -505,7 +526,7 @@
       window.clearTimeout(muteTimers.get(track));
       muteTimers.set(track, window.setTimeout(() => {
         if (track.muted) void stopCapture(true, "Media device stayed muted.");
-      }, 2000));
+      }, TRANSPORT_FAILURE_GRACE_MS));
     });
     track.addEventListener("unmute", () => {
       window.clearTimeout(muteTimers.get(track));
@@ -544,8 +565,9 @@
             }),
             body: await blob.arrayBuffer(),
           }));
+          noteTransportSuccess("Video transport");
         } catch (error) {
-          void stopCapture(false, "Video transport stopped: " + error.message);
+          noteTransportFailure("Video transport", error);
         } finally {
           videoInFlight = false;
         }
@@ -573,8 +595,10 @@
           "X-Media-Channels": "1",
         }),
         body: pcm.buffer,
-      }).then(requireOk).catch((error) => {
-        void stopCapture(false, "Audio transport stopped: " + error.message);
+      }).then(requireOk).then(() => {
+        noteTransportSuccess("Audio transport");
+      }).catch((error) => {
+        noteTransportFailure("Audio transport", error);
       }).finally(() => { audioInFlight = false; });
     };
     mediaNode.connect(processor);
@@ -589,12 +613,14 @@
       if (!running) return;
       fetch("/attentive-media/heartbeat", { method: "POST", headers: headers() })
         .then(requireOk)
-        .catch((error) => void stopCapture(false, "Heartbeat stopped: " + error.message));
+        .then(() => noteTransportSuccess("Heartbeat"))
+        .catch((error) => noteTransportFailure("Heartbeat", error));
     }, 1000);
   }
 
   async function startCapture(fromUserGesture) {
     if (running) return;
+    transportFailures.clear();
     permissionButton.hidden = true;
     try {
       const before = await (await requireOk(await fetch("/attentive-media/stats"))).json();
@@ -638,6 +664,7 @@
   async function stopCapture(notifyServer, message) {
     const hadCapture = running || stream;
     running = false;
+    transportFailures.clear();
     forgetMediaSession();
     stopLocalGaze();
     generation = null;
@@ -668,13 +695,14 @@
   async function refreshServerState() {
     try {
       const payload = await (await requireOk(await fetch("/attentive-media/stats"))).json();
+      noteTransportSuccess("Media status");
       if (running && (
         !payload.armed || payload.session_state !== "active" || payload.generation !== generation
       )) {
         await stopCapture(false, "Server stopped the live media session.");
       }
     } catch (error) {
-      if (running) await stopCapture(false, "Media service unavailable: " + error.message);
+      noteTransportFailure("Media status", error);
     }
   }
 

@@ -9,7 +9,10 @@ from modules.realtime.realtime_contracts import (
 )
 from modules.system.target_switching import TargetSwitchController
 from modules.system.voice_event_hub import VoiceEventHub
-from modules.system.voice_orchestrator import VoiceOrchestrator
+from modules.system.voice_orchestrator import (
+    AUTO_GAZE_TARGET_ID,
+    VoiceOrchestrator,
+)
 
 
 class FakeOmni:
@@ -88,6 +91,7 @@ class VoiceOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.switching = TargetSwitchController()
         self.published = []
         self.boundaries = []
+        self.initial_target = None
         self.orchestrator = VoiceOrchestrator(
             events=self.events,
             omni=self.omni,
@@ -95,6 +99,7 @@ class VoiceOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             target_switching=self.switching,
             publish_single_turn_transcript=self.published.append,
             on_single_turn_boundary=self.boundaries.append,
+            resolve_initial_target=lambda _target: self.initial_target,
         )
         self.orchestrator.attach_loop(asyncio.get_running_loop())
         self.orchestrator.update_target(target())
@@ -151,6 +156,48 @@ class VoiceOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         await self.settle()
         self.assertTrue(any(call[:2] == ("stop", "confirmed target changed") for call in self.omni.calls))
         self.assertEqual(self.orchestrator.snapshot()["target_signature"], target("b").signature)
+
+    async def test_omni_resolves_auto_gaze_target_before_starting_provider(self) -> None:
+        locked = TargetBinding(
+            "deck",
+            1,
+            "b",
+            "B",
+            "context",
+            (0.0, 0.0, 0.5, 0.5),
+        )
+        self.initial_target = locked
+        self.orchestrator.update_preferences(
+            VoicePreferences(engine=VoiceEngine.OMNI)
+        )
+        self.orchestrator.update_target(target(AUTO_GAZE_TARGET_ID))
+        await self.settle()
+
+        await self.orchestrator.handle_http_command("continuous/start", "session")
+
+        starts = [call for call in self.omni.calls if call[0] == "start"]
+        self.assertEqual(len(starts), 1)
+        self.assertEqual(starts[0][1], locked.signature)
+        self.assertEqual(
+            self.orchestrator.snapshot()["target_signature"],
+            locked.signature,
+        )
+
+    async def test_omni_auto_gaze_waits_when_no_stable_aoi_exists(self) -> None:
+        self.orchestrator.update_preferences(
+            VoicePreferences(engine=VoiceEngine.OMNI)
+        )
+        self.orchestrator.update_target(target(AUTO_GAZE_TARGET_ID))
+        await self.settle()
+
+        with self.assertRaisesRegex(ValueError, "stable gaze"):
+            await self.orchestrator.handle_http_command(
+                "continuous/start",
+                "session",
+            )
+
+        self.assertFalse(any(call[0] == "start" for call in self.omni.calls))
+        self.assertIsNone(self.orchestrator.snapshot()["session_id"])
 
     async def test_speech_mode_hot_update_preserves_active_omni_session(self) -> None:
         self.orchestrator.update_preferences(VoicePreferences(engine=VoiceEngine.OMNI))

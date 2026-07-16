@@ -148,7 +148,10 @@ from modules.system.single_turn_ptt_runtime import SingleTurnPTTRuntime
 from modules.system.single_turn_tts import SingleTurnTTSController
 from modules.system.target_switching import TargetSwitchController
 from modules.system.voice_event_hub import VoiceEventHub
-from modules.system.voice_orchestrator import VoiceOrchestrator
+from modules.system.voice_orchestrator import (
+    AUTO_GAZE_TARGET_ID,
+    VoiceOrchestrator,
+)
 from modules.system.uploaded_deck_service import (
     UploadedDeckWorkspace,
 )
@@ -304,6 +307,17 @@ def build_main_live_resources(
             target_id=str(candidate_id),
         )
 
+    def resolve_initial_omni_target(
+        current_target: TargetBinding,
+    ) -> TargetBinding | None:
+        resolved_at = time.monotonic()
+        context = begin_omni_gaze_window(current_target, resolved_at)
+        return resolve_omni_gaze_window(
+            context,
+            resolved_at,
+            current_target,
+        )
+
     def build_omni_instructions(target: TargetBinding) -> str:
         frame = provider.get_slide_frame(target.slide_id)
         visual_derived = (
@@ -372,6 +386,7 @@ def build_main_live_resources(
         target_switching=target_switching,
         publish_single_turn_transcript=publish_fallback_transcript,
         on_single_turn_boundary=reset_single_turn_audio,
+        resolve_initial_target=resolve_initial_omni_target,
     )
     voice_holder["voice"] = voice
     single_turn_tts = SingleTurnTTSController(
@@ -396,8 +411,8 @@ def build_main_live_resources(
         observations=observations,
         start_armed=False,
         coordinated_activation=True,
-        media_stale_after_seconds=2.0,
-        inactive_after_seconds=3.0,
+        media_stale_after_seconds=10.0,
+        inactive_after_seconds=12.0,
     )
     capture_html = (
         REPOSITORY_ROOT
@@ -756,22 +771,41 @@ def _normalize_widget_state() -> None:
     st.session_state["main_answer_audio_enabled"] = bool(
         st.session_state.get("main_answer_audio_enabled", True)
     )
+    st.session_state["main_target_scope_explicit"] = bool(
+        st.session_state.get("main_target_scope_explicit", False)
+    )
 
     st.session_state[
         "main_widget_error"
     ] = None
     # Canonical target scope is stored independently from the user-facing label.
+    default_target_scope = (
+        "Gaze AOI"
+        if st.session_state["main_voice_engine"] == "omni"
+        and not st.session_state["main_target_scope_explicit"]
+        else "Whole slide"
+    )
     raw_target_scope = str(
         st.session_state.get(
             "main_target_scope",
-            "Whole slide",
+            default_target_scope,
         )
     ).strip()
+    if (
+        st.session_state["main_voice_engine"] == "omni"
+        and not st.session_state["main_target_scope_explicit"]
+        and raw_target_scope.casefold()
+        in {"whole slide", "use whole slide", "whole_slide"}
+    ):
+        raw_target_scope = "Gaze AOI"
 
     target_scope_aliases = {
         "whole slide": "Whole slide",
         "use whole slide": "Whole slide",
         "whole_slide": "Whole slide",
+        "gaze aoi": "Gaze AOI",
+        "gaze target": "Gaze AOI",
+        "auto gaze": "Gaze AOI",
         "manual region": "Manual region",
         "select region": "Manual region",
         "manual_rectangle": "Manual region",
@@ -851,6 +885,16 @@ def _on_live_preference_change() -> None:
         st.session_state["main_voice_status_message"] = ""
 
 
+def _on_voice_engine_change() -> None:
+    _on_live_preference_change()
+    if st.session_state.get("main_voice_engine") == "omni":
+        if not st.session_state.get("main_target_scope_explicit", False):
+            st.session_state["main_target_scope"] = "Gaze AOI"
+    elif st.session_state.get("main_target_scope") == "Gaze AOI":
+        st.session_state["main_target_scope"] = "Whole slide"
+        st.session_state["main_target_scope_explicit"] = False
+
+
 def _adopt_voice_fallback_state(
     resources: MainLiveResources,
 ) -> bool:
@@ -865,6 +909,9 @@ def _adopt_voice_fallback_state(
     if fell_back:
         st.session_state["main_voice_engine"] = "single_turn"
         st.session_state["main_voice_status_message"] = str(status_message)
+        if st.session_state.get("main_target_scope") == "Gaze AOI":
+            st.session_state["main_target_scope"] = "Whole slide"
+            st.session_state["main_target_scope_explicit"] = False
     return fell_back
 
 
@@ -886,7 +933,10 @@ def _sync_main_live_voice_resources(
     if preferences.engine is VoiceEngine.OMNI:
         st.session_state["main_voice_status_message"] = None
 
-    target = _voice_target_binding(view)
+    target = _voice_target_binding(
+        view,
+        allow_auto_gaze=preferences.engine is VoiceEngine.OMNI,
+    )
     signature = target.signature if target is not None else None
     if resources.bound_voice_target_signature == signature:
         return
@@ -978,7 +1028,7 @@ def _render_live_controls(
                 else "Omni realtime"
             ),
             key="main_voice_engine",
-            on_change=_on_live_preference_change,
+            on_change=_on_voice_engine_change,
         )
         st.sidebar.radio(
             "Speaking style",
@@ -1266,9 +1316,20 @@ def _target_binding_from_slide(
 
 def _voice_target_binding(
     view: MainUIViewModel,
+    *,
+    allow_auto_gaze: bool = False,
 ) -> TargetBinding | None:
     """Resolve the learner-confirmed UI target without reading raw gaze."""
-    if st.session_state.get("main_target_scope") != "Manual region":
+    target_scope = st.session_state.get("main_target_scope")
+    if allow_auto_gaze and target_scope == "Gaze AOI":
+        return TargetBinding(
+            deck_id=view.deck_id,
+            slide_id=view.active_slide_id,
+            target_id=AUTO_GAZE_TARGET_ID,
+            label="Waiting for gaze AOI",
+            text="",
+        )
+    if target_scope != "Manual region":
         return _target_binding_from_slide(
             deck_id=view.deck_id,
             slide=view.active_slide,
@@ -1804,6 +1865,9 @@ def _target_scope_label(
     if value == "Whole slide":
         return "Use whole slide"
 
+    if value == "Gaze AOI":
+        return "Use gaze AOI"
+
     return "Select region"
 
 
@@ -2023,12 +2087,12 @@ def _render_target_column(
         "### 1. Select region"
     )
 
+    target_options = ["Whole slide", "Manual region"]
+    if st.session_state.get("main_voice_engine") == "omni":
+        target_options.insert(0, "Gaze AOI")
     st.radio(
         "Target scope",
-        options=[
-            "Whole slide",
-            "Manual region",
-        ],
+        options=target_options,
         format_func=_target_scope_label,
         horizontal=True,
         key="main_target_scope",
@@ -2058,6 +2122,11 @@ def _render_target_column(
             on_click=_clear_manual_region,
         )
 
+    elif st.session_state["main_target_scope"] == "Gaze AOI":
+        st.caption(
+            "Look steadily at an AOI before starting Omni. "
+            "The first stable target stays locked until you explicitly switch."
+        )
     else:
         _set_whole_slide_target(
             view
@@ -2419,6 +2488,7 @@ def _clear_manual_region() -> None:
 
 
 def _on_target_scope_change() -> None:
+    st.session_state["main_target_scope_explicit"] = True
     _clear_manual_region()
 
 

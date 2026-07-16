@@ -57,6 +57,16 @@ class VoiceControlComponentContractTests(unittest.TestCase):
         self.assertIn('}, "image/jpeg", 0.80)', self.capture)
         self.assertIn('fetch("/attentive-media/fatigue"', self.capture)
 
+    def test_capture_tolerates_bounded_transient_transport_and_mute_failures(self) -> None:
+        self.assertIn("const TRANSPORT_FAILURE_GRACE_MS = 8000", self.capture)
+        self.assertIn("noteTransportFailure", self.capture)
+        self.assertIn("noteTransportSuccess", self.capture)
+        self.assertNotIn(
+            '.catch((error) => void stopCapture(false, "Heartbeat stopped:',
+            self.capture,
+        )
+        self.assertIn('track.addEventListener("ended"', self.capture)
+
 
 if __name__ == "__main__":
     unittest.main()

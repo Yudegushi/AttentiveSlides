@@ -98,8 +98,8 @@ def build_live_resources(*, start_ingress: bool = True) -> LiveResources:
         media_source,
         start_armed=False,
         coordinated_activation=True,
-        media_stale_after_seconds=2.0,
-        inactive_after_seconds=3.0,
+        media_stale_after_seconds=10.0,
+        inactive_after_seconds=12.0,
     )
     capture_html = (
         REPOSITORY_ROOT / "modules/media/live_capture_component/index.html"

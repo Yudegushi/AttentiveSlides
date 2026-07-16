@@ -21,6 +21,9 @@ from modules.system.target_switching import TargetSwitchController
 from modules.system.voice_event_hub import VoiceEventHub, VoiceJSONEvent
 
 
+AUTO_GAZE_TARGET_ID = "gaze-auto"
+
+
 class VoiceOrchestrator:
     """Expose a synchronous UI facade and loop-owned async voice transport."""
 
@@ -34,6 +37,9 @@ class VoiceOrchestrator:
         publish_single_turn_transcript: Callable[[str], None],
         on_target_changed: Callable[[TargetBinding], None] | None = None,
         on_single_turn_boundary: Callable[[str], None] | None = None,
+        resolve_initial_target: Callable[
+            [TargetBinding], TargetBinding | None
+        ] | None = None,
     ) -> None:
         self._events = events
         self._omni = omni
@@ -42,6 +48,7 @@ class VoiceOrchestrator:
         self._publish_single_turn_transcript = publish_single_turn_transcript
         self._on_target_changed = on_target_changed or (lambda target: None)
         self._on_single_turn_boundary = on_single_turn_boundary or (lambda reason: None)
+        self._resolve_initial_target = resolve_initial_target
         self._lock = RLock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._preferences = VoicePreferences()
@@ -133,8 +140,8 @@ class VoiceOrchestrator:
         if command == "ptt/start":
             if preferences.speech_mode is not SpeechMode.PUSH_TO_TALK:
                 raise ValueError("push to talk is not selected")
-            await self._adopt_session(session_id)
             target = self._require_target()
+            await self._adopt_session(session_id)
             if preferences.engine is VoiceEngine.SINGLE_TURN:
                 await self._single_turn_ptt.start(session_id=session_id, target=target)
             else:
@@ -380,7 +387,25 @@ class VoiceOrchestrator:
             target = self._target
         if target is None:
             raise ValueError("confirm a target before starting voice")
-        return target
+        if target.target_id != AUTO_GAZE_TARGET_ID:
+            return target
+        resolver = self._resolve_initial_target
+        resolved = resolver(target) if resolver is not None else None
+        if (
+            resolved is None
+            or resolved.deck_id != target.deck_id
+            or resolved.slide_id != target.slide_id
+            or resolved.bbox is None
+        ):
+            raise ValueError(
+                "No stable gaze AOI is available. Look at a target and try again."
+            )
+        with self._lock:
+            if self._target is None or self._target.signature != target.signature:
+                raise ValueError("voice target changed while gaze was being resolved")
+            self._target = resolved
+        self._on_target_changed(resolved)
+        return resolved
 
     def _preferences_snapshot(self) -> VoicePreferences:
         with self._lock:

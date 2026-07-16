@@ -472,12 +472,26 @@ class TestStreamlitAttentiveSlides(
         self.assertIn('st.iframe("/capture"', controls)
         self.assertNotIn("iframe", periodic)
 
+    def test_omni_initial_target_uses_recent_stable_gaze(self) -> None:
+        resources = self.function_source("build_main_live_resources")
+        sync = self.function_source("_sync_main_live_voice_resources")
+        target = self.function_source("_voice_target_binding")
+        target_column = self.function_source("_render_target_column")
+
+        self.assertIn("resolve_initial_omni_target", resources)
+        self.assertIn("resolve_initial_target=resolve_initial_omni_target", resources)
+        self.assertIn("allow_auto_gaze=preferences.engine is VoiceEngine.OMNI", sync)
+        self.assertIn("AUTO_GAZE_TARGET_ID", target)
+        self.assertIn('"Gaze AOI"', target_column)
+
     def test_main_live_resources_serve_the_formal_capture_component(self) -> None:
         source = self.function_source("build_main_live_resources")
 
         self.assertIn('"live_capture_component"', source)
         self.assertIn('"index.html"', source)
         self.assertIn("capture_html=capture_html", source)
+        self.assertIn("media_stale_after_seconds=10.0", source)
+        self.assertIn("inactive_after_seconds=12.0", source)
 
     def test_periodic_fragment_refreshes_live_transport_status(self) -> None:
         periodic = self.function_source("_render_live_periodic")
