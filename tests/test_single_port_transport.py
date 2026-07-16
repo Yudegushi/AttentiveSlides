@@ -245,12 +245,12 @@ class SinglePortTransportTest(unittest.TestCase):
         self.assertFalse(self.source.is_running)
         self.assertTrue(self.source.video_queue.empty())
 
-    def test_gaze_review_receives_samples_and_pauses_on_stop(self):
+    def test_study_review_receives_samples_and_pauses_on_stop(self):
         review = MagicMock()
         ingress = FallbackMediaIngress(
             self.source,
             observations=self.ingress.observations,
-            gaze_review=review,
+            study_review=review,
             clock=self.clock,
         )
         ingress.accept_geometry_json(geometry_payload())
@@ -259,15 +259,15 @@ class SinglePortTransportTest(unittest.TestCase):
         sample = ingress.accept_gaze_json("session-a", gaze_payload())
         ingress.stop("session-a")
 
-        review.accept.assert_called_once_with(sample)
+        review.accept_gaze.assert_called_once_with(sample)
         review.pause.assert_called()
 
-    def test_stop_waits_for_gaze_review_forwarding_under_ingress_lock(self):
+    def test_stop_waits_for_study_review_forwarding_under_ingress_lock(self):
         review = MagicMock()
         ingress = FallbackMediaIngress(
             self.source,
             observations=self.ingress.observations,
-            gaze_review=review,
+            study_review=review,
             clock=self.clock,
         )
         ingress.accept_geometry_json(geometry_payload())
@@ -290,7 +290,7 @@ class SinglePortTransportTest(unittest.TestCase):
             call_order.append("gaze parsed")
             return sample
 
-        review.accept.side_effect = lambda sample: call_order.append("review accepted")
+        review.accept_gaze.side_effect = lambda sample: call_order.append("review accepted")
         review.pause.side_effect = lambda: call_order.append("paused")
 
         def accept_gaze():

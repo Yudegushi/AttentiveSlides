@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 from aiohttp import web
 
-from modules.attention.gaze_review_store import GazeReviewStore
+from modules.review.study_review_store import StudyReviewStore
 
 from .browser_gaze_source import (
     BrowserGazeSource,
@@ -87,7 +87,7 @@ class FallbackMediaIngress:
         source: BrowserMediaSource,
         *,
         observations: BrowserGazeSource | None = None,
-        gaze_review: GazeReviewStore | None = None,
+        study_review: StudyReviewStore | None = None,
         clock: Callable[[], float] = time.monotonic,
         inactive_after_seconds: float = 2.0,
         media_stale_after_seconds: float = 2.0,
@@ -106,7 +106,7 @@ class FallbackMediaIngress:
             raise ValueError("media byte limits must be positive")
         self.source = source
         self.observations = observations or BrowserGazeSource(clock=clock)
-        self.gaze_review = gaze_review
+        self.study_review = study_review
         self._clock = clock
         self.inactive_after_seconds = float(inactive_after_seconds)
         self.media_stale_after_seconds = float(media_stale_after_seconds)
@@ -146,8 +146,8 @@ class FallbackMediaIngress:
                 raise InactiveMediaSession("browser media ingress is not armed")
             if session_id in {self._active_session_id, self._pending_session_id}:
                 return
-            if self.gaze_review is not None:
-                self.gaze_review.pause()
+            if self.study_review is not None:
+                self.study_review.pause()
             self.observations.clear_gaze()
             replacing_session = self._active_session_id is not None or self._pending_session_id is not None
             if replacing_session:
@@ -206,8 +206,8 @@ class FallbackMediaIngress:
         with self._lock:
             if self._active_session_id is None:
                 return False
-            if self.gaze_review is not None:
-                self.gaze_review.pause()
+            if self.study_review is not None:
+                self.study_review.pause()
             self._last_video_received_at = None
             self._last_audio_received_at = None
             self._last_fatigue_received_at = None
@@ -334,8 +334,8 @@ class FallbackMediaIngress:
         with self._lock:
             self._require_active_session(session_id)
             sample = self.observations.accept_gaze(payload)
-            if self.gaze_review is not None:
-                self.gaze_review.accept(sample)
+            if self.study_review is not None:
+                self.study_review.accept_gaze(sample)
             return sample
 
     def session_snapshot(self) -> MediaIngressSessionSnapshot:
@@ -432,8 +432,8 @@ class FallbackMediaIngress:
     def _clear_sessions(self, *, reason: str) -> None:
         self.source.stop(reason=reason)
         self.observations.clear_gaze()
-        if self.gaze_review is not None:
-            self.gaze_review.pause()
+        if self.study_review is not None:
+            self.study_review.pause()
         self._active_session_id = None
         self._active_generation = None
         self._pending_session_id = None
