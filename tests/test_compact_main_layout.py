@@ -133,17 +133,17 @@ class TestCompactMainLayout(
             self.source,
         )
 
-    def test_slide_precedes_navigation(
+    def test_navigation_is_embedded_in_slide_workspace(
         self,
     ) -> None:
-        main_function = self.functions[
-            "main"
+        workspace_function = self.functions[
+            "_render_slide_workspace"
         ]
 
         positions = {}
 
         for node in ast.walk(
-            main_function
+            workspace_function
         ):
             if not isinstance(
                 node,
@@ -156,29 +156,29 @@ class TestCompactMainLayout(
             )
 
             if name in {
-                "_render_slide_workspace",
                 "_render_navigation",
+                "render_slide_viewport",
             }:
                 positions[name] = (
                     node.lineno
                 )
 
         self.assertIn(
-            "_render_slide_workspace",
+            "_render_navigation",
             positions,
         )
 
         self.assertIn(
-            "_render_navigation",
+            "render_slide_viewport",
             positions,
         )
 
         self.assertLess(
             positions[
-                "_render_slide_workspace"
+                "_render_navigation"
             ],
             positions[
-                "_render_navigation"
+                "render_slide_viewport"
             ],
         )
 

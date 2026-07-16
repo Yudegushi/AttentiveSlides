@@ -65,9 +65,23 @@ Engineering snapshot as of 2026-07-16.
 
 ## Verification status
 
-- Focused checkpoint verification is implemented on the Lenovo 4060 checkout.
-- Whole-change review, full-suite verification, service restart, health, journal,
-  and GPU checks are pending the final automatic verification stage.
+- Checkpoint focused groups passed on the Lenovo checkout: 11, 19, 68, the
+  Checkpoint 4 affected groups, and 54 tests respectively. The bounded review
+  fix wave passed 76 focused tests, followed by 12 tests for its final
+  concurrency correction.
+- One whole-change review covered persistent-session concurrency, media
+  transport, UI/fatigue/AOI compatibility, visual grounding, safety, and
+  fallback. All Critical/Important findings were addressed in one bounded fix
+  wave.
+- The full discovery run completed 696 tests with one failure from a stale
+  pre-voice compact-layout assertion. That assertion was aligned with the
+  refined slide-stage layout and its complete 7-test module passed. Per user
+  direction, the full discovery run was not repeated; the other 695 passing
+  results were reused.
+- `attentiveslides-local.service` and `eyetheia-personalized.service` are active.
+  The local proxy health endpoint returns HTTP 200, the fresh startup journal
+  has no traceback or OOM, and the RTX 4060 retained more than 6 GiB free VRAM
+  during the deployment check.
 - Complex browser, microphone, speaker, and real-provider acceptance on the 4060
   is `pending user acceptance`.
 - Voice commits remain local to Lenovo and have not been pushed.
