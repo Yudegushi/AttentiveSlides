@@ -67,6 +67,7 @@ class LearnerStateWorkerTest(unittest.TestCase):
         fatigue_factory,
         *,
         engagement_config=None,
+        emotion_tracker=None,
         on_snapshot=None,
         queue_size=4,
     ):
@@ -77,7 +78,7 @@ class LearnerStateWorkerTest(unittest.TestCase):
             media_queue,
             affect_estimator_factory=affect_factory,
             fatigue_estimator_factory=fatigue_factory,
-            emotion_tracker=EmotionTemporalTracker(),
+            emotion_tracker=emotion_tracker or EmotionTemporalTracker(),
             engagement_tracker=EngagementTemporalTracker(engagement_config),
             fatigue_tracker=FatigueTemporalTracker(),
             store=store,
@@ -231,6 +232,28 @@ class LearnerStateWorkerTest(unittest.TestCase):
         self.assertTrue(
             self._wait_until(lambda: store.snapshot().engagement.status == "ready")
         )
+
+    def test_emotion_tracker_failure_does_not_hide_engagement_or_fatigue(self):
+        class FailingEmotionTracker(EmotionTemporalTracker):
+            def update(self, probabilities, now):
+                raise RuntimeError("emotion tracker failed")
+
+        worker, media_queue, store, _ = self.build_worker(
+            RecordingAffectEstimator,
+            RecordingFatigueEstimator,
+            engagement_config=EngagementTemporalConfig(window_frames=1, stride_frames=1),
+            emotion_tracker=FailingEmotionTracker(),
+        )
+        worker.start()
+        media_queue.push(face_packet(1))
+
+        self.assertTrue(
+            self._wait_until(lambda: store.snapshot().emotion.status == "unavailable")
+        )
+        snapshot = store.snapshot()
+        self.assertEqual(snapshot.engagement.status, "ready")
+        self.assertEqual(snapshot.fatigue.status, "ready")
+        self.assertTrue(worker.is_running)
 
     def test_fatigue_failure_does_not_hide_affect(self):
         class RecoveringFatigue(RecordingFatigueEstimator):

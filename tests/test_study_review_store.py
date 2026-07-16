@@ -288,6 +288,9 @@ class StudyReviewStoreTest(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "disk full"):
                     store.finish(deck_id="deck-a")
             pending = store._pending_finish
+            with self.assertRaisesRegex(RuntimeError, "frozen Study Review"):
+                store.start_new()
+            self.assertIs(store._pending_finish, pending)
             self.monotonic.value = 99.0
             self.wall.value = 999.0
             with patch.object(store, "_write_canonical", wraps=original_write):

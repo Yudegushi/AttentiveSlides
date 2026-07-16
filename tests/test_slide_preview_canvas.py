@@ -38,7 +38,7 @@ class TestSlidePreviewCanvas(unittest.TestCase):
             and dotted_name(node.func).split(".")[-1] == "selectbox"
         ]
         self.assertEqual(selectboxes, [])
-        self.assertNotIn('"Current slide"', self.source)
+        self.assertNotIn('"Current slide"', ast.unparse(selector))
 
     def test_clickable_preview_buttons_exist(self) -> None:
         selector = self.functions["_render_slide_selector"]

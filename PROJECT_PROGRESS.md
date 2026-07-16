@@ -64,6 +64,52 @@ Engineering snapshot as of 2026-07-16.
   to the user
 - Deployment: attentiveslides-local.service only; EyeTheia unchanged
 
+### EmotiEff learner state and integrated Study Review
+
+- Status: automatic implementation complete; manual browser/GPU concurrency acceptance pending
+- Implementation line: local branch `codex/gaze-heatmap-review`, based on
+  `96be07d581cff6c5e7102eed01e27b2e353c2086`; the branch has not been pushed.
+- Scope: one latest-only face-crop worker combines EmotiEff top emotion and
+  engagement with the existing MobileViT fatigue estimate. The Study UI adds a
+  stable Learner state popover and non-blocking fatigue/distraction reminders;
+  Review adds immutable history, selected-session JSON/delete actions, and
+  compact per-session/per-slide state metadata beside the existing heatmap.
+- Official source pin: EmotiEffLib commit
+  `520a051c64cd191521e5934655314e769a319684`. The verified emotion source is
+  16,419,305 bytes with SHA256
+  `95aafb39b8bb87964f45e208b9ab31e276e3e5278678db4961d18e6a1b42a141`;
+  the engagement source is 5,282,144 bytes with SHA256
+  `243b4699eec398a335d32774849f65b2f0e2d63e358df479c5ee95a002cac30d`.
+- Prepared runtime artifacts: emotion TorchScript SHA256
+  `687a1c9178ef1181f9178cb391fa9c3ca5aa822c2d4f304352b5eebaf8b3e190`
+  and weights-only engagement state SHA256
+  `ea3b1423935ca783fb19ad740ea0a35b105f33f48159458d2c66574025298826`.
+  Only `h5py==3.14.0` was added; TensorFlow, Keras, tf2onnx, the complete
+  EmotiEffLib package, and a timm downgrade were not installed.
+- Deployment sampling: 4 Hz with 128 frames is an approximately 32-second
+  operational window. It does not claim to reproduce the upstream training
+  sampling rate, and learner engagement accuracy has not been established by
+  manual feature acceptance.
+- Privacy boundary: canonical Study Review files persist only existing heatmap
+  grids and per-slide time-weighted aggregates. They do not persist face crops,
+  raw video/audio, raw gaze points, 1280-D embeddings, per-frame predictions,
+  or transcripts.
+- Focused GREEN evidence: Checkpoints 1–7 passed 11, 19, 45, 48, 69, 59, and
+  76 tests respectively. The single bounded review fix wave passed 83 directly
+  affected tests. No baseline suite, RED run, browser automation, lint, type
+  check, security scan, or performance test was run.
+- Whole-change review: one direct review covered all 16 plan risks. One bounded
+  fix wave preserved a frozen failed finish across Start new attempts and
+  isolated emotion temporal failures from engagement/fatigue; no unresolved
+  Critical or Important finding remains.
+- Final unittest discovery: the single budgeted run executed 781 tests in
+  15.086 seconds and reported `FAILED (failures=1)`: 780 passed and the only
+  failure was the stale whole-file assertion
+  `test_current_slide_selectbox_is_removed`, which mistook the new Learner
+  state row label for the retired slide selectbox. The assertion was narrowed
+  to `_render_slide_selector`; its directly affected 5-test module then passed
+  in 0.013 seconds. Per the verification budget, full discovery was not rerun.
+
 ## Current operational documentation
 
 - [Live UI usage](docs/live_ui_usage.md)

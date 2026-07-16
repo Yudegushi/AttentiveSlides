@@ -469,8 +469,11 @@ class StudyReviewStore:
 
     def start_new(self) -> None:
         with self._lock:
+            if self._pending_finish is not None:
+                raise RuntimeError(
+                    "Retry saving the frozen Study Review before starting a new study."
+                )
             self._active = None
-            self._pending_finish = None
             self._armed = True
 
     def has_active(self) -> bool:

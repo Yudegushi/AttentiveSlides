@@ -269,6 +269,7 @@ class TestStreamlitAttentiveSlides(
         delete = self.function_source("_delete_selected_study_review")
         self.assertIn("RuntimeError", finish)
         self.assertIn("OSError", start_new)
+        self.assertIn("RuntimeError", start_new)
         self.assertIn("OSError", delete)
 
     def test_runtime_data_dir_is_environment_configurable(

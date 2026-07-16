@@ -158,9 +158,6 @@ class LearnerStateWorker:
             try:
                 affect_estimator = self._get_affect_estimator()
                 affect_output = affect_estimator.infer_frame(packet.image)
-                emotion = self.emotion_tracker.update(
-                    affect_output.emotion_probabilities, now
-                )
             except Exception as exc:
                 error = self._format_error(exc)
                 emotion = EmotionSnapshot(
@@ -174,6 +171,16 @@ class LearnerStateWorker:
                 )
                 self._remember_error(error)
             else:
+                try:
+                    emotion = self.emotion_tracker.update(
+                        affect_output.emotion_probabilities, now
+                    )
+                except Exception as exc:
+                    error = self._format_error(exc)
+                    emotion = EmotionSnapshot(
+                        status="unavailable", updated_at=now, error=error
+                    )
+                    self._remember_error(error)
                 try:
                     engagement = self.engagement_tracker.add(
                         affect_output.feature,

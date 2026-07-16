@@ -1098,9 +1098,9 @@ def _back_to_study_workspace() -> None:
 def _start_new_study_review(resources: MainLiveResources) -> None:
     try:
         resources.study_review.start_new()
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         st.session_state["main_review_error"] = (
-            f"Unable to clear saved review: {exc}"
+            f"Unable to start a new study: {exc}"
         )
         return
     st.session_state["main_workspace_mode"] = "study"
