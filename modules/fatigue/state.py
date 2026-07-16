@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Callable, Literal
 
 
-FatigueStatus = Literal["waiting", "ready", "unavailable"]
+FatigueStatus = Literal["waiting", "ready", "stale", "unavailable"]
 
 
 @dataclass(frozen=True)
@@ -22,10 +22,12 @@ class FatigueSnapshot:
     error: str | None = None
 
     def __post_init__(self) -> None:
-        if self.status not in {"waiting", "ready", "unavailable"}:
+        if self.status not in {"waiting", "ready", "stale", "unavailable"}:
             raise ValueError("invalid fatigue status")
         for value in (self.raw_probability, self.smoothed_probability):
-            if value is not None and not 0.0 <= float(value) <= 1.0:
+            if value is not None and (
+                not math.isfinite(float(value)) or not 0.0 <= float(value) <= 1.0
+            ):
                 raise ValueError("fatigue probabilities must be normalized")
         if self.alert_active and self.status != "ready":
             raise ValueError("only a ready fatigue snapshot may alert")
@@ -156,7 +158,14 @@ class FatigueStateStore:
             and current.updated_at is not None
             and checked_at - current.updated_at > self._stale_after_seconds
         ):
-            return FatigueSnapshot()
+            return FatigueSnapshot(
+                status="stale",
+                raw_probability=current.raw_probability,
+                smoothed_probability=current.smoothed_probability,
+                alert_active=False,
+                updated_at=current.updated_at,
+                error=current.error,
+            )
         return current
 
     def clear(self) -> None:

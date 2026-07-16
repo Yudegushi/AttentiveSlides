@@ -82,8 +82,9 @@ class FatigueStateStoreTest(unittest.TestCase):
 
         snapshot = store.snapshot()
 
-        self.assertEqual(snapshot.status, "waiting")
-        self.assertIsNone(snapshot.smoothed_probability)
+        self.assertEqual(snapshot.status, "stale")
+        self.assertEqual(snapshot.raw_probability, 0.9)
+        self.assertEqual(snapshot.smoothed_probability, 0.8)
         self.assertFalse(snapshot.alert_active)
 
     def test_clear_restores_waiting_state(self):

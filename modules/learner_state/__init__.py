@@ -7,6 +7,19 @@ from .emotieff_estimator import (
     EmotiEffEstimator,
     EngagementAttentionHead,
 )
+from .contracts import (
+    EmotionSnapshot,
+    EngagementSnapshot,
+    LearnerStateSnapshot,
+    LearnerStateStatus,
+    LearnerStateStore,
+)
+from .temporal import (
+    EmotionTemporalConfig,
+    EmotionTemporalTracker,
+    EngagementTemporalConfig,
+    EngagementTemporalTracker,
+)
 
 __all__ = [
     "AffectFrameOutput",
@@ -14,4 +27,13 @@ __all__ = [
     "ENGAGEMENT_LABELS",
     "EmotiEffEstimator",
     "EngagementAttentionHead",
+    "EmotionSnapshot",
+    "EmotionTemporalConfig",
+    "EmotionTemporalTracker",
+    "EngagementSnapshot",
+    "EngagementTemporalConfig",
+    "EngagementTemporalTracker",
+    "LearnerStateSnapshot",
+    "LearnerStateStatus",
+    "LearnerStateStore",
 ]
