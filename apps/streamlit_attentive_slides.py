@@ -14,7 +14,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 REPOSITORY_ROOT = Path(
     __file__
@@ -33,6 +33,7 @@ from PIL import (
     ImageDraw,
 )
 
+from modules.attention import GazeReviewStore, render_review_slide, review_png_bytes
 from modules.audio.faster_whisper_transcriber import (
     FasterWhisperTranscriber,
 )
@@ -93,6 +94,7 @@ from modules.system.main_ui_state import (
     ManifestDeckBrowser,
     build_main_conversation_defaults,
     build_main_live_defaults,
+    build_main_review_defaults,
     build_main_turn_defaults,
     build_main_ui_view_model,
     normalize_main_slide_width_percent,
@@ -197,6 +199,7 @@ class MainLiveResources:
     voice: VoiceOrchestrator
     voice_events: VoiceEventHub
     single_turn_tts: SingleTurnTTSController
+    gaze_review: GazeReviewStore
     bound_deck_id: str | None = None
     bound_slide_id: int | None = None
     bound_aoi_signature: str | None = None
@@ -406,9 +409,13 @@ def build_main_live_resources(
         inbox=inbox,
         snapshot_store=snapshots,
     )
+    gaze_review = GazeReviewStore(
+        RUNTIME_DATA_DIR / "gaze_reviews" / "latest.json"
+    )
     ingress = FallbackMediaIngress(
         media_source,
         observations=observations,
+        gaze_review=gaze_review,
         start_armed=False,
         coordinated_activation=True,
         media_stale_after_seconds=10.0,
@@ -441,6 +448,7 @@ def build_main_live_resources(
         voice=voice,
         voice_events=voice_events,
         single_turn_tts=single_turn_tts,
+        gaze_review=gaze_review,
     )
 
 
@@ -475,9 +483,10 @@ def main() -> None:
     _initialize_global_state()
     _normalize_widget_state()
 
-    _render_upload_controls(
-        workspace
-    )
+    if st.session_state["main_workspace_mode"] == "study":
+        _render_upload_controls(
+            workspace
+        )
 
     browser = _resolve_active_browser(
         workspace,
@@ -530,6 +539,25 @@ def main() -> None:
         browser=browser,
         view=view,
     )
+    live_resources.gaze_review.register_slide(
+        view.deck_id,
+        view.active_slide_id,
+        view.active_slide.aois,
+    )
+
+    if st.session_state["main_workspace_mode"] == "review":
+        st.session_state["main_live_master_enabled"] = False
+        live_resources.service.set_master_enabled(False)
+        live_resources.service.reconcile_once()
+        _render_review_sidebar(live_resources)
+        _render_header(view, review=True)
+        _render_review_workspace(
+            view,
+            browser=browser,
+            resources=live_resources,
+        )
+        return
+
     _render_live_controls(
         live_resources
     )
@@ -593,6 +621,7 @@ def _initialize_global_state() -> None:
         **build_main_turn_defaults(),
         **build_main_conversation_defaults(),
         **build_main_live_defaults(),
+        **build_main_review_defaults(),
     }
 
     for key, value in defaults.items():
@@ -667,6 +696,12 @@ def _normalize_widget_state() -> None:
         "main_slide_width_percent"
     ] = normalize_main_slide_width_percent(
         st.session_state.get("main_slide_width_percent")
+    )
+
+    if st.session_state.get("main_workspace_mode") not in {"study", "review"}:
+        st.session_state["main_workspace_mode"] = "study"
+    st.session_state["main_review_show_heatmap"] = bool(
+        st.session_state.get("main_review_show_heatmap", True)
     )
 
     boolean_defaults = {
@@ -992,6 +1027,75 @@ def _bind_main_live_resources(
         resources.bound_aoi_signature = signature
 
 
+def _finish_gaze_review(resources: MainLiveResources, deck_id: str) -> None:
+    try:
+        review = resources.gaze_review.finish(deck_id=deck_id)
+    except (OSError, RuntimeError) as exc:
+        st.session_state["main_review_error"] = f"Unable to save review: {exc}"
+        return
+    st.session_state["main_live_master_enabled"] = False
+    st.session_state["main_workspace_mode"] = "review"
+    st.session_state["main_review_error"] = None
+    if review.slides:
+        st.session_state["main_active_slide_id"] = review.slides[0].slide_id
+
+
+def _open_latest_review(resources: MainLiveResources) -> None:
+    review = resources.gaze_review.latest()
+    if review is None:
+        st.session_state["main_review_error"] = (
+            resources.gaze_review.load_error()
+            or "No completed gaze review is available."
+        )
+        st.session_state["main_live_master_enabled"] = False
+        st.session_state["main_workspace_mode"] = "review"
+        return
+    st.session_state["main_live_master_enabled"] = False
+    st.session_state["main_workspace_mode"] = "review"
+    st.session_state["main_review_error"] = None
+    if review.slides:
+        st.session_state["main_active_slide_id"] = review.slides[0].slide_id
+
+
+def _back_to_study_workspace() -> None:
+    st.session_state["main_workspace_mode"] = "study"
+    st.session_state["main_live_master_enabled"] = False
+
+
+def _start_new_gaze_study(resources: MainLiveResources) -> None:
+    try:
+        resources.gaze_review.start_new()
+    except OSError as exc:
+        st.session_state["main_review_error"] = (
+            f"Unable to clear saved review: {exc}"
+        )
+        return
+    st.session_state["main_workspace_mode"] = "study"
+    st.session_state["main_live_master_enabled"] = False
+    st.session_state["main_review_show_heatmap"] = True
+    st.session_state["main_review_clear_confirm"] = False
+    st.session_state["main_review_error"] = None
+
+
+def _clear_gaze_review(resources: MainLiveResources) -> None:
+    try:
+        resources.gaze_review.clear()
+    except OSError as exc:
+        st.session_state["main_review_error"] = (
+            f"Unable to clear saved review: {exc}"
+        )
+        return
+    st.session_state["main_workspace_mode"] = "study"
+    st.session_state["main_live_master_enabled"] = False
+    st.session_state["main_review_show_heatmap"] = True
+    st.session_state["main_review_clear_confirm"] = False
+    st.session_state["main_review_error"] = None
+
+
+def _on_review_option_change() -> None:
+    st.session_state["main_review_error"] = None
+
+
 def _render_live_controls(
     resources: MainLiveResources,
 ) -> None:
@@ -1085,6 +1189,36 @@ def _render_live_controls(
         f"Runtime: {runtime_state} · "
         f"Media: {'ready' if session.video_fresh and session.audio_fresh else 'waiting'}"
     )
+    deck_id = resources.bound_deck_id
+    if deck_id is not None and (
+        resources.gaze_review.has_active()
+        or (enabled and resources.gaze_review.is_armed())
+    ):
+        st.sidebar.button(
+            "End study & review",
+            key="main_end_study_review",
+            type="primary",
+            width="stretch",
+            on_click=_finish_gaze_review,
+            args=(resources, deck_id),
+        )
+    if (
+        resources.gaze_review.latest() is not None
+        or resources.gaze_review.load_error()
+    ):
+        st.sidebar.button(
+            (
+                "Open latest review"
+                if resources.gaze_review.latest() is not None
+                else "Resolve saved review"
+            ),
+            key="main_open_latest_review",
+            width="stretch",
+            on_click=_open_latest_review,
+            args=(resources,),
+        )
+    if st.session_state.get("main_review_error"):
+        st.sidebar.error(st.session_state["main_review_error"])
     if st.session_state.get("main_voice_status_message"):
         st.sidebar.warning(st.session_state["main_voice_status_message"])
 
@@ -1094,6 +1228,236 @@ def _render_live_controls(
             expanded=False,
         ):
             st.iframe("/capture", height=340)
+
+
+def _render_review_sidebar(resources: MainLiveResources) -> None:
+    st.sidebar.markdown("### Study review")
+    st.sidebar.button(
+        "Back to workspace",
+        key="main_review_back",
+        width="stretch",
+        on_click=_back_to_study_workspace,
+    )
+    st.sidebar.button(
+        "Start new study",
+        key="main_review_start_new",
+        type="primary",
+        width="stretch",
+        on_click=_start_new_gaze_study,
+        args=(resources,),
+    )
+
+    review = resources.gaze_review.latest()
+    if review is not None:
+        st.sidebar.download_button(
+            "Download session JSON",
+            data=review.to_json().encode("utf-8"),
+            file_name=f"gaze_review_{review.session_id}.json",
+            mime="application/json",
+            key="main_review_download_json",
+            width="stretch",
+        )
+
+    load_error = resources.gaze_review.load_error()
+    inline_error = st.session_state.get("main_review_error")
+    if inline_error:
+        st.sidebar.error(inline_error)
+    if load_error:
+        st.sidebar.error(f"Saved review unavailable: {load_error}")
+        st.sidebar.caption(
+            "Start a new study or clear the saved review to recover."
+        )
+
+    with st.sidebar.expander("Clear saved review", expanded=False):
+        st.checkbox(
+            "I understand this deletes the latest review",
+            key="main_review_clear_confirm",
+            on_change=_on_review_option_change,
+        )
+        st.button(
+            "Clear review",
+            key="main_review_clear",
+            disabled=not bool(
+                st.session_state.get("main_review_clear_confirm", False)
+            ),
+            width="stretch",
+            on_click=_clear_gaze_review,
+            args=(resources,),
+        )
+
+
+def _render_review_text_fallback(slide: MainUISlide) -> None:
+    with st.container(border=True):
+        st.markdown(f"### Slide {slide.slide_id}")
+        st.write(slide.slide_text or "Slide image unavailable.")
+
+
+def _render_review_workspace(
+    view: MainUIViewModel,
+    *,
+    browser: Any,
+    resources: MainLiveResources,
+) -> None:
+    review = resources.gaze_review.latest()
+    if review is None:
+        st.info(
+            "No completed gaze review is available. "
+            "Start a new study to collect gaze data."
+        )
+        return
+    if review.deck_id != view.deck_id:
+        st.warning(
+            "The saved review belongs to a deck that is not currently available. "
+            "You can still download its JSON or clear it from the sidebar."
+        )
+        return
+
+    available_slide_ids = set(browser.slide_ids)
+    review_slides = tuple(
+        slide for slide in review.slides
+        if slide.slide_id in available_slide_ids
+    )
+    if not review_slides:
+        st.info("No slide gaze data was captured in this study.")
+        return
+
+    slide_by_id = {slide.slide_id: slide for slide in review_slides}
+    if view.active_slide_id not in slide_by_id:
+        st.session_state["main_active_slide_id"] = review_slides[0].slide_id
+        st.rerun()
+    slide_review = slide_by_id[view.active_slide_id]
+    review_slide_ids = tuple(slide_by_id)
+
+    with st.container(key="main_primary_actions"):
+        spacer, slides_column = st.columns(
+            [0.85, 0.15],
+            gap="small",
+            vertical_alignment="center",
+        )
+        del spacer
+        with slides_column:
+            _render_slide_selector(browser, slide_ids=review_slide_ids)
+
+    with st.container(key="main_slide_scale"):
+        st.slider(
+            "Slide size",
+            min_value=50,
+            max_value=100,
+            step=5,
+            key="main_slide_width_percent",
+            label_visibility="collapsed",
+        )
+
+    image_path = (
+        view.active_slide.image_path
+        if view.active_slide.image_available
+        else None
+    )
+    show_heatmap = bool(st.session_state["main_review_show_heatmap"])
+
+    def show_image(image: Image.Image) -> None:
+        width_percent = int(st.session_state["main_slide_width_percent"])
+        if width_percent >= 100:
+            st.image(image, width="stretch")
+            return
+        margin = (100 - width_percent) / 2
+        _left, center, _right = st.columns(
+            [margin, width_percent, margin],
+            gap=None,
+        )
+        with center:
+            st.image(image, width="stretch")
+
+    with st.container(key="main_slide_stage"):
+        _render_navigation(
+            browser,
+            view,
+            slide_ids=review_slide_ids,
+        )
+        if image_path is None:
+            _render_review_text_fallback(view.active_slide)
+        else:
+            try:
+                rendered = render_review_slide(
+                    image_path,
+                    slide_review,
+                    show_heatmap=show_heatmap,
+                )
+                try:
+                    show_image(rendered)
+                finally:
+                    rendered.close()
+            except (OSError, ValueError):
+                st.warning("Heatmap unavailable for this slide.")
+                try:
+                    original = _load_slide_image(image_path)
+                except (OSError, ValueError):
+                    _render_review_text_fallback(view.active_slide)
+                else:
+                    try:
+                        show_image(original)
+                    finally:
+                        original.close()
+
+    st.markdown(
+        """
+        <div class="attentive-review-legend">
+            <span>Lower attention</span>
+            <span class="attentive-review-gradient" aria-hidden="true"></span>
+            <span>Higher attention</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        f"Valid gaze: {slide_review.valid_gaze_seconds:.1f} s · "
+        f"Data coverage: {slide_review.coverage:.0%}"
+    )
+    if slide_review.valid_gaze_seconds <= 0.0:
+        st.info("No valid gaze was captured on this slide.")
+    st.checkbox(
+        "Show heatmap",
+        key="main_review_show_heatmap",
+        on_change=_on_review_option_change,
+    )
+
+    rows = [
+        {
+            "Region": item.label,
+            "Time": f"{item.dwell_seconds:.1f} s",
+        }
+        for item in slide_review.aoi_dwell
+    ]
+    if slide_review.other_slide_seconds > 0.05:
+        rows.append(
+            {
+                "Region": "Other slide area",
+                "Time": f"{slide_review.other_slide_seconds:.1f} s",
+            }
+        )
+    with st.expander("Region times", expanded=False):
+        if rows:
+            _render_records_table(rows)
+        else:
+            st.caption("No region timing data is available for this slide.")
+
+    if image_path is not None:
+        try:
+            png_payload = review_png_bytes(
+                image_path,
+                slide_review,
+                show_heatmap=show_heatmap,
+            )
+        except (OSError, ValueError):
+            st.caption("PNG export is unavailable for this slide.")
+        else:
+            st.download_button(
+                "Download heatmap PNG",
+                data=png_payload,
+                file_name=f"slide_{slide_review.slide_id:03d}_gaze_heatmap.png",
+                mime="image/png",
+                key="main_review_download_png",
+            )
 
 
 def _on_manual_region_change() -> None:
@@ -1717,6 +2081,22 @@ def _inject_compact_ui_css() -> None:
             text-align: right;
         }
 
+        .attentive-review-legend {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: .5rem;
+            color: rgba(49, 51, 63, .72);
+            font-size: .78rem;
+        }
+
+        .attentive-review-gradient {
+            width: 7rem;
+            height: .42rem;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #2563eb, #06b6d4, #facc15, #f97316, #dc2626);
+        }
+
         .st-key-main_primary_actions {
             margin-top: 1.15rem;
             margin-bottom: -0.35rem;
@@ -1925,10 +2305,12 @@ def _slide_selector_scroll_html(
 
 def _render_slide_selector(
     browser: Any,
+    *,
+    slide_ids: Sequence[int] | None = None,
 ) -> None:
     """Render a compact right-aligned popover of vertical slide previews."""
     slide_ids = list(
-        browser.slide_ids
+        browser.slide_ids if slide_ids is None else slide_ids
     )
 
     if not slide_ids:
@@ -2271,15 +2653,23 @@ def _render_answer_column(
 
 def _render_header(
     view: MainUIViewModel,
+    *,
+    review: bool = False,
 ) -> None:
     del view
 
+    tagline = (
+        "Review where your attention stayed across the completed study."
+        if review
+        else "Select a slide region, state your learning goal, and receive a grounded tutor response."
+    )
+
     st.markdown(
-        """
+        f"""
         <div class="attentive-top-brand">
             <span class="attentive-top-title">AttentiveSlides</span>
             <span class="attentive-top-tagline">
-                Select a slide region, state your learning goal, and receive a grounded tutor response.
+                {tagline}
             </span>
         </div>
         """,
@@ -2321,17 +2711,29 @@ def _render_fatigue_probability_periodic(
 def _render_navigation(
     browser: Any,
     view: MainUIViewModel,
+    *,
+    slide_ids: Sequence[int] | None = None,
 ) -> None:
-    previous_id = (
-        browser.previous_slide_id(
-            view.active_slide_id
+    if slide_ids is None:
+        previous_id = (
+            browser.previous_slide_id(
+                view.active_slide_id
+            )
         )
-    )
-    next_id = (
-        browser.next_slide_id(
-            view.active_slide_id
+        next_id = (
+            browser.next_slide_id(
+                view.active_slide_id
+            )
         )
-    )
+    else:
+        ordered_ids = list(slide_ids)
+        active_index = ordered_ids.index(view.active_slide_id)
+        previous_id = ordered_ids[active_index - 1] if active_index > 0 else None
+        next_id = (
+            ordered_ids[active_index + 1]
+            if active_index + 1 < len(ordered_ids)
+            else None
+        )
 
     st.button(
         "❮",

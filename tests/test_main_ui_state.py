@@ -16,6 +16,7 @@ from modules.system.main_ui_state import (
     ManifestDeckBrowser,
     build_main_conversation_defaults,
     build_main_live_defaults,
+    build_main_review_defaults,
     build_main_turn_defaults,
     build_main_ui_view_model,
     reset_main_conversation_state,
@@ -82,6 +83,16 @@ def make_slide_payload(
 
 
 class TestMainUIState(unittest.TestCase):
+    def test_main_review_defaults_are_small_and_deterministic(self):
+        self.assertEqual(
+            build_main_review_defaults(),
+            {
+                "main_workspace_mode": "study",
+                "main_review_show_heatmap": True,
+                "main_review_error": None,
+            },
+        )
+
     def test_main_ui_slide_serializes_default_and_selected_aoi_profile(self) -> None:
         from modules.system.main_ui_state import MainUISlide
 

@@ -213,6 +213,15 @@ class TestMainUIWidgetInventory(
             "main_generate_answer_button",
             "main_reset_turn_button",
             "main_clear_conversation_button",
+            "main_end_study_review",
+            "main_open_latest_review",
+            "main_review_show_heatmap",
+            "main_review_back",
+            "main_review_start_new",
+            "main_review_clear_confirm",
+            "main_review_clear",
+            "main_review_download_png",
+            "main_review_download_json",
         }
 
         missing = sorted(

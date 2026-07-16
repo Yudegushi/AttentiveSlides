@@ -163,6 +163,15 @@ def build_main_live_defaults() -> dict[str, Any]:
     }
 
 
+def build_main_review_defaults() -> dict[str, Any]:
+    """Return navigation state for the latest gaze review."""
+    return {
+        "main_workspace_mode": "study",
+        "main_review_show_heatmap": True,
+        "main_review_error": None,
+    }
+
+
 def reset_main_turn_state(
     state: MutableMapping[str, Any],
 ) -> None:

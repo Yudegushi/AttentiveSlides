@@ -119,6 +119,44 @@ class TestStreamlitAttentiveSlides(
             self.functions,
         )
 
+    def test_main_has_explicit_study_review_branch(self):
+        source = self.function_source("main")
+        self.assertIn("main_workspace_mode", source)
+        self.assertIn('== "review"', source)
+        self.assertIn("_render_review_workspace", source)
+        self.assertIn("_render_review_sidebar", source)
+
+    def test_review_does_not_reuse_interactive_slide_component(self):
+        source = self.function_source("_render_review_workspace")
+        self.assertIn("render_review_slide", source)
+        self.assertIn("review_png_bytes", source)
+        self.assertNotIn("render_slide_viewport", source)
+        self.assertNotIn("parse_component_geometry", source)
+
+    def test_review_is_minimal_and_region_times_are_collapsed(self):
+        source = self.function_source("_render_review_workspace")
+        self.assertIn("Valid gaze", source)
+        self.assertIn("Data coverage", source)
+        self.assertIn("Region times", source)
+        self.assertIn("expanded=False", source)
+        self.assertNotIn("Most attended", source)
+        self.assertNotIn("Least attended", source)
+
+    def test_live_sidebar_exposes_review_actions(self):
+        source = self.function_source("_render_live_controls")
+        self.assertIn("End study & review", source)
+        self.assertIn("Open latest review", source)
+        self.assertIn("is_armed()", source)
+        self.assertIn("load_error()", source)
+
+    def test_review_lifecycle_errors_stay_inline(self):
+        finish = self.function_source("_finish_gaze_review")
+        start_new = self.function_source("_start_new_gaze_study")
+        clear = self.function_source("_clear_gaze_review")
+        self.assertIn("RuntimeError", finish)
+        self.assertIn("OSError", start_new)
+        self.assertIn("OSError", clear)
+
     def test_runtime_data_dir_is_environment_configurable(
         self,
     ) -> None:
