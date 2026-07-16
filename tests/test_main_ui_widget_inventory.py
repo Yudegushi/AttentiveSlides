@@ -104,6 +104,7 @@ class TestMainUIWidgetInventory(
             "checkbox",
             "download_button",
             "file_uploader",
+            "popover",
             "radio",
             "selectbox",
             "slider",
@@ -222,6 +223,8 @@ class TestMainUIWidgetInventory(
             "main_review_clear",
             "main_review_download_png",
             "main_review_download_json",
+            "main_learner_state_popover",
+            "main_dismiss_distraction",
         }
 
         missing = sorted(

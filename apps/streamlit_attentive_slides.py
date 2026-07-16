@@ -165,7 +165,10 @@ from modules.system.uploaded_deck_service import (
 )
 from modules.ui.slide_viewport_component import render_slide_viewport
 from modules.ui.live_debug_bridge_component import render_live_debug_bridge
-from modules.ui.fatigue_status import build_fatigue_status_view
+from modules.ui.learner_state_status import (
+    DISCLAIMER,
+    build_learner_state_view,
+)
 from modules.ui.voice_control_component import render_voice_control_component
 
 
@@ -2097,36 +2100,62 @@ def _inject_compact_ui_css() -> None:
             text-overflow: ellipsis;
         }
 
-        .attentive-fatigue-status {
+        .attentive-learner-alert-anchor {
             position: relative;
             width: 100%;
+            height: 0;
         }
 
-        .attentive-fatigue-alert {
+        .attentive-learner-alert {
             position: absolute;
             right: 0;
-            bottom: 1.35rem;
+            bottom: 0.35rem;
             width: max-content;
-            max-width: min(28rem, 48vw);
+            max-width: min(25rem, 70vw);
             padding: 0.3rem 0.58rem;
-            border: 1px solid #8b5e00;
+            border: 1px solid #111111;
             border-radius: 0.45rem;
-            background: rgba(255, 244, 204, 0.68);
-            color: #3f2b00;
+            background: rgba(255, 255, 255, 0.84);
+            color: #111111;
             font-size: 0.78rem;
             font-weight: 600;
             line-height: 1.2;
-            box-shadow: 0 1px 4px rgba(17, 17, 17, 0.08);
+            box-shadow: 0 4px 12px rgba(17, 17, 17, 0.12);
             backdrop-filter: blur(3px);
             z-index: 20;
+            pointer-events: none;
         }
 
-        .attentive-fatigue-probability {
-            width: 100%;
-            color: rgba(49, 51, 63, 0.62);
-            font-size: 0.82rem;
-            line-height: 1.3;
+        .attentive-learner-panel {
+            display: grid;
+            gap: 0.36rem;
+            min-width: 15rem;
+        }
+
+        .attentive-learner-row {
+            display: grid;
+            grid-template-columns: 5.5rem minmax(0, 1fr);
+            gap: 0.65rem;
+            color: #111111;
+            font-size: 0.84rem;
+            line-height: 1.35;
+        }
+
+        .attentive-learner-label {
+            color: rgba(17, 17, 17, 0.62);
+        }
+
+        .attentive-learner-value {
+            min-width: 0;
+            overflow-wrap: anywhere;
+            font-variant-numeric: tabular-nums;
             text-align: right;
+        }
+
+        .attentive-learner-detail {
+            color: rgba(17, 17, 17, 0.68);
+            font-size: 0.74rem;
+            overflow-wrap: anywhere;
         }
 
         .attentive-review-legend {
@@ -2154,6 +2183,10 @@ def _inject_compact_ui_css() -> None:
         .st-key-main_slide_preview_scroll button {
             font-family: "Avenir Next", "Segoe UI", Arial, sans-serif;
             font-weight: 700;
+        }
+
+        .st-key-main_learner_state_popover button {
+            width: 100%;
         }
 
         .st-key-main_slide_scale {
@@ -2723,30 +2756,71 @@ def _render_header(
     )
 
 
-@st.fragment(run_every=0.5)
-def _render_fatigue_probability_periodic(
+def _learner_state_view(resources: MainLiveResources):
+    live_enabled = bool(
+        st.session_state.get("main_interaction_mode") == "Live"
+        and st.session_state.get("main_live_master_enabled")
+    )
+    deck_id = resources.bound_deck_id or ""
+    slide_id = resources.bound_slide_id or 1
+    snapshot = resources.learner_state_store.snapshot()
+    slide = resources.study_review.active_slide_summary(deck_id, slide_id)
+    return build_learner_state_view(
+        snapshot,
+        slide,
+        live_enabled=live_enabled,
+    )
+
+
+@st.fragment(run_every=1.0)
+def _render_learner_state_contents_periodic(
     resources: MainLiveResources,
 ) -> None:
-    snapshot = resources.fatigue_store.snapshot()
-    view = build_fatigue_status_view(
-        snapshot,
-        live_enabled=bool(
-            st.session_state.get("main_interaction_mode") == "Live"
-            and st.session_state.get("main_live_master_enabled")
-        ),
+    view = _learner_state_view(resources)
+    rows = (
+        ("Emotion", view.emotion_text),
+        ("Engagement", view.engagement_text),
+        ("Fatigue", view.fatigue_text),
+        ("Current slide", view.slide_text),
     )
-    alert_html = (
-        '<div class="attentive-fatigue-alert" role="status">'
-        f"{html.escape(view.alert_text)}"
+    row_html = "".join(
+        '<div class="attentive-learner-row">'
+        f'<span class="attentive-learner-label">{label}</span>'
+        f'<span class="attentive-learner-value">{value}</span>'
         "</div>"
-        if view.show_alert
-        else ""
+        for label, value in rows
+    )
+    detail_html = "".join(
+        f'<div class="attentive-learner-detail">{detail}</div>'
+        for detail in view.unavailable_details
     )
     st.markdown(
-        '<div class="attentive-fatigue-status">'
-        f"{alert_html}"
-        '<div class="attentive-fatigue-probability">'
-        f"{html.escape(view.probability_text)}"
+        '<div class="attentive-learner-panel">'
+        f"{row_html}{detail_html}"
+        f'<div class="attentive-learner-detail">{DISCLAIMER}</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    if view.can_dismiss_distraction:
+        st.button(
+            "Dismiss distraction reminder",
+            key="main_dismiss_distraction",
+            width="stretch",
+            on_click=resources.learner_state_worker.dismiss_distraction,
+        )
+
+
+@st.fragment(run_every=1.0)
+def _render_learner_state_alert_periodic(
+    resources: MainLiveResources,
+) -> None:
+    view = _learner_state_view(resources)
+    if view.alert_text is None:
+        return
+    st.markdown(
+        '<div class="attentive-learner-alert-anchor">'
+        '<div class="attentive-learner-alert" role="status">'
+        f"{html.escape(view.alert_text)}"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -3029,15 +3103,21 @@ def _render_slide_workspace(
         _set_whole_slide_target(view)
 
     with st.container(key="main_primary_actions"):
-        llm_column, fatigue_column, slides_column = st.columns(
-            [0.56, 0.29, 0.15],
+        llm_column, status_column, slides_column = st.columns(
+            [0.52, 0.33, 0.15],
             gap="small",
             vertical_alignment="center",
         )
         with llm_column:
             _render_current_slide_llm_aoi_action(view, workspace)
-        with fatigue_column:
-            _render_fatigue_probability_periodic(live_resources)
+        with status_column:
+            _render_learner_state_alert_periodic(live_resources)
+            with st.popover(
+                "Learner state",
+                key="main_learner_state_popover",
+                width="stretch",
+            ):
+                _render_learner_state_contents_periodic(live_resources)
         with slides_column:
             _render_slide_selector(browser)
 
