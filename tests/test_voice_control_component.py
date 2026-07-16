@@ -51,7 +51,7 @@ class VoiceControlComponentContractTests(unittest.TestCase):
         self.assertIn("keepalive: true", self.component)
 
     def test_capture_fatigue_contract_is_unchanged(self) -> None:
-        self.assertIn("const FATIGUE_INTERVAL_MS = 500", self.capture)
+        self.assertIn("const FATIGUE_INTERVAL_MS = 250", self.capture)
         self.assertIn("fatigueCanvas.width = 224", self.capture)
         self.assertIn("fatigueCanvas.height = 224", self.capture)
         self.assertIn('}, "image/jpeg", 0.80)', self.capture)

@@ -87,7 +87,7 @@ class FakeAudio:
         self.on_started(timestamp)
 
 
-class FakeFatigue:
+class FakeLearnerState:
     def __init__(self, *, explode_on_start=False):
         self.starts = 0
         self.stops = 0
@@ -97,7 +97,7 @@ class FakeFatigue:
     def start(self):
         self.starts += 1
         if self.explode_on_start:
-            raise RuntimeError("fatigue unavailable")
+            raise RuntimeError("learner state unavailable")
 
     def stop(self):
         self.stops += 1
@@ -148,14 +148,14 @@ class SystemControllerTest(unittest.TestCase):
         self.audio = FakeAudio()
         self.collector = FakeCollector()
         self.runner = FakeRunner()
-        self.fatigue = FakeFatigue()
+        self.learner_state = FakeLearnerState()
         self.controller = SystemController(
             media_source=self.media,
             sensing_worker=self.sensing,
             audio_worker=self.audio,
             context_collector=self.collector,
             turn_runner=self.runner,
-            fatigue_worker=self.fatigue,
+            learner_state_worker=self.learner_state,
         )
         self.controller.set_slide(5)
 
@@ -165,7 +165,7 @@ class SystemControllerTest(unittest.TestCase):
 
         self.assertEqual(self.controller.state, RuntimeState.MONITORING)
         self.assertEqual((self.media.starts, self.sensing.starts, self.audio.starts), (1, 1, 1))
-        self.assertEqual(self.fatigue.starts, 1)
+        self.assertEqual(self.learner_state.starts, 1)
         self.assertEqual(self.sensing.slides, [5])
 
         self.controller.handle_disconnect()
@@ -173,7 +173,7 @@ class SystemControllerTest(unittest.TestCase):
 
         self.assertEqual(self.controller.state, RuntimeState.STOPPED)
         self.assertEqual((self.media.stops, self.sensing.stops, self.audio.stops), (1, 1, 1))
-        self.assertEqual(self.fatigue.stops, 1)
+        self.assertEqual(self.learner_state.stops, 1)
         self.assertEqual(self.media.reasons, ["browser disconnected"])
 
     def test_freezes_start_slide_ignores_busy_speech_and_resumes_confirmation(self):
@@ -222,25 +222,25 @@ class SystemControllerTest(unittest.TestCase):
         self.assertEqual(self.controller.poll(), [])
         self.assertEqual(self.runner.contexts, [])
 
-    def test_exploding_fatigue_start_does_not_prevent_monitoring(self):
-        fatigue = FakeFatigue(explode_on_start=True)
+    def test_exploding_learner_state_start_does_not_prevent_monitoring(self):
+        learner_state = FakeLearnerState(explode_on_start=True)
         controller = SystemController(
             media_source=self.media,
             sensing_worker=self.sensing,
             audio_worker=self.audio,
             context_collector=self.collector,
             turn_runner=self.runner,
-            fatigue_worker=fatigue,
+            learner_state_worker=learner_state,
         )
         controller.set_slide(5)
 
         controller.start()
 
         self.assertEqual(controller.state, RuntimeState.MONITORING)
-        self.assertEqual(fatigue.errors, ["fatigue unavailable"])
+        self.assertEqual(learner_state.errors, ["learner state unavailable"])
         self.assertEqual((self.sensing.starts, self.audio.starts), (1, 1))
         controller.stop(reason="master switch off")
-        self.assertEqual(fatigue.stops, 1)
+        self.assertEqual(learner_state.stops, 1)
 
 
 if __name__ == "__main__":

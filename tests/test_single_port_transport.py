@@ -435,7 +435,7 @@ class LocalEyeTheiaCaptureContractTest(unittest.TestCase):
             1,
         )
         self.assertEqual(component.count("new window.FaceMesh("), 1)
-        self.assertIn("const FATIGUE_INTERVAL_MS = 500", component)
+        self.assertIn("const FATIGUE_INTERVAL_MS = 250", component)
         self.assertIn("fatigueCanvas.width = 224", component)
         self.assertIn("fatigueCanvas.height = 224", component)
         self.assertIn("* 1.25", component)

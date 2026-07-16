@@ -20,14 +20,14 @@ class SystemController:
         audio_worker: Any,
         context_collector: Any,
         turn_runner: Any,
-        fatigue_worker: Any | None = None,
+        learner_state_worker: Any | None = None,
     ) -> None:
         self.media_source = media_source
         self.sensing_worker = sensing_worker
         self.audio_worker = audio_worker
         self.context_collector = context_collector
         self.turn_runner = turn_runner
-        self.fatigue_worker = fatigue_worker
+        self.learner_state_worker = learner_state_worker
         self._lock = RLock()
         self._state = RuntimeState.STOPPED
         self._current_slide_id: int | None = None
@@ -64,7 +64,7 @@ class SystemController:
             self._state = RuntimeState.STARTING
         try:
             self.media_source.start()
-            self._start_fatigue_best_effort()
+            self._start_learner_state_best_effort()
             self.sensing_worker.set_slide(self._current_slide_id)
             self.sensing_worker.start()
             self.audio_worker.start()
@@ -85,21 +85,21 @@ class SystemController:
             self._ignored_started_at.clear()
         self.audio_worker.stop()
         self.sensing_worker.stop()
-        if self.fatigue_worker is not None:
+        if self.learner_state_worker is not None:
             try:
-                self.fatigue_worker.stop()
+                self.learner_state_worker.stop()
             except Exception:
                 pass
         self.media_source.stop(reason=reason)
 
-    def _start_fatigue_best_effort(self) -> None:
-        if self.fatigue_worker is None:
+    def _start_learner_state_best_effort(self) -> None:
+        if self.learner_state_worker is None:
             return
         try:
-            self.fatigue_worker.start()
+            self.learner_state_worker.start()
         except Exception as exc:
             try:
-                self.fatigue_worker.record_external_error(exc)
+                self.learner_state_worker.record_external_error(exc)
             except Exception:
                 pass
 
@@ -124,7 +124,7 @@ class SystemController:
 
         # AudioWorker.stop() cancels its detector and clears the shared audio
         # queue; restarting only this worker preserves the single media source,
-        # sensing worker, fatigue worker, and public port.
+        # sensing worker, learner-state worker, and public port.
         self.audio_worker.stop()
         with self._lock:
             if self._state == RuntimeState.STOPPED:
