@@ -147,7 +147,7 @@ class TestStreamlitAttentiveSlides(
         self.assertIn("End study & review", source)
         self.assertIn("Open latest review", source)
         self.assertIn("is_armed()", source)
-        self.assertIn("load_error()", source)
+        self.assertIn("load_warnings()", source)
 
     def test_live_sidebar_requires_explicit_new_study_after_deck_change(self):
         source = self.function_source("_render_live_controls")
@@ -156,8 +156,8 @@ class TestStreamlitAttentiveSlides(
         self.assertIn("Start new study with this deck", source)
 
     def test_review_lifecycle_errors_stay_inline(self):
-        finish = self.function_source("_finish_gaze_review")
-        start_new = self.function_source("_start_new_gaze_study")
+        finish = self.function_source("_finish_study_review")
+        start_new = self.function_source("_start_new_study_review")
         clear = self.function_source("_clear_gaze_review")
         self.assertIn("RuntimeError", finish)
         self.assertIn("OSError", start_new)
@@ -728,7 +728,70 @@ class TestStreamlitAttentiveSlides(
         self.assertEqual(builder.count("SystemController("), 1)
         self.assertEqual(builder.count("VoiceOrchestrator("), 1)
         self.assertIn("voice_transport=voice", builder)
-        self.assertIn("fatigue_worker=fatigue_worker", builder)
+        self.assertIn("learner_state_worker=learner_state_worker", builder)
+
+    def test_learner_state_resources_follow_integrated_build_order(self) -> None:
+        builder = self.function_source("build_main_live_resources")
+        study = builder.index("study_review = StudyReviewStore(")
+        store = builder.index("learner_state_store = LearnerStateStore()")
+        worker = builder.index("learner_state_worker = LearnerStateWorker(")
+        controller = builder.index("controller = SystemController(")
+        ingress = builder.index("ingress = FallbackMediaIngress(")
+        self.assertLess(study, store)
+        self.assertLess(store, worker)
+        self.assertLess(worker, controller)
+        self.assertLess(controller, ingress)
+        self.assertIn("on_snapshot=study_review.accept_learner_state", builder)
+        self.assertIn("study_review=study_review", builder)
+        self.assertIn("media_stale_after_seconds=10.0", builder)
+        self.assertIn("inactive_after_seconds=12.0", builder)
+
+    def test_emotieff_paths_are_environment_configurable_with_local_defaults(self) -> None:
+        builder = self.function_source("build_main_live_resources")
+        self.assertIn('"ATTENTIVE_EMOTIEFF_MODEL_PATH"', builder)
+        self.assertIn("enet_b0_8_best_vgaf_features.ts", builder)
+        self.assertIn('"ATTENTIVE_EMOTIEFF_ENGAGEMENT_PATH"', builder)
+        self.assertIn("engagement_single_attention.pt", builder)
+        self.assertIn('"ATTENTIVE_EMOTIEFF_DEVICE", "cuda"', builder)
+
+    def test_live_binding_sets_worker_and_review_context_before_capture(self) -> None:
+        binding = self.function_source("_bind_main_live_resources")
+        self.assertIn(
+            "resources.learner_state_worker.set_context(view.deck_id, view.active_slide_id)",
+            binding,
+        )
+        self.assertIn(
+            "resources.study_review.set_context(view.deck_id, view.active_slide_id)",
+            binding,
+        )
+        self.assertIn("resources.study_review.register_slide(", binding)
+
+    def test_successful_turn_records_existing_nested_interaction_once(self) -> None:
+        record = self.function_source("_record_completed_turn")
+        self.assertLess(
+            record.index("upsert_conversation_turn("),
+            record.index("resources.study_review.record_completed_interaction("),
+        )
+        self.assertIn(
+            'interaction = st.session_state["main_confirmed_interaction"]["interaction"]',
+            record,
+        )
+        self.assertIn('interaction_id=str(interaction["interaction_id"])', record)
+        self.assertIn('deck_id=str(interaction["deck_id"])', record)
+        self.assertIn('slide_id=int(interaction["slide_id"])', record)
+        self.assertNotIn("uuid", record)
+
+    def test_finish_and_start_new_preserve_lifecycle_guards(self) -> None:
+        finish = self.function_source("_finish_study_review")
+        start_new = self.function_source("_start_new_study_review")
+        self.assertEqual(finish.count("resources.study_review.finish("), 1)
+        self.assertLess(
+            finish.index("resources.study_review.finish("),
+            finish.index('main_live_master_enabled"] = False'),
+        )
+        self.assertIn("resources.study_review.start_new()", start_new)
+        self.assertIn('main_workspace_mode"] = "study"', start_new)
+        self.assertIn('main_live_master_enabled"] = False', start_new)
 
     def test_live_binding_synchronizes_voice_after_provider_binding(self) -> None:
         binding = self.function_source("_bind_main_live_resources")

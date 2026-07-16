@@ -33,7 +33,7 @@ from PIL import (
     ImageDraw,
 )
 
-from modules.attention import GazeReviewStore, render_review_slide, review_png_bytes
+from modules.attention import render_review_slide, review_png_bytes
 from modules.audio.faster_whisper_transcriber import (
     FasterWhisperTranscriber,
 )
@@ -42,13 +42,19 @@ from modules.audio.transcriber import TranscriptionConfig
 from modules.audio.voice_turn_detector import VoiceTurnDetector
 from modules.logging.interaction_logger import InteractionLogger
 from modules.fatigue import (
-    FatigueStateStore,
     FatigueTemporalTracker,
 )
 from modules.fatigue.mobilevit_estimator import (
     DEFAULT_MODEL_PATH,
     MobileViTFatigueEstimator,
 )
+from modules.learner_state import (
+    EmotiEffEstimator,
+    EmotionTemporalTracker,
+    EngagementTemporalTracker,
+    LearnerStateStore,
+)
+from modules.review import StudyReviewStore
 from modules.slide.llm_aoi import sanitized_llm_error
 from modules.media import BrowserMediaSource
 from modules.media.browser_gaze_source import BrowserGazeSource
@@ -125,7 +131,7 @@ from modules.system.active_deck_slide_provider import (
 )
 from modules.system.audio_worker import AudioWorker
 from modules.system.controller import SystemController
-from modules.system.fatigue_worker import FatigueWorker
+from modules.system.learner_state_worker import LearnerStateWorker
 from modules.system.live_ui_bridge import (
     LatestProposalInbox,
     LiveInteractionProposal,
@@ -195,11 +201,12 @@ class MainLiveResources:
     inbox: LatestProposalInbox
     ingress: FallbackMediaIngress
     service: LiveIngressService
-    fatigue_store: FatigueStateStore
+    learner_state_store: LearnerStateStore
+    learner_state_worker: LearnerStateWorker
     voice: VoiceOrchestrator
     voice_events: VoiceEventHub
     single_turn_tts: SingleTurnTTSController
-    gaze_review: GazeReviewStore
+    study_review: StudyReviewStore
     bound_deck_id: str | None = None
     bound_slide_id: int | None = None
     bound_aoi_signature: str | None = None
@@ -217,11 +224,30 @@ def build_main_live_resources(
     provider = ActiveDeckSlideProvider()
     snapshots = SensingSnapshotStore()
     observations = BrowserGazeSource()
-    fatigue_store = FatigueStateStore()
+    study_review = StudyReviewStore(
+        RUNTIME_DATA_DIR / "study_reviews",
+        legacy_gaze_path=RUNTIME_DATA_DIR / "gaze_reviews" / "latest.json",
+    )
+    learner_state_store = LearnerStateStore()
+    emotion_tracker = EmotionTemporalTracker()
+    engagement_tracker = EngagementTemporalTracker()
     fatigue_tracker = FatigueTemporalTracker()
-    fatigue_worker = FatigueWorker(
+    learner_state_worker = LearnerStateWorker(
         media_source.face_crop_queue,
-        estimator_factory=lambda: MobileViTFatigueEstimator(
+        affect_estimator_factory=lambda: EmotiEffEstimator(
+            os.environ.get(
+                "ATTENTIVE_EMOTIEFF_MODEL_PATH",
+                "/home/charles/.local/share/attentiveslides/models/learner_state/"
+                "emotieff/enet_b0_8_best_vgaf_features.ts",
+            ),
+            os.environ.get(
+                "ATTENTIVE_EMOTIEFF_ENGAGEMENT_PATH",
+                "/home/charles/.local/share/attentiveslides/models/learner_state/"
+                "emotieff/engagement_single_attention.pt",
+            ),
+            device=os.environ.get("ATTENTIVE_EMOTIEFF_DEVICE", "cuda"),
+        ),
+        fatigue_estimator_factory=lambda: MobileViTFatigueEstimator(
             os.environ.get(
                 "ATTENTIVE_FATIGUE_MODEL_PATH",
                 str(DEFAULT_MODEL_PATH),
@@ -231,8 +257,11 @@ def build_main_live_resources(
                 "cuda",
             ),
         ),
-        tracker=fatigue_tracker,
-        store=fatigue_store,
+        emotion_tracker=emotion_tracker,
+        engagement_tracker=engagement_tracker,
+        fatigue_tracker=fatigue_tracker,
+        store=learner_state_store,
+        on_snapshot=study_review.accept_learner_state,
     )
     sensing_worker = SensingWorker(
         media_source=media_source,
@@ -401,7 +430,7 @@ def build_main_live_resources(
         audio_worker=audio_worker,
         context_collector=collector,
         turn_runner=runner,
-        fatigue_worker=fatigue_worker,
+        learner_state_worker=learner_state_worker,
     )
     controller_holder["controller"] = controller
     runtime = MainUILiveRuntime(
@@ -409,13 +438,10 @@ def build_main_live_resources(
         inbox=inbox,
         snapshot_store=snapshots,
     )
-    gaze_review = GazeReviewStore(
-        RUNTIME_DATA_DIR / "gaze_reviews" / "latest.json"
-    )
     ingress = FallbackMediaIngress(
         media_source,
         observations=observations,
-        gaze_review=gaze_review,
+        study_review=study_review,
         start_armed=False,
         coordinated_activation=True,
         media_stale_after_seconds=10.0,
@@ -444,11 +470,12 @@ def build_main_live_resources(
         inbox=inbox,
         ingress=ingress,
         service=service,
-        fatigue_store=fatigue_store,
+        learner_state_store=learner_state_store,
+        learner_state_worker=learner_state_worker,
         voice=voice,
         voice_events=voice_events,
         single_turn_tts=single_turn_tts,
-        gaze_review=gaze_review,
+        study_review=study_review,
     )
 
 
@@ -539,12 +566,6 @@ def main() -> None:
         browser=browser,
         view=view,
     )
-    live_resources.gaze_review.register_slide(
-        view.deck_id,
-        view.active_slide_id,
-        view.active_slide.aois,
-    )
-
     if st.session_state["main_workspace_mode"] == "review":
         st.session_state["main_live_master_enabled"] = False
         live_resources.service.set_master_enabled(False)
@@ -1006,6 +1027,13 @@ def _bind_main_live_resources(
     # UploadedDeckWorkspace is intentionally recreated on each app rerun.
     # Keep the cached live graph pointed at the current workspace/browser.
     resources.provider.set_browser(browser)
+    resources.learner_state_worker.set_context(view.deck_id, view.active_slide_id)
+    resources.study_review.set_context(view.deck_id, view.active_slide_id)
+    resources.study_review.register_slide(
+        view.deck_id,
+        view.active_slide_id,
+        view.active_slide.aois,
+    )
     if aoi_changed:
         resources.bound_voice_target_signature = None
     _sync_main_live_voice_resources(resources, view)
@@ -1027,25 +1055,25 @@ def _bind_main_live_resources(
         resources.bound_aoi_signature = signature
 
 
-def _finish_gaze_review(resources: MainLiveResources, deck_id: str) -> None:
+def _finish_study_review(resources: MainLiveResources, deck_id: str) -> None:
     try:
-        review = resources.gaze_review.finish(deck_id=deck_id)
+        review = resources.study_review.finish(deck_id=deck_id)
     except (OSError, RuntimeError) as exc:
         st.session_state["main_review_error"] = f"Unable to save review: {exc}"
         return
     st.session_state["main_live_master_enabled"] = False
     st.session_state["main_workspace_mode"] = "review"
     st.session_state["main_review_error"] = None
-    if review.slides:
-        st.session_state["main_active_slide_id"] = review.slides[0].slide_id
+    if review.gaze_review.slides:
+        st.session_state["main_active_slide_id"] = review.gaze_review.slides[0].slide_id
 
 
 def _open_latest_review(resources: MainLiveResources) -> None:
-    review = resources.gaze_review.latest()
+    review = resources.study_review.latest()
     if review is None:
-        st.session_state["main_review_error"] = (
-            resources.gaze_review.load_error()
-            or "No completed gaze review is available."
+        warnings = resources.study_review.load_warnings()
+        st.session_state["main_review_error"] = warnings[-1] if warnings else (
+            "No completed Study Review is available."
         )
         st.session_state["main_live_master_enabled"] = False
         st.session_state["main_workspace_mode"] = "review"
@@ -1053,8 +1081,8 @@ def _open_latest_review(resources: MainLiveResources) -> None:
     st.session_state["main_live_master_enabled"] = False
     st.session_state["main_workspace_mode"] = "review"
     st.session_state["main_review_error"] = None
-    if review.slides:
-        st.session_state["main_active_slide_id"] = review.slides[0].slide_id
+    if review.gaze_review.slides:
+        st.session_state["main_active_slide_id"] = review.gaze_review.slides[0].slide_id
 
 
 def _back_to_study_workspace() -> None:
@@ -1062,9 +1090,9 @@ def _back_to_study_workspace() -> None:
     st.session_state["main_live_master_enabled"] = False
 
 
-def _start_new_gaze_study(resources: MainLiveResources) -> None:
+def _start_new_study_review(resources: MainLiveResources) -> None:
     try:
-        resources.gaze_review.start_new()
+        resources.study_review.start_new()
     except OSError as exc:
         st.session_state["main_review_error"] = (
             f"Unable to clear saved review: {exc}"
@@ -1079,7 +1107,9 @@ def _start_new_gaze_study(resources: MainLiveResources) -> None:
 
 def _clear_gaze_review(resources: MainLiveResources) -> None:
     try:
-        resources.gaze_review.clear()
+        latest = resources.study_review.latest()
+        if latest is not None:
+            resources.study_review.delete(latest.session_id)
     except OSError as exc:
         st.session_state["main_review_error"] = (
             f"Unable to clear saved review: {exc}"
@@ -1190,7 +1220,7 @@ def _render_live_controls(
         f"Media: {'ready' if session.video_fresh and session.audio_fresh else 'waiting'}"
     )
     deck_id = resources.bound_deck_id
-    active_review_deck_id = resources.gaze_review.active_deck_id()
+    active_review_deck_id = resources.study_review.active_deck_id()
     active_deck_mismatch = (
         deck_id is not None
         and active_review_deck_id is not None
@@ -1205,29 +1235,29 @@ def _render_live_controls(
             "Start new study with this deck",
             key="main_review_start_new",
             width="stretch",
-            on_click=_start_new_gaze_study,
+            on_click=_start_new_study_review,
             args=(resources,),
         )
     elif deck_id is not None and (
-        resources.gaze_review.has_active()
-        or (enabled and resources.gaze_review.is_armed())
+        resources.study_review.has_active()
+        or (enabled and resources.study_review.is_armed())
     ):
         st.sidebar.button(
             "End study & review",
             key="main_end_study_review",
             type="primary",
             width="stretch",
-            on_click=_finish_gaze_review,
+            on_click=_finish_study_review,
             args=(resources, deck_id),
         )
     if (
-        resources.gaze_review.latest() is not None
-        or resources.gaze_review.load_error()
+        resources.study_review.latest() is not None
+        or resources.study_review.load_warnings()
     ):
         st.sidebar.button(
             (
                 "Open latest review"
-                if resources.gaze_review.latest() is not None
+                if resources.study_review.latest() is not None
                 else "Resolve saved review"
             ),
             key="main_open_latest_review",
@@ -1261,27 +1291,27 @@ def _render_review_sidebar(resources: MainLiveResources) -> None:
         key="main_review_start_new",
         type="primary",
         width="stretch",
-        on_click=_start_new_gaze_study,
+        on_click=_start_new_study_review,
         args=(resources,),
     )
 
-    review = resources.gaze_review.latest()
+    review = resources.study_review.latest()
     if review is not None:
         st.sidebar.download_button(
             "Download session JSON",
             data=review.to_json().encode("utf-8"),
-            file_name=f"gaze_review_{review.session_id}.json",
+            file_name=f"study_review_{review.session_id}.json",
             mime="application/json",
             key="main_review_download_json",
             width="stretch",
         )
 
-    load_error = resources.gaze_review.load_error()
+    load_warnings = resources.study_review.load_warnings()
     inline_error = st.session_state.get("main_review_error")
     if inline_error:
         st.sidebar.error(inline_error)
-    if load_error:
-        st.sidebar.error(f"Saved review unavailable: {load_error}")
+    if load_warnings:
+        st.sidebar.error(f"Saved review warning: {load_warnings[-1]}")
         st.sidebar.caption(
             "Start a new study or clear the saved review to recover."
         )
@@ -1316,7 +1346,7 @@ def _render_review_workspace(
     browser: Any,
     resources: MainLiveResources,
 ) -> None:
-    review = resources.gaze_review.latest()
+    review = resources.study_review.latest()
     if review is None:
         st.info(
             "No completed gaze review is available. "
@@ -1332,7 +1362,7 @@ def _render_review_workspace(
 
     available_slide_ids = set(browser.slide_ids)
     review_slides = tuple(
-        slide for slide in review.slides
+        slide for slide in review.gaze_review.slides
         if slide.slide_id in available_slide_ids
     )
     if not review_slides:
@@ -2656,9 +2686,7 @@ def _render_answer_column(
         "### 3. Tutor answer"
     )
 
-    _render_tutor_generation_panel(
-        view
-    )
+    _render_tutor_generation_panel(view, resources)
     _render_tutor_result(resources.single_turn_tts)
     _render_xai_drawer()
 
@@ -3773,6 +3801,7 @@ def _start_follow_up() -> None:
 
 def _record_completed_turn(
     *,
+    resources: MainLiveResources,
     tutor_payload: dict[str, Any],
     llm_xai_payload: dict[str, Any],
 ) -> None:
@@ -3832,6 +3861,12 @@ def _record_completed_turn(
             "main_conversation_turns"
         ],
         turn,
+    )
+    interaction = st.session_state["main_confirmed_interaction"]["interaction"]
+    resources.study_review.record_completed_interaction(
+        interaction_id=str(interaction["interaction_id"]),
+        deck_id=str(interaction["deck_id"]),
+        slide_id=int(interaction["slide_id"]),
     )
 
 
@@ -4077,6 +4112,7 @@ def _render_conversation_history(
 
 def _render_tutor_generation_panel(
     view: MainUIViewModel,
+    resources: MainLiveResources,
 ) -> None:
     """Render explicit grounded generation with history gates."""
     api_configured = bool(
@@ -4271,6 +4307,7 @@ def _render_tutor_generation_panel(
 
             try:
                 _record_completed_turn(
+                    resources=resources,
                     tutor_payload=(
                         payload["tutor"]
                     ),
