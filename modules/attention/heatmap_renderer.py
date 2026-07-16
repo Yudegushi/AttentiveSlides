@@ -54,16 +54,27 @@ def _heatmap_overlay(slide: SlideHeatmapSnapshot, size: tuple[int, int]) -> Imag
         radius = max(6, round(min(size) * 0.025))
         blurred = resized.filter(ImageFilter.GaussianBlur(radius=radius))
         resized.close()
+        blurred_maximum = blurred.getextrema()[1]
+        if blurred_maximum <= 0:
+            blurred.close()
+            return Image.new("RGBA", size, color=(0, 0, 0, 0))
+        normalized = blurred.point(
+            [
+                min(255, round(255 * value / blurred_maximum))
+                for value in range(256)
+            ]
+        )
+        blurred.close()
         channels = (
-            blurred.point(RED_LUT),
-            blurred.point(GREEN_LUT),
-            blurred.point(BLUE_LUT),
-            blurred.point(ALPHA_LUT),
+            normalized.point(RED_LUT),
+            normalized.point(GREEN_LUT),
+            normalized.point(BLUE_LUT),
+            normalized.point(ALPHA_LUT),
         )
         try:
             return Image.merge("RGBA", channels)
         finally:
-            blurred.close()
+            normalized.close()
             for channel in channels:
                 channel.close()
     finally:

@@ -5,15 +5,19 @@ import unittest
 from PIL import Image, ImageChops
 
 from modules.attention.gaze_heatmap import SlideHeatmapSnapshot
-from modules.attention.heatmap_renderer import render_review_slide, review_png_bytes
+from modules.attention.heatmap_renderer import (
+    _heatmap_overlay,
+    render_review_slide,
+    review_png_bytes,
+)
 
 
-def snapshot(grid):
+def snapshot(grid, *, width=4, height=2):
     return SlideHeatmapSnapshot(
         deck_id="deck-a",
         slide_id=1,
-        grid_width=4,
-        grid_height=2,
+        grid_width=width,
+        grid_height=height,
         grid=tuple(grid),
         observed_seconds=1.0,
         valid_gaze_seconds=sum(grid),
@@ -42,6 +46,30 @@ class HeatmapRendererTest(unittest.TestCase):
         finally:
             rendered.close()
             original.close()
+
+    def test_production_grid_reaches_red_after_blur(self):
+        width, height = 64, 36
+        grid = [0.0] * (width * height)
+        grid[27 * width + 48] = 1.0
+        overlay = _heatmap_overlay(
+            snapshot(grid, width=width, height=height),
+            (320, 180),
+        )
+        try:
+            hottest_x, hottest_y, hottest_rgba = max(
+                (
+                    (x, y, overlay.getpixel((x, y)))
+                    for y in range(overlay.height)
+                    for x in range(overlay.width)
+                ),
+                key=lambda item: item[2][3],
+            )
+
+            self.assertEqual(hottest_rgba, (220, 38, 38, 165))
+            self.assertGreater(hottest_x, overlay.width * 0.65)
+            self.assertGreater(hottest_y, overlay.height * 0.65)
+        finally:
+            overlay.close()
 
     def test_hidden_or_empty_heatmap_returns_original_pixels(self):
         original = Image.open(self.image_path).convert("RGB")
