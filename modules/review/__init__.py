@@ -6,12 +6,13 @@ from .contracts import (
     SlideLearnerStateSummary,
     StudyReviewSession,
 )
-from .study_review_store import StudyReviewStore
+from .study_review_store import StudyLifecycleSnapshot, StudyReviewStore
 
 __all__ = [
     "LearnerStateReviewSummary",
     "STUDY_REVIEW_SCHEMA_VERSION",
     "SlideLearnerStateSummary",
     "StudyReviewSession",
+    "StudyLifecycleSnapshot",
     "StudyReviewStore",
 ]

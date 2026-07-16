@@ -12,11 +12,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock
+from typing import Literal
 
 from modules.attention.gaze_heatmap import (
     GazeHeatmapAccumulator,
     GazeReviewSession,
-    normalized_slide_point,
 )
 from modules.common.schemas import AOI
 from modules.learner_state import EMOTION_LABELS, LearnerStateSnapshot
@@ -290,6 +290,13 @@ class _ActiveStudy:
     learner: LearnerStateReviewAccumulator
 
 
+@dataclass(frozen=True)
+class StudyLifecycleSnapshot:
+    status: Literal["idle", "active", "finish_pending"]
+    deck_id: str | None = None
+    session_id: str | None = None
+
+
 class StudyReviewStore:
     def __init__(
         self,
@@ -318,7 +325,6 @@ class StudyReviewStore:
         self._warnings: list[str] = []
         self._legacy_session_id: str | None = None
         self._load_history()
-        self._armed = not bool(self._sessions)
         self._repair_latest_cache()
 
     def register_slide(
@@ -347,22 +353,19 @@ class StudyReviewStore:
 
     def accept_gaze(self, sample: BrowserPointGazeSample) -> bool:
         with self._lock:
-            if not self._armed:
+            if self._active is None:
                 return False
             geometry = sample.geometry.geometry if sample.geometry is not None else None
-            usable = normalized_slide_point(sample) is not None
             if geometry is None:
-                if self._active is not None:
-                    self._active.gaze.accept(sample)
+                self._active.gaze.accept(sample)
                 return False
             if self._current_context is None:
                 self._current_context = (geometry.deck_id, geometry.slide_id)
+                self._active.learner.set_context(
+                    geometry.deck_id, geometry.slide_id, sample.received_at
+                )
             if self._current_context != (geometry.deck_id, geometry.slide_id):
                 return False
-            if self._active is None:
-                if not usable:
-                    return False
-                self._ensure_active(geometry.deck_id, sample.received_at)
             if geometry.deck_id != self._active.deck_id:
                 self._active.gaze.pause()
                 return False
@@ -378,20 +381,8 @@ class StudyReviewStore:
         received_at = self._checked_time(received_at, "learner-state")
         context = (str(deck_id), int(slide_id))
         with self._lock:
-            if not self._armed or context != self._current_context:
+            if self._active is None or context != self._current_context:
                 return False
-            any_ready = any(
-                status == "ready"
-                for status in (
-                    snapshot.emotion.status,
-                    snapshot.engagement.status,
-                    snapshot.fatigue.status,
-                )
-            )
-            if self._active is None:
-                if not any_ready:
-                    return False
-                self._ensure_active(context[0], received_at)
             if self._active.deck_id != context[0]:
                 return False
             self._active.learner.accept(
@@ -406,12 +397,9 @@ class StudyReviewStore:
         context = (str(deck_id), int(slide_id))
         if not checked_id:
             raise ValueError("interaction ID is required")
-        now = self._checked_time(self._monotonic_clock(), "interaction")
         with self._lock:
-            if not self._armed or context != self._current_context:
+            if self._active is None or context != self._current_context:
                 return False
-            if self._active is None:
-                self._ensure_active(context[0], now)
             if self._active.deck_id != context[0]:
                 return False
             return self._active.learner.record_interaction(checked_id, context[1])
@@ -431,18 +419,16 @@ class StudyReviewStore:
                     raise RuntimeError("The frozen Study Review belongs to another deck.")
                 frozen = self._pending_finish
             else:
-                if not self._armed and self._active is None:
+                if self._active is None:
                     raise RuntimeError(
-                        "Start a new study before replacing the completed review."
+                        "Start a study before finishing the Study Review."
                     )
-                if self._active is not None and self._active.deck_id != checked_deck:
+                if self._active.deck_id != checked_deck:
                     raise RuntimeError(
-                        "The active study belongs to another deck. Start a new study first."
+                        "The active study belongs to another deck. Finish that study first."
                     )
                 now_received = self._checked_time(self._monotonic_clock(), "finish")
                 now_epoch = self._checked_time(self._wall_clock(), "finish wall-clock")
-                if self._active is None:
-                    self._active = self._new_active(checked_deck, now_received, now_epoch)
                 gaze = self._active.gaze.finish(
                     ended_received_at=now_received,
                     ended_at_epoch=now_epoch,
@@ -459,7 +445,6 @@ class StudyReviewStore:
                 )
                 self._pending_finish = frozen
                 self._active = None
-                self._armed = False
             self._migrate_legacy_before_finish()
             self._write_canonical(frozen)
             self._sessions[frozen.session_id] = frozen
@@ -467,14 +452,37 @@ class StudyReviewStore:
             self._refresh_latest_cache_recoverably()
             return frozen
 
-    def start_new(self) -> None:
+    def start(self, deck_id: str) -> str:
+        checked_deck = str(deck_id).strip()
+        if not checked_deck:
+            raise ValueError("deck ID is required")
         with self._lock:
             if self._pending_finish is not None:
                 raise RuntimeError(
                     "Retry saving the frozen Study Review before starting a new study."
                 )
-            self._active = None
-            self._armed = True
+            if self._active is not None:
+                raise RuntimeError("A Study is already active.")
+            now_received = self._checked_time(self._monotonic_clock(), "start")
+            now_epoch = self._checked_time(self._wall_clock(), "start wall-clock")
+            self._active = self._new_active(checked_deck, now_received, now_epoch)
+            return self._active.session_id
+
+    def lifecycle(self) -> StudyLifecycleSnapshot:
+        with self._lock:
+            if self._pending_finish is not None:
+                return StudyLifecycleSnapshot(
+                    status="finish_pending",
+                    deck_id=self._pending_finish.deck_id,
+                    session_id=self._pending_finish.session_id,
+                )
+            if self._active is not None:
+                return StudyLifecycleSnapshot(
+                    status="active",
+                    deck_id=self._active.deck_id,
+                    session_id=self._active.session_id,
+                )
+            return StudyLifecycleSnapshot(status="idle")
 
     def has_active(self) -> bool:
         with self._lock:
@@ -483,10 +491,6 @@ class StudyReviewStore:
     def active_deck_id(self) -> str | None:
         with self._lock:
             return self._active.deck_id if self._active is not None else None
-
-    def is_armed(self) -> bool:
-        with self._lock:
-            return self._armed
 
     def latest(self) -> StudyReviewSession | None:
         with self._lock:
@@ -552,15 +556,6 @@ class StudyReviewStore:
                     fatigue_alert_count=0,
                 )
             return self._active.learner.active_slide_summary(int(slide_id), checked_now)
-
-    def _ensure_active(self, deck_id: str, received_at: float) -> None:
-        if self._active is not None:
-            if self._active.deck_id != str(deck_id):
-                raise RuntimeError("active Study Review belongs to another deck")
-            return
-        self._active = self._new_active(
-            str(deck_id), received_at, self._checked_time(self._wall_clock(), "start wall-clock")
-        )
 
     def _new_active(
         self, deck_id: str, received_at: float, started_at_epoch: float

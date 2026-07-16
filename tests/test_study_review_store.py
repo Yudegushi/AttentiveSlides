@@ -11,7 +11,7 @@ from modules.learner_state import (
     EngagementSnapshot,
     LearnerStateSnapshot,
 )
-from modules.review import StudyReviewSession, StudyReviewStore
+from modules.review import StudyLifecycleSnapshot, StudyReviewSession, StudyReviewStore
 from tests.test_gaze_heatmap import AOIS, make_sample
 
 
@@ -93,33 +93,59 @@ class StudyReviewStoreTest(unittest.TestCase):
     def activate_with_state(self, store, now=0.0, slide_id=1):
         self.monotonic.value = now
         store.set_context("deck-a", slide_id, received_at=now)
+        store.start("deck-a")
         return store.accept_learner_state(
             "deck-a", slide_id, state_snapshot(now), now
         )
 
-    def test_each_meaningful_start_path_activates_one_shared_session(self):
+    def test_fresh_store_is_idle_and_rejects_ingress_until_explicit_start(self):
         with TemporaryDirectory() as root:
             state_store = self.make_store(Path(root) / "state")
-            self.assertTrue(self.activate_with_state(state_store))
-            self.assertEqual(state_store.active_deck_id(), "deck-a")
+            state_store.set_context("deck-a", 1, received_at=0.0)
+            self.assertEqual(
+                state_store.lifecycle(), StudyLifecycleSnapshot(status="idle")
+            )
+            self.assertFalse(
+                state_store.accept_learner_state(
+                    "deck-a", 1, state_snapshot(0.0), 0.0
+                )
+            )
 
             gaze_store = self.make_store(Path(root) / "gaze")
             gaze_store.register_slide("deck-a", 1, AOIS)
-            self.assertTrue(gaze_store.accept_gaze(make_sample(received_at=0.0)))
-            self.assertEqual(gaze_store.active_deck_id(), "deck-a")
+            gaze_store.set_context("deck-a", 1, received_at=0.0)
+            self.assertFalse(gaze_store.accept_gaze(make_sample(received_at=0.0)))
 
             interaction_store = self.make_store(Path(root) / "interaction")
             interaction_store.set_context("deck-a", 1, received_at=0.0)
-            self.assertTrue(
+            self.assertFalse(
                 interaction_store.record_completed_interaction("turn-1", "deck-a", 1)
             )
-            self.assertEqual(interaction_store.active_deck_id(), "deck-a")
+
+    def test_start_eagerly_creates_one_stable_active_session(self):
+        with TemporaryDirectory() as root:
+            store = self.make_store(root)
+            store.register_slide("deck-a", 1, AOIS)
+            store.set_context("deck-a", 1, received_at=0.0)
+
+            session_id = store.start("deck-a")
+
+            self.assertEqual(session_id, "review-1")
+            self.assertEqual(
+                store.lifecycle(),
+                StudyLifecycleSnapshot("active", "deck-a", "review-1"),
+            )
+            self.assertEqual(store.active_deck_id(), "deck-a")
+            with self.assertRaisesRegex(RuntimeError, "already active"):
+                store.start("deck-a")
+            self.assertEqual(store.lifecycle().session_id, session_id)
 
     def test_gaze_and_learner_state_finish_under_one_identity(self):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
             store.register_slide("deck-a", 1, AOIS)
             store.set_context("deck-a", 1, received_at=0.0)
+            store.start("deck-a")
             store.accept_gaze(make_sample(received_at=0.0))
             store.accept_learner_state("deck-a", 1, state_snapshot(0.0), 0.0)
             store.accept_gaze(make_sample(received_at=0.2))
@@ -136,7 +162,10 @@ class StudyReviewStoreTest(unittest.TestCase):
     def test_study_time_follows_context_even_when_models_are_unavailable(self):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
-            self.activate_with_state(store, now=0.0, slide_id=1)
+            store.set_context("deck-a", 1, received_at=0.0)
+            store.start("deck-a")
+            self.monotonic.value = 1.0
+            store.pause()
             store.set_context("deck-a", 2, received_at=2.0)
             store.accept_learner_state(
                 "deck-a",
@@ -158,6 +187,7 @@ class StudyReviewStoreTest(unittest.TestCase):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
             store.set_context("deck-a", 1, received_at=0.0)
+            store.start("deck-a")
             store.accept_learner_state(
                 "deck-a", 1, state_snapshot(0.0, engagement=False, fatigue=False), 0.0
             )
@@ -197,6 +227,7 @@ class StudyReviewStoreTest(unittest.TestCase):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
             store.set_context("deck-a", 1, received_at=0.0)
+            store.start("deck-a")
             active = state_snapshot(
                 0.0, distraction_alert=True, fatigue_alert=True, distracted=0.8, fatigued=0.9
             )
@@ -218,6 +249,7 @@ class StudyReviewStoreTest(unittest.TestCase):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
             store.set_context("deck-a", 1, received_at=0.0)
+            store.start("deck-a")
 
             self.assertTrue(store.record_completed_interaction("turn-1", "deck-a", 1))
             self.assertFalse(store.record_completed_interaction("turn-1", "deck-a", 1))
@@ -228,25 +260,31 @@ class StudyReviewStoreTest(unittest.TestCase):
 
             self.assertEqual(slide.interaction_count, 2)
 
-    def test_two_finishes_are_immutable_newest_first_and_start_new_preserves_history(self):
+    def test_two_finishes_are_immutable_newest_first_and_later_start_preserves_history(self):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
+            store.set_context("deck-a", 1, received_at=0.0)
+            store.start("deck-a")
             first = store.finish(deck_id="deck-a")
-            with self.assertRaisesRegex(RuntimeError, "Start a new study"):
+            self.assertEqual(store.lifecycle(), StudyLifecycleSnapshot(status="idle"))
+            with self.assertRaisesRegex(RuntimeError, "Start a study"):
                 store.finish(deck_id="deck-a")
-            store.start_new()
+            store.start("deck-a")
             self.wall.value = 102.0
             second = store.finish(deck_id="deck-a")
 
             self.assertEqual([item.session_id for item in store.list_sessions()], [second.session_id, first.session_id])
+            self.assertNotEqual(first.session_id, second.session_id)
             self.assertTrue((Path(root) / "study_reviews" / "sessions" / f"{first.session_id}.json").is_file())
             self.assertTrue((Path(root) / "study_reviews" / "sessions" / f"{second.session_id}.json").is_file())
 
     def test_delete_removes_only_selected_canonical_session(self):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
+            store.set_context("deck-a", 1, received_at=0.0)
+            store.start("deck-a")
             first = store.finish(deck_id="deck-a")
-            store.start_new()
+            store.start("deck-a")
             self.wall.value = 102.0
             second = store.finish(deck_id="deck-a")
 
@@ -254,11 +292,12 @@ class StudyReviewStoreTest(unittest.TestCase):
 
             self.assertIsNone(store.get(second.session_id))
             self.assertEqual(store.latest().session_id, first.session_id)
-            self.assertFalse(store.is_armed())
+            self.assertEqual(store.lifecycle().status, "idle")
 
     def test_corrupt_and_filename_mismatched_sessions_are_skipped(self):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
+            store.start("deck-a")
             valid = store.finish(deck_id="deck-a")
             sessions = Path(root) / "study_reviews" / "sessions"
             (sessions / "broken.json").write_text("not-json", encoding="utf-8")
@@ -272,6 +311,7 @@ class StudyReviewStoreTest(unittest.TestCase):
     def test_ui_ids_never_become_paths(self):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
+            store.start("deck-a")
             session = store.finish(deck_id="deck-a")
 
             self.assertIsNone(store.get("../../outside"))
@@ -288,8 +328,12 @@ class StudyReviewStoreTest(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "disk full"):
                     store.finish(deck_id="deck-a")
             pending = store._pending_finish
+            self.assertEqual(
+                store.lifecycle(),
+                StudyLifecycleSnapshot("finish_pending", "deck-a", pending.session_id),
+            )
             with self.assertRaisesRegex(RuntimeError, "frozen Study Review"):
-                store.start_new()
+                store.start("deck-a")
             self.assertIs(store._pending_finish, pending)
             self.monotonic.value = 99.0
             self.wall.value = 999.0
@@ -299,11 +343,14 @@ class StudyReviewStoreTest(unittest.TestCase):
             self.assertEqual(completed.session_id, pending.session_id)
             self.assertEqual(completed.started_at_epoch, pending.started_at_epoch)
             self.assertEqual(completed.ended_at_epoch, pending.ended_at_epoch)
+            self.assertEqual(completed.to_dict(), pending.to_dict())
             self.assertEqual(len(store.list_sessions()), 1)
+            self.assertEqual(store.lifecycle().status, "idle")
 
     def test_latest_cache_failure_cannot_undo_finish_or_resurrect_delete(self):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
+            store.start("deck-a")
             with patch.object(store, "_refresh_latest_cache", side_effect=OSError("cache")):
                 session = store.finish(deck_id="deck-a")
             canonical = Path(root) / "study_reviews" / "sessions" / f"{session.session_id}.json"
@@ -319,6 +366,7 @@ class StudyReviewStoreTest(unittest.TestCase):
     def test_canonical_delete_failure_leaves_history_intact(self):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
+            store.start("deck-a")
             session = store.finish(deck_id="deck-a")
             with patch.object(store, "_unlink_and_fsync", side_effect=OSError("read only")):
                 with self.assertRaisesRegex(OSError, "read only"):
@@ -339,7 +387,8 @@ class StudyReviewStoreTest(unittest.TestCase):
             self.assertEqual(store.latest().session_id, "legacy-1")
             self.assertEqual(store.latest().learner_state_summary.slides, ())
 
-            store.start_new()
+            store.set_context("deck-a", 1, received_at=0.0)
+            store.start("deck-a")
             self.wall.value = 101.0
             current = store.finish(deck_id="deck-a")
 
