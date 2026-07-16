@@ -1,6 +1,8 @@
 from io import BytesIO
 from pathlib import Path
+from threading import Event, Thread
 import unittest
+from unittest.mock import MagicMock, patch
 import warnings
 
 import numpy as np
@@ -242,6 +244,90 @@ class SinglePortTransportTest(unittest.TestCase):
         )
         self.assertFalse(self.source.is_running)
         self.assertTrue(self.source.video_queue.empty())
+
+    def test_gaze_review_receives_samples_and_pauses_on_stop(self):
+        review = MagicMock()
+        ingress = FallbackMediaIngress(
+            self.source,
+            observations=self.ingress.observations,
+            gaze_review=review,
+            clock=self.clock,
+        )
+        ingress.accept_geometry_json(geometry_payload())
+        ingress.start("session-a")
+
+        sample = ingress.accept_gaze_json("session-a", gaze_payload())
+        ingress.stop("session-a")
+
+        review.accept.assert_called_once_with(sample)
+        review.pause.assert_called()
+
+    def test_stop_waits_for_gaze_review_forwarding_under_ingress_lock(self):
+        review = MagicMock()
+        ingress = FallbackMediaIngress(
+            self.source,
+            observations=self.ingress.observations,
+            gaze_review=review,
+            clock=self.clock,
+        )
+        ingress.accept_geometry_json(geometry_payload())
+        ingress.start("session-a")
+        review.reset_mock()
+
+        gaze_entered = Event()
+        release_gaze = Event()
+        stop_started = Event()
+        stop_returned = Event()
+        call_order = []
+        failures = []
+        original_accept = ingress.observations.accept_gaze
+
+        def blocking_accept(payload):
+            gaze_entered.set()
+            if not release_gaze.wait(timeout=2.0):
+                raise AssertionError("timed out waiting to release gaze parsing")
+            sample = original_accept(payload)
+            call_order.append("gaze parsed")
+            return sample
+
+        review.accept.side_effect = lambda sample: call_order.append("review accepted")
+        review.pause.side_effect = lambda: call_order.append("paused")
+
+        def accept_gaze():
+            try:
+                ingress.accept_gaze_json("session-a", gaze_payload())
+            except BaseException as exc:
+                failures.append(exc)
+
+        def stop_ingress():
+            stop_started.set()
+            try:
+                ingress.stop("session-a")
+            except BaseException as exc:
+                failures.append(exc)
+            finally:
+                stop_returned.set()
+
+        with patch.object(
+            ingress.observations,
+            "accept_gaze",
+            side_effect=blocking_accept,
+        ):
+            gaze_thread = Thread(target=accept_gaze)
+            stop_thread = Thread(target=stop_ingress)
+            gaze_thread.start()
+            self.assertTrue(gaze_entered.wait(timeout=1.0))
+            stop_thread.start()
+            self.assertTrue(stop_started.wait(timeout=1.0))
+            self.assertFalse(stop_returned.wait(timeout=0.05))
+            release_gaze.set()
+            gaze_thread.join(timeout=2.0)
+            stop_thread.join(timeout=2.0)
+
+        self.assertFalse(gaze_thread.is_alive())
+        self.assertFalse(stop_thread.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(call_order, ["gaze parsed", "review accepted", "paused"])
 
     def test_stats_include_browser_observation_fields(self):
         self.ingress.accept_geometry_json(geometry_payload())
