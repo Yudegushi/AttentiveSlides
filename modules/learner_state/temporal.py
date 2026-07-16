@@ -87,7 +87,7 @@ class EngagementTemporalConfig:
     exit_threshold: float = 0.45
     enter_updates: int = 2
     exit_updates: int = 2
-    stale_after_seconds: float = 2.0
+    reset_gap_seconds: float = 30.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.window_frames, int) or self.window_frames <= 0:
@@ -106,8 +106,8 @@ class EngagementTemporalConfig:
             raise ValueError("engagement thresholds must satisfy 0 <= exit < enter <= 1")
         if self.enter_updates <= 0 or self.exit_updates <= 0:
             raise ValueError("engagement alert gates must be positive")
-        if not math.isfinite(self.stale_after_seconds) or self.stale_after_seconds <= 0:
-            raise ValueError("engagement stale timeout must be positive and finite")
+        if not math.isfinite(self.reset_gap_seconds) or self.reset_gap_seconds <= 0:
+            raise ValueError("engagement reset gap must be positive and finite")
 
 
 class EngagementTemporalTracker:
@@ -143,7 +143,7 @@ class EngagementTemporalTracker:
             raise ValueError("engagement feature must be finite and shaped (1280,)")
         if (
             self._last_feature_at is not None
-            and now - self._last_feature_at > self.config.stale_after_seconds
+            and now - self._last_feature_at > self.config.reset_gap_seconds
         ):
             self.reset()
         self._last_feature_at = now

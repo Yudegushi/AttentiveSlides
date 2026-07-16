@@ -73,7 +73,7 @@ def build_learner_state_view(
             and emotion.top_label is not None
             and emotion.top_probability is not None
         ):
-            suffix = " · stale" if emotion.status == "stale" else ""
+            suffix = " · not updating" if emotion.status == "stale" else ""
             emotion_text = (
                 f"{html.escape(str(emotion.top_label))} "
                 f"{_percent(float(emotion.top_probability))}{suffix}"
@@ -95,8 +95,6 @@ def build_learner_state_view(
                 engagement_text = f"Engaged {_percent(engaged)}"
             else:
                 engagement_text = f"Distracted {_percent(distracted)}"
-            if engagement.status == "stale":
-                engagement_text += " · stale"
         elif engagement.status == "warming":
             engagement_text = (
                 "Learning pattern · "
@@ -114,7 +112,7 @@ def build_learner_state_view(
         ):
             fatigue_text = _percent(float(fatigue.smoothed_probability))
             if fatigue.status == "stale":
-                fatigue_text += " · stale"
+                fatigue_text += " · not updating"
         elif fatigue.status == "unavailable":
             fatigue_text = "Unavailable"
         else:

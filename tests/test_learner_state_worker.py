@@ -125,22 +125,51 @@ class LearnerStateWorkerTest(unittest.TestCase):
         worker, media_queue, store, _ = self.build_worker(
             affect_factory,
             fatigue_factory,
-            engagement_config=EngagementTemporalConfig(window_frames=1, stride_frames=1),
+            engagement_config=EngagementTemporalConfig(window_frames=2, stride_frames=1),
         )
         worker.start()
         worker.start()
         media_queue.push(face_packet(1))
-        self.assertTrue(self._wait_until(lambda: store.snapshot().emotion.status == "ready"))
+        self.assertTrue(
+            self._wait_until(lambda: store.snapshot().engagement.buffered_frames == 1)
+        )
         worker.stop()
         worker.stop()
         self.assertEqual(store.snapshot().emotion.status, "waiting")
 
         worker.start()
         media_queue.push(face_packet(2))
-        self.assertTrue(self._wait_until(lambda: store.snapshot().emotion.status == "ready"))
+        self.assertTrue(
+            self._wait_until(lambda: store.snapshot().engagement.buffered_frames == 1)
+        )
+        self.assertEqual(store.snapshot().engagement.status, "warming")
+        media_queue.push(face_packet(3))
+        self.assertTrue(
+            self._wait_until(lambda: store.snapshot().engagement.status == "ready")
+        )
 
         self.assertEqual(len(affects), 1)
         self.assertEqual(len(fatigues), 1)
+
+    def test_slide_context_change_preserves_engagement_buffer(self):
+        worker, media_queue, store, _ = self.build_worker(
+            RecordingAffectEstimator,
+            RecordingFatigueEstimator,
+            engagement_config=EngagementTemporalConfig(window_frames=2, stride_frames=1),
+        )
+        worker.set_context("deck-a", 1)
+        worker.start()
+        media_queue.push(face_packet(1))
+        self.assertTrue(
+            self._wait_until(lambda: store.snapshot().engagement.buffered_frames == 1)
+        )
+
+        worker.set_context("deck-a", 2)
+        media_queue.push(face_packet(2))
+
+        self.assertTrue(
+            self._wait_until(lambda: store.snapshot().engagement.status == "ready")
+        )
 
     def test_affect_runs_each_crop_while_fatigue_is_capped_at_half_second(self):
         affect = RecordingAffectEstimator()

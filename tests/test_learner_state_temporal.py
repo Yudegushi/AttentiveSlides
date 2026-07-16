@@ -144,18 +144,34 @@ class EngagementTemporalTrackerTest(unittest.TestCase):
         self.assertFalse(recovered.alert_active)
         self.assertFalse(recovered.reminder_suppressed)
 
-    def test_gap_over_two_seconds_clears_window_and_alert_continuity(self):
+    def test_exact_reset_gap_preserves_then_longer_gap_clears_continuity(self):
         tracker = EngagementTemporalTracker(
-            EngagementTemporalConfig(window_frames=2, stride_frames=1)
+            EngagementTemporalConfig(
+                window_frames=2,
+                stride_frames=1,
+                enter_updates=1,
+                reset_gap_seconds=30.0,
+            )
         )
-        infer = lambda _: (0.2, 0.8)
+        infer = lambda _: (0.8, 0.2)
         tracker.add(feature(), 0.0, infer)
-        self.assertEqual(tracker.add(feature(), 0.25, infer).status, "ready")
+        entered = tracker.add(feature(), 0.25, infer)
+        self.assertTrue(entered.alert_active)
+        self.assertTrue(tracker.dismiss().reminder_suppressed)
 
-        snapshot = tracker.add(feature(), 2.5, infer)
+        preserved = tracker.add(feature(), 30.25, infer)
+
+        self.assertEqual(preserved.status, "ready")
+        self.assertEqual(preserved.buffered_frames, 2)
+        self.assertTrue(preserved.alert_active)
+        self.assertTrue(preserved.reminder_suppressed)
+
+        snapshot = tracker.add(feature(), 60.5, infer)
 
         self.assertEqual(snapshot.status, "warming")
         self.assertEqual(snapshot.buffered_frames, 1)
+        self.assertFalse(snapshot.alert_active)
+        self.assertFalse(snapshot.reminder_suppressed)
 
     def test_feature_and_timestamp_validation(self):
         tracker = EngagementTemporalTracker(

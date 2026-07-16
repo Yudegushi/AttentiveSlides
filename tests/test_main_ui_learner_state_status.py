@@ -95,6 +95,42 @@ class LearnerStateViewTest(unittest.TestCase):
 
         self.assertEqual(view.engagement_text, "Learning pattern · 92 / 128 frames")
 
+    def test_stale_values_disable_alerts_without_engagement_status_suffix(self):
+        snapshot = ready_snapshot(distraction_alert=True, fatigue_alert=True)
+        snapshot = LearnerStateSnapshot(
+            emotion=EmotionSnapshot(
+                status="stale",
+                probabilities=snapshot.emotion.probabilities,
+                top_label="Neutral",
+                top_probability=0.6,
+                updated_at=1.0,
+            ),
+            engagement=EngagementSnapshot(
+                status="stale",
+                distracted_probability=0.32,
+                engaged_probability=0.68,
+                buffered_frames=128,
+                updated_at=1.0,
+            ),
+            fatigue=FatigueSnapshot(
+                status="stale",
+                raw_probability=0.2,
+                smoothed_probability=0.18,
+                updated_at=1.0,
+            ),
+            updated_at=1.0,
+        )
+
+        view = build_learner_state_view(snapshot, slide_summary(), live_enabled=True)
+
+        self.assertEqual(view.emotion_text, "Neutral 60% · not updating")
+        self.assertEqual(view.engagement_text, "Engaged 68%")
+        self.assertNotIn("stale", view.engagement_text)
+        self.assertNotIn("not updating", view.engagement_text)
+        self.assertEqual(view.fatigue_text, "18% · not updating")
+        self.assertIsNone(view.alert_text)
+        self.assertFalse(view.can_dismiss_distraction)
+
     def test_unavailable_modalities_remain_separate_and_errors_are_escaped(self):
         snapshot = ready_snapshot()
         snapshot = LearnerStateSnapshot(
