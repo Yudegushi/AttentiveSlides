@@ -53,6 +53,17 @@ Engineering snapshot as of 2026-07-16.
   recovered final transcript re-enters the existing Live proposal and target
   confirmation path rather than calling the tutor directly.
 
+### Gaze heatmap study review
+
+- Status: automatic implementation complete; manual browser acceptance pending
+- Scope: server-side derived dwell grids, latest completed review persistence,
+  minimal same-canvas Review mode, region-time disclosure, PNG/JSON export
+- Privacy: no raw gaze or biometric media persisted
+- Verification: four focused GREEN checkpoints, one independent whole-change
+  review, one passing full unittest suite; complex browser acceptance delegated
+  to the user
+- Deployment: attentiveslides-local.service only; EyeTheia unchanged
+
 ## Current operational documentation
 
 - [Live UI usage](docs/live_ui_usage.md)
