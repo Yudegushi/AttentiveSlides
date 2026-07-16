@@ -182,6 +182,45 @@ class TestCompactMainLayout(
             ],
         )
 
+    def test_learner_reminder_is_fixed_out_of_control_row_flow(self) -> None:
+        workspace = self.source_of("_render_slide_workspace")
+        self.assertLess(
+            workspace.index('with st.popover(\n                "Learner state"'),
+            workspace.index("_render_learner_state_alert_periodic"),
+        )
+        self.assertIn('key="main_learner_state_reminder_slot"', workspace)
+        for contract in (
+            ".st-key-main_learner_state_reminder_slot",
+            "height: 0 !important",
+            "min-height: 0 !important",
+            "overflow: visible !important",
+            "position: fixed",
+            "top: 0.45rem",
+            "z-index: 1000001",
+        ):
+            self.assertIn(contract, self.source)
+
+    def test_built_in_missing_image_uses_centered_16_by_9_placeholder(self) -> None:
+        workspace = self.source_of("_render_slide_workspace")
+        placeholder = self.source_of("_render_builtin_slide_placeholder")
+        self.assertIn('view.deck_id == "mock_deck"', workspace)
+        self.assertIn("not view.active_slide.image_available", workspace)
+        self.assertLess(
+            workspace.index("_render_builtin_slide_placeholder()"),
+            workspace.index("render_slide_viewport("),
+        )
+        self.assertIn('st.session_state["main_slide_width_percent"]', placeholder)
+        self.assertIn("[margin, width_percent, margin]", placeholder)
+        self.assertIn("attentive-built-in-stage", placeholder)
+        self.assertIn("AttentiveSlides", placeholder)
+        self.assertIn(
+            "Select a slide region, state your learning goal, and receive a grounded tutor response.",
+            placeholder,
+        )
+        self.assertNotIn("slide_text", placeholder)
+        self.assertNotIn("Slide {", placeholder)
+        self.assertIn("aspect-ratio: 16 / 9", self.source)
+
     def test_interaction_area_has_three_columns(
         self,
     ) -> None:

@@ -194,6 +194,8 @@ class TestMainUIWidgetInventory(
 
         required = {
             "main_pdf_upload",
+            "main_load_pdf_button",
+            "main_loaded_pdf_button",
             "main_process_current_llm_aoi",
             "main_cloud_text_allowed",
             "main_interaction_mode",
@@ -214,17 +216,18 @@ class TestMainUIWidgetInventory(
             "main_generate_answer_button",
             "main_reset_turn_button",
             "main_clear_conversation_button",
+            "main_start_study",
             "main_end_study_review",
             "main_open_latest_review",
             "main_review_show_heatmap",
             "main_review_back",
-            "main_review_start_new",
             "main_review_session",
             "main_review_delete_confirm",
             "main_review_delete",
             "main_review_download_png",
             "main_review_download_json",
             "main_learner_state_popover",
+            "main_learner_state_reminder_slot",
             "main_dismiss_distraction",
         }
 
@@ -235,6 +238,10 @@ class TestMainUIWidgetInventory(
         self.assertEqual(
             missing,
             [],
+        )
+
+        self.assertTrue(
+            {"main_review_start_new", "main_use_demo_button"}.isdisjoint(discovered)
         )
 
     def test_no_arrow_widgets(

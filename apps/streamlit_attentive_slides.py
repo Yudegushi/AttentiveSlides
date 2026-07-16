@@ -166,7 +166,6 @@ from modules.system.uploaded_deck_service import (
 from modules.ui.slide_viewport_component import render_slide_viewport
 from modules.ui.live_debug_bridge_component import render_live_debug_bridge
 from modules.ui.learner_state_status import (
-    DISCLAIMER,
     build_learner_state_view,
 )
 from modules.ui.voice_control_component import render_voice_control_component
@@ -570,9 +569,6 @@ def main() -> None:
         view=view,
     )
     if st.session_state["main_workspace_mode"] == "review":
-        st.session_state["main_live_master_enabled"] = False
-        live_resources.service.set_master_enabled(False)
-        live_resources.service.reconcile_once()
         _render_review_sidebar(live_resources)
         _render_header(view, review=True)
         _render_review_workspace(
@@ -630,7 +626,7 @@ def _load_uploaded_workspace(
 def _initialize_global_state() -> None:
     defaults: dict[str, Any] = {
         "main_uploaded_deck_id": None,
-        "main_upload_message": None,
+        "main_loaded_pdf_signature": None,
         "main_upload_error": None,
         "main_cloud_text_allowed": True,
         "main_active_aoi_signature": None,
@@ -1022,11 +1018,6 @@ def _bind_main_live_resources(
         and getattr(resources, "bound_aoi_signature", None) != signature
     )
 
-    if deck_changed or aoi_changed:
-        resources.service.set_master_enabled(False)
-        resources.service.reconcile_once()
-        st.session_state["main_live_master_enabled"] = False
-
     # UploadedDeckWorkspace is intentionally recreated on each app rerun.
     # Keep the cached live graph pointed at the current workspace/browser.
     resources.provider.set_browser(browser)
@@ -1064,7 +1055,6 @@ def _finish_study_review(resources: MainLiveResources, deck_id: str) -> None:
     except (OSError, RuntimeError) as exc:
         st.session_state["main_review_error"] = f"Unable to save review: {exc}"
         return
-    st.session_state["main_live_master_enabled"] = False
     st.session_state["main_workspace_mode"] = "review"
     st.session_state["main_review_error"] = None
     st.session_state["main_review_session"] = review.session_id
@@ -1079,10 +1069,8 @@ def _open_latest_review(resources: MainLiveResources) -> None:
         st.session_state["main_review_error"] = warnings[-1] if warnings else (
             "No completed Study Review is available."
         )
-        st.session_state["main_live_master_enabled"] = False
         st.session_state["main_workspace_mode"] = "review"
         return
-    st.session_state["main_live_master_enabled"] = False
     st.session_state["main_workspace_mode"] = "review"
     st.session_state["main_review_error"] = None
     st.session_state["main_review_session"] = review.session_id
@@ -1092,19 +1080,17 @@ def _open_latest_review(resources: MainLiveResources) -> None:
 
 def _back_to_study_workspace() -> None:
     st.session_state["main_workspace_mode"] = "study"
-    st.session_state["main_live_master_enabled"] = False
 
 
-def _start_new_study_review(resources: MainLiveResources) -> None:
+def _start_study_review(resources: MainLiveResources, deck_id: str) -> None:
     try:
-        resources.study_review.start_new()
-    except (OSError, RuntimeError) as exc:
+        resources.study_review.start(deck_id)
+    except (OSError, RuntimeError, ValueError) as exc:
         st.session_state["main_review_error"] = (
-            f"Unable to start a new study: {exc}"
+            f"Unable to start study: {exc}"
         )
         return
     st.session_state["main_workspace_mode"] = "study"
-    st.session_state["main_live_master_enabled"] = False
     st.session_state["main_review_show_heatmap"] = True
     st.session_state["main_review_delete_confirm"] = False
     st.session_state["main_review_error"] = None
@@ -1232,36 +1218,35 @@ def _render_live_controls(
         f"Media: {'ready' if session.video_fresh and session.audio_fresh else 'waiting'}"
     )
     deck_id = resources.bound_deck_id
-    active_review_deck_id = resources.study_review.active_deck_id()
-    active_deck_mismatch = (
+    lifecycle = resources.study_review.lifecycle()
+    lifecycle_deck_id = lifecycle.deck_id
+    active_deck_mismatch = bool(
         deck_id is not None
-        and active_review_deck_id is not None
-        and active_review_deck_id != deck_id
+        and lifecycle_deck_id is not None
+        and lifecycle_deck_id != deck_id
     )
     if active_deck_mismatch:
         st.sidebar.error(
-            "An unfinished gaze study belongs to another deck. "
-            "Start a new study before collecting gaze for this deck."
+            "The active Study belongs to another deck. "
+            "Finish that Study before starting one for this deck."
         )
-        st.sidebar.button(
-            "Start new study with this deck",
-            key="main_review_start_new",
-            width="stretch",
-            on_click=_start_new_study_review,
-            args=(resources,),
-        )
-    elif deck_id is not None and (
-        resources.study_review.has_active()
-        or (enabled and resources.study_review.is_armed())
-    ):
-        st.sidebar.button(
-            "End study & review",
-            key="main_end_study_review",
-            type="primary",
-            width="stretch",
-            on_click=_finish_study_review,
-            args=(resources, deck_id),
-        )
+    st.sidebar.button(
+        "Start study",
+        key="main_start_study",
+        disabled=bool(lifecycle.status != "idle" or deck_id is None),
+        width="stretch",
+        on_click=_start_study_review,
+        args=(resources, deck_id or ""),
+    )
+    st.sidebar.button(
+        "End study & review",
+        key="main_end_study_review",
+        type="primary",
+        disabled=lifecycle.status not in {"active", "finish_pending"},
+        width="stretch",
+        on_click=_finish_study_review,
+        args=(resources, lifecycle_deck_id or ""),
+    )
     if (
         resources.study_review.latest() is not None
         or resources.study_review.load_warnings()
@@ -1352,15 +1337,6 @@ def _render_review_sidebar(resources: MainLiveResources) -> None:
         width="stretch",
         on_click=_back_to_study_workspace,
     )
-    st.sidebar.button(
-        "Start new study",
-        key="main_review_start_new",
-        type="primary",
-        width="stretch",
-        on_click=_start_new_study_review,
-        args=(resources,),
-    )
-
     sessions = resources.study_review.list_sessions()
     session_ids = tuple(review.session_id for review in sessions)
     selected_id = st.session_state.get("main_review_session")
@@ -1682,13 +1658,32 @@ def _render_upload_controls(
             ),
         )
     )
-
-    load_clicked = st.sidebar.button(
-        "Load PDF",
-        disabled=uploaded_file is None,
-        width="stretch",
-        key="main_load_pdf_button",
+    uploaded_bytes = uploaded_file.getvalue() if uploaded_file is not None else None
+    selected_signature = (
+        _uploaded_pdf_signature(uploaded_file.name, uploaded_bytes)
+        if uploaded_file is not None and uploaded_bytes is not None
+        else None
     )
+    loaded = bool(
+        selected_signature is not None
+        and selected_signature == st.session_state.get("main_loaded_pdf_signature")
+        and st.session_state.get("main_uploaded_deck_id")
+    )
+    if loaded:
+        st.sidebar.button(
+            "Loaded PDF",
+            disabled=True,
+            width="stretch",
+            key="main_loaded_pdf_button",
+        )
+        load_clicked = False
+    else:
+        load_clicked = st.sidebar.button(
+            "Load PDF",
+            disabled=uploaded_file is None,
+            width="stretch",
+            key="main_load_pdf_button",
+        )
 
     if load_clicked:
         try:
@@ -1697,13 +1692,8 @@ def _render_upload_controls(
             ):
                 summary = (
                     workspace.ingest_pdf(
-                        filename=(
-                            uploaded_file.name
-                        ),
-                        content=(
-                            uploaded_file
-                            .getvalue()
-                        ),
+                        filename=uploaded_file.name,
+                        content=uploaded_bytes,
                     )
                 )
 
@@ -1714,20 +1704,13 @@ def _render_upload_controls(
                 f"{type(exc).__name__}: "
                 f"{exc}"
             )
-            st.session_state[
-                "main_upload_message"
-            ] = None
-
         else:
             st.session_state[
                 "main_uploaded_deck_id"
             ] = summary.deck_id
             st.session_state[
-                "main_upload_message"
-            ] = (
-                f"Loaded {summary.title} "
-                f"({summary.page_count} pages)."
-            )
+                "main_loaded_pdf_signature"
+            ] = selected_signature
             st.session_state[
                 "main_upload_error"
             ] = None
@@ -1735,40 +1718,6 @@ def _render_upload_controls(
                 "main_deck_signature"
             ] = None
             _reset_turn_state()
-
-    if st.session_state[
-        "main_uploaded_deck_id"
-    ]:
-        if st.sidebar.button(
-            "Use built-in demo deck",
-            width="stretch",
-            key="main_use_demo_button",
-        ):
-            st.session_state[
-                "main_uploaded_deck_id"
-            ] = None
-            st.session_state[
-                "main_deck_signature"
-            ] = None
-            st.session_state[
-                "main_upload_message"
-            ] = (
-                "Switched to the "
-                "built-in demo deck."
-            )
-            st.session_state[
-                "main_upload_error"
-            ] = None
-            _reset_turn_state()
-
-    if st.session_state[
-        "main_upload_message"
-    ]:
-        st.sidebar.success(
-            st.session_state[
-                "main_upload_message"
-            ]
-        )
 
     if st.session_state[
         "main_upload_error"
@@ -1778,6 +1727,14 @@ def _render_upload_controls(
                 "main_upload_error"
             ]
         )
+
+
+def _uploaded_pdf_signature(filename: str, content: bytes) -> str:
+    digest = hashlib.sha256()
+    digest.update(str(filename).encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(content)
+    return digest.hexdigest()
 
 
 def _active_aoi_signature(view: MainUIViewModel) -> str:
@@ -2226,15 +2183,17 @@ def _inject_compact_ui_css() -> None:
         }
 
         .attentive-learner-alert-anchor {
-            position: relative;
             width: 100%;
-            height: 0;
+            height: 0 !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: visible !important;
         }
 
         .attentive-learner-alert {
-            position: absolute;
-            right: 0;
-            bottom: 0.35rem;
+            position: fixed;
+            top: 0.45rem;
             width: max-content;
             max-width: min(25rem, 70vw);
             padding: 0.3rem 0.58rem;
@@ -2247,8 +2206,18 @@ def _inject_compact_ui_css() -> None:
             line-height: 1.2;
             box-shadow: 0 4px 12px rgba(17, 17, 17, 0.12);
             backdrop-filter: blur(3px);
-            z-index: 20;
+            z-index: 1000001;
             pointer-events: none;
+        }
+
+        .st-key-main_learner_state_reminder_slot,
+        .st-key-main_learner_state_reminder_slot > div,
+        .st-key-main_learner_state_reminder_slot div[data-testid="stVerticalBlock"] {
+            height: 0 !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: visible !important;
         }
 
         .attentive-learner-panel {
@@ -2312,6 +2281,45 @@ def _inject_compact_ui_css() -> None:
 
         .st-key-main_learner_state_popover button {
             width: 100%;
+        }
+
+        .st-key-main_loaded_pdf_button button:disabled {
+            border-color: #198754 !important;
+            color: #198754 !important;
+            opacity: 1 !important;
+        }
+
+        .attentive-built-in-stage {
+            aspect-ratio: 16 / 9;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.7rem;
+            box-sizing: border-box;
+            width: 100%;
+            border: 1px solid #111111;
+            border-radius: 0.7rem;
+            background: #ffffff;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .attentive-built-in-title {
+            color: #111111;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: clamp(2rem, 5vw, 4.8rem);
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .attentive-built-in-tagline {
+            max-width: 50rem;
+            color: rgba(17, 17, 17, 0.72);
+            font-family: Palatino, "Palatino Linotype", "Book Antiqua", serif;
+            font-size: clamp(0.9rem, 1.5vw, 1.25rem);
+            font-style: italic;
+            line-height: 1.35;
         }
 
         .st-key-main_slide_scale {
@@ -2922,7 +2930,6 @@ def _render_learner_state_contents_periodic(
     st.markdown(
         '<div class="attentive-learner-panel">'
         f"{row_html}{detail_html}"
-        f'<div class="attentive-learner-detail">{DISCLAIMER}</div>'
         "</div>",
         unsafe_allow_html=True,
     )
@@ -3236,13 +3243,14 @@ def _render_slide_workspace(
         with llm_column:
             _render_current_slide_llm_aoi_action(view, workspace)
         with status_column:
-            _render_learner_state_alert_periodic(live_resources)
             with st.popover(
                 "Learner state",
                 key="main_learner_state_popover",
                 width="stretch",
             ):
                 _render_learner_state_contents_periodic(live_resources)
+            with st.container(key="main_learner_state_reminder_slot"):
+                _render_learner_state_alert_periodic(live_resources)
         with slides_column:
             _render_slide_selector(browser)
 
@@ -3258,6 +3266,9 @@ def _render_slide_workspace(
 
     with st.container(key="main_slide_stage"):
         _render_navigation(browser, view)
+        if view.deck_id == "mock_deck" and not view.active_slide.image_available:
+            _render_builtin_slide_placeholder()
+            return
         payload = render_slide_viewport(
             deck_id=view.deck_id,
             slide=view.active_slide,
@@ -3360,8 +3371,25 @@ def _render_slide_workspace(
             + st.session_state["main_selection_error"]
         )
         return
-
-
+def _render_builtin_slide_placeholder() -> None:
+    width_percent = int(st.session_state["main_slide_width_percent"])
+    margin = (100 - width_percent) / 2
+    _left, center, _right = st.columns(
+        [margin, width_percent, margin],
+        gap=None,
+    )
+    with center:
+        st.markdown(
+            """
+            <div class="attentive-built-in-stage">
+                <div class="attentive-built-in-title">AttentiveSlides</div>
+                <div class="attentive-built-in-tagline">
+                    Select a slide region, state your learning goal, and receive a grounded tutor response.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def _render_static_slide(

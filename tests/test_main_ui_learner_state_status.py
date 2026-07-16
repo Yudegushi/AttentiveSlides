@@ -212,10 +212,14 @@ class MainLearnerStateUIContractTest(unittest.TestCase):
         workspace = self.source[workspace_start:]
         enhance = workspace.index("_render_current_slide_llm_aoi_action")
         popover = workspace.index('with st.popover(\n                "Learner state"')
+        reminder = workspace.index("_render_learner_state_alert_periodic")
         slides = workspace.index("_render_slide_selector(browser)")
         self.assertLess(enhance, popover)
+        self.assertLess(popover, reminder)
+        self.assertLess(reminder, slides)
         self.assertLess(popover, slides)
         self.assertIn('key="main_learner_state_popover"', workspace)
+        self.assertIn('key="main_learner_state_reminder_slot"', workspace)
         self.assertIn("[0.52, 0.33, 0.15]", workspace)
 
     def test_only_popover_contents_and_alert_refresh_at_one_second(self):
@@ -232,8 +236,24 @@ class MainLearnerStateUIContractTest(unittest.TestCase):
     def test_floating_alert_has_no_layout_shift_or_pointer_capture(self):
         self.assertIn("max-width: min(25rem, 70vw)", self.source)
         self.assertIn("pointer-events: none", self.source)
-        self.assertIn("height: 0", self.source)
+        self.assertIn("height: 0 !important", self.source)
+        self.assertIn("min-height: 0 !important", self.source)
+        self.assertIn("overflow: visible !important", self.source)
+        self.assertIn("position: fixed", self.source)
+        self.assertIn("z-index: 1000001", self.source)
         self.assertIn('role="status"', self.source)
+
+    def test_live_popover_omits_disclaimer_while_review_retains_it(self):
+        contents_start = self.source.index("def _render_learner_state_contents_periodic")
+        contents_end = self.source.index(
+            "def _render_learner_state_alert_periodic", contents_start
+        )
+        live_contents = self.source[contents_start:contents_end]
+        review_start = self.source.index("def _render_review_workspace")
+        review_end = self.source.index("def _on_manual_region_change", review_start)
+        review = self.source[review_start:review_end]
+        self.assertNotIn("Model estimates; not a diagnosis.", live_contents)
+        self.assertIn("Model estimates; not a diagnosis.", review)
 
 
 if __name__ == "__main__":

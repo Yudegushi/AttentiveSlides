@@ -125,6 +125,10 @@ class TestStreamlitAttentiveSlides(
         self.assertIn('== "review"', source)
         self.assertIn("_render_review_workspace", source)
         self.assertIn("_render_review_sidebar", source)
+        review_branch = source[source.index('== "review"') : source.index("return")]
+        self.assertNotIn("main_live_master_enabled", review_branch)
+        self.assertNotIn("set_master_enabled", review_branch)
+        self.assertNotIn("reconcile_once", review_branch)
 
     def test_review_does_not_reuse_interactive_slide_component(self):
         source = self.function_source("_render_review_workspace")
@@ -236,41 +240,61 @@ class TestStreamlitAttentiveSlides(
 
     def test_live_sidebar_exposes_review_actions(self):
         source = self.function_source("_render_live_controls")
+        self.assertIn("Start study", source)
         self.assertIn("End study & review", source)
         self.assertIn("Open latest review", source)
-        self.assertIn("is_armed()", source)
+        self.assertEqual(source.count("resources.study_review.lifecycle()"), 1)
         self.assertIn("load_warnings()", source)
 
-    def test_end_review_retains_active_or_armed_overwrite_guard(self):
+    def test_study_buttons_follow_one_atomic_lifecycle_snapshot(self):
         source = self.function_source("_render_live_controls")
-        button = source.index('"End study & review"')
-        guard = source.rfind(
-            "resources.study_review.has_active()",
-            0,
-            button,
-        )
-        armed = source.rfind(
-            "enabled and resources.study_review.is_armed()",
-            0,
-            button,
-        )
-        self.assertGreater(guard, -1)
-        self.assertGreater(armed, guard)
+        self.assertIn('key="main_start_study"', source)
+        self.assertIn('lifecycle.status != "idle"', source)
+        self.assertIn('key="main_end_study_review"', source)
+        self.assertIn('{"active", "finish_pending"}', source)
+        self.assertIn('args=(resources, lifecycle_deck_id or "")', source)
+        self.assertNotIn("is_armed", source)
 
-    def test_live_sidebar_requires_explicit_new_study_after_deck_change(self):
+    def test_live_sidebar_preserves_authoritative_deck_mismatch(self):
         source = self.function_source("_render_live_controls")
-        self.assertIn("active_deck_id()", source)
+        self.assertIn("lifecycle_deck_id = lifecycle.deck_id", source)
         self.assertIn("active_deck_mismatch", source)
-        self.assertIn("Start new study with this deck", source)
+        self.assertIn("Finish that Study before starting one for this deck", source)
+        self.assertNotIn("Start new study with this deck", source)
 
     def test_review_lifecycle_errors_stay_inline(self):
         finish = self.function_source("_finish_study_review")
-        start_new = self.function_source("_start_new_study_review")
+        start = self.function_source("_start_study_review")
         delete = self.function_source("_delete_selected_study_review")
         self.assertIn("RuntimeError", finish)
-        self.assertIn("OSError", start_new)
-        self.assertIn("RuntimeError", start_new)
+        self.assertIn("OSError", start)
+        self.assertIn("RuntimeError", start)
         self.assertIn("OSError", delete)
+
+    def test_study_and_review_navigation_do_not_change_camera_or_service(self):
+        for name in (
+            "_start_study_review",
+            "_finish_study_review",
+            "_open_latest_review",
+            "_back_to_study_workspace",
+        ):
+            source = self.function_source(name)
+            self.assertNotIn("main_live_master_enabled", source)
+            self.assertNotIn("set_master_enabled", source)
+            self.assertNotIn("reconcile_once", source)
+
+    def test_upload_uses_content_signature_and_single_action_state(self):
+        upload = self.function_source("_render_upload_controls")
+        signature = self.function_source("_uploaded_pdf_signature")
+        self.assertEqual(upload.count("uploaded_file.getvalue()"), 1)
+        self.assertIn("main_loaded_pdf_signature", upload)
+        self.assertIn('key="main_load_pdf_button"', upload)
+        self.assertIn('key="main_loaded_pdf_button"', upload)
+        self.assertIn('"Loaded PDF"', upload)
+        self.assertNotIn("main_upload_message", upload)
+        self.assertNotIn("Use built-in demo deck", upload)
+        self.assertIn("hashlib.sha256()", signature)
+        self.assertIn('digest.update(b"\\0")', signature)
 
     def test_runtime_data_dir_is_environment_configurable(
         self,
@@ -890,18 +914,15 @@ class TestStreamlitAttentiveSlides(
         self.assertIn('slide_id=int(interaction["slide_id"])', record)
         self.assertNotIn("uuid", record)
 
-    def test_finish_and_start_new_preserve_lifecycle_guards(self) -> None:
+    def test_finish_and_start_preserve_lifecycle_guards(self) -> None:
         finish = self.function_source("_finish_study_review")
-        start_new = self.function_source("_start_new_study_review")
+        start = self.function_source("_start_study_review")
         self.assertEqual(finish.count("resources.study_review.finish("), 1)
-        self.assertLess(
-            finish.index("resources.study_review.finish("),
-            finish.index('main_live_master_enabled"] = False'),
-        )
-        self.assertIn("resources.study_review.start_new()", start_new)
-        self.assertIn('main_workspace_mode"] = "study"', start_new)
-        self.assertIn('main_live_master_enabled"] = False', start_new)
-        self.assertNotIn("delete(", start_new)
+        self.assertEqual(start.count("resources.study_review.start(deck_id)"), 1)
+        self.assertIn('main_workspace_mode"] = "study"', start)
+        self.assertNotIn("main_live_master_enabled", finish)
+        self.assertNotIn("main_live_master_enabled", start)
+        self.assertNotIn("delete(", start)
 
     def test_live_binding_synchronizes_voice_after_provider_binding(self) -> None:
         binding = self.function_source("_bind_main_live_resources")
