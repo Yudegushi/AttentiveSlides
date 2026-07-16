@@ -51,6 +51,13 @@ class GazeReviewStore:
                 return False
             geometry = sample.geometry.geometry if sample.geometry is not None else None
             usable = normalized_slide_point(sample) is not None
+            if (
+                self._active is not None
+                and geometry is not None
+                and geometry.deck_id != self._active.deck_id
+            ):
+                self._active.pause()
+                return False
             if self._active is None:
                 if not usable or geometry is None:
                     return False
@@ -73,6 +80,11 @@ class GazeReviewStore:
             if not self._armed and self._active is None:
                 raise RuntimeError(
                     "Start a new study before replacing the completed review."
+                )
+            if self._active is not None and self._active.deck_id != str(deck_id):
+                raise RuntimeError(
+                    "The active gaze study belongs to another deck. "
+                    "Start a new study before collecting this deck."
                 )
             now_epoch = self._wall_clock()
             if self._active is None:
@@ -101,6 +113,10 @@ class GazeReviewStore:
     def has_active(self) -> bool:
         with self._lock:
             return self._active is not None
+
+    def active_deck_id(self) -> str | None:
+        with self._lock:
+            return self._active.deck_id if self._active is not None else None
 
     def is_armed(self) -> bool:
         with self._lock:
@@ -133,7 +149,15 @@ class GazeReviewStore:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             self._latest = GazeReviewSession.from_dict(payload)
-        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            KeyError,
+            AttributeError,
+            OverflowError,
+            json.JSONDecodeError,
+        ) as exc:
             self._load_error = f"{type(exc).__name__}: {exc}"
 
     def _delete_latest(self) -> None:

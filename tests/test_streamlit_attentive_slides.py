@@ -149,6 +149,12 @@ class TestStreamlitAttentiveSlides(
         self.assertIn("is_armed()", source)
         self.assertIn("load_error()", source)
 
+    def test_live_sidebar_requires_explicit_new_study_after_deck_change(self):
+        source = self.function_source("_render_live_controls")
+        self.assertIn("active_deck_id()", source)
+        self.assertIn("active_deck_mismatch", source)
+        self.assertIn("Start new study with this deck", source)
+
     def test_review_lifecycle_errors_stay_inline(self):
         finish = self.function_source("_finish_gaze_review")
         start_new = self.function_source("_start_new_gaze_study")

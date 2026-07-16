@@ -1190,7 +1190,25 @@ def _render_live_controls(
         f"Media: {'ready' if session.video_fresh and session.audio_fresh else 'waiting'}"
     )
     deck_id = resources.bound_deck_id
-    if deck_id is not None and (
+    active_review_deck_id = resources.gaze_review.active_deck_id()
+    active_deck_mismatch = (
+        deck_id is not None
+        and active_review_deck_id is not None
+        and active_review_deck_id != deck_id
+    )
+    if active_deck_mismatch:
+        st.sidebar.error(
+            "An unfinished gaze study belongs to another deck. "
+            "Start a new study before collecting gaze for this deck."
+        )
+        st.sidebar.button(
+            "Start new study with this deck",
+            key="main_review_start_new",
+            width="stretch",
+            on_click=_start_new_gaze_study,
+            args=(resources,),
+        )
+    elif deck_id is not None and (
         resources.gaze_review.has_active()
         or (enabled and resources.gaze_review.is_armed())
     ):

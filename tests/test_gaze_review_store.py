@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -5,6 +6,17 @@ from unittest.mock import patch
 
 from modules.attention.gaze_review_store import GazeReviewStore
 from tests.test_gaze_heatmap import AOIS, make_sample
+
+
+def make_deck_sample(deck_id, **kwargs):
+    sample = make_sample(**kwargs)
+    geometry_snapshot = sample.geometry
+    assert geometry_snapshot is not None
+    geometry = replace(geometry_snapshot.geometry, deck_id=deck_id)
+    return replace(
+        sample,
+        geometry=replace(geometry_snapshot, geometry=geometry),
+    )
 
 
 class SequenceClock:
@@ -91,6 +103,22 @@ class GazeReviewStoreTest(unittest.TestCase):
             self.assertIn("JSON", store.load_error())
             self.assertFalse(store.is_armed())
 
+    def test_parseable_malformed_latest_is_reported_without_crashing(self):
+        for content, error_name in (
+            ("null", "AttributeError"),
+            ('{"schema_version": 1}', "KeyError"),
+        ):
+            with self.subTest(content=content), TemporaryDirectory() as root:
+                path = Path(root) / "gaze_reviews" / "latest.json"
+                path.parent.mkdir(parents=True)
+                path.write_text(content, encoding="utf-8")
+
+                store = self.make_store(root)
+
+                self.assertIsNone(store.latest())
+                self.assertIn(error_name, store.load_error())
+                self.assertFalse(store.is_armed())
+
     def test_persist_failure_keeps_active_session_for_retry(self):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
@@ -117,6 +145,28 @@ class GazeReviewStoreTest(unittest.TestCase):
 
             self.assertEqual(store.latest().to_dict(), original.to_dict())
             self.assertFalse(store.is_armed())
+
+    def test_active_study_rejects_another_deck_until_start_new(self):
+        with TemporaryDirectory() as root:
+            store = self.make_store(root)
+            store.register_slide("deck-a", 1, AOIS)
+            store.register_slide("deck-b", 1, AOIS)
+            self.assertTrue(
+                store.accept(make_deck_sample("deck-a", received_at=1.0))
+            )
+
+            self.assertFalse(
+                store.accept(make_deck_sample("deck-b", received_at=1.2))
+            )
+            self.assertEqual(store.active_deck_id(), "deck-a")
+            with self.assertRaisesRegex(RuntimeError, "another deck"):
+                store.finish(deck_id="deck-b")
+
+            store.start_new()
+            self.assertTrue(
+                store.accept(make_deck_sample("deck-b", received_at=2.0))
+            )
+            self.assertEqual(store.active_deck_id(), "deck-b")
 
     def test_delete_failure_preserves_latest_and_disarmed_state(self):
         with TemporaryDirectory() as root:
