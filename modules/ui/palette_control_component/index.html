@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      background: transparent;
+      color: var(--as-ink);
+      font: 13px/1.35 "Noto Sans", "DejaVu Sans", sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+    #root { display: grid; gap: 6px; }
+    button {
+      align-items: center;
+      background: var(--as-surface);
+      border: 1px solid var(--as-border);
+      border-radius: 6px;
+      color: var(--as-ink);
+      cursor: pointer;
+      display: grid;
+      gap: 7px;
+      grid-template-columns: auto 1fr;
+      min-height: 36px;
+      padding: 6px 8px;
+      text-align: left;
+      width: 100%;
+    }
+    button[aria-pressed="true"] {
+      background: var(--as-primary-soft);
+      border-color: var(--as-primary);
+    }
+    button:focus-visible {
+      outline: 2px solid var(--as-primary);
+      outline-offset: 2px;
+    }
+    button:disabled { cursor: not-allowed; opacity: .62; }
+    .swatches { display: flex; gap: 2px; }
+    .swatch {
+      border: 1px solid var(--as-border);
+      border-radius: 999px;
+      height: 12px;
+      width: 12px;
+    }
+    #explanation { color: var(--as-muted); font-size: 12px; min-height: 16px; }
+  </style>
+</head>
+<body>
+  <div id="root" class="palette-control" role="group" aria-label="Color palette"></div>
+  <div id="explanation" aria-live="polite"></div>
+  <script>
+    (() => {
+      const STORAGE_KEY = "attentiveslides-ui-palette-v1";
+      const DEFAULT_PALETTE_ID = "ivory-study-desk";
+      const PALETTES = [
+        ["ivory-study-desk", "Ivory Study Desk", ["#F6F1E7", "#485F55", "#A55D42"]],
+        ["autumn-reading-room", "Autumn Reading Room", ["#F7EFE1", "#774837", "#B97843"]],
+        ["cool-archive", "Cool Archive", ["#EDF0EC", "#3E6264", "#8D5A48"]],
+        ["dusty-blue", "Dusty Blue", ["#EEF0EF", "#4B6169", "#9A6653"]],
+      ];
+      const PALETTE_IDS = new Set(PALETTES.map(([id]) => id));
+      const SEMANTIC_KEYS = [
+        "canvas", "workspace", "topbar", "rail", "surface", "ink", "muted",
+        "muted-2", "border", "border-strong", "primary", "primary-on",
+        "primary-soft", "segment", "slide-accent", "slide-accent-soft",
+      ];
+      const root = document.getElementById("root");
+      const explanation = document.getElementById("explanation");
+      let initialized = false;
+      let args = { selected: DEFAULT_PALETTE_ID, palette_tokens: {}, locked: false };
+
+      function send(type, payload = {}) {
+        window.parent.postMessage({ isStreamlitMessage: true, type, ...payload }, "*");
+      }
+
+      function normalize(value) {
+        const candidate = String(value || "").trim();
+        return PALETTE_IDS.has(candidate) ? candidate : DEFAULT_PALETTE_ID;
+      }
+
+      function applyPalette(paletteTokens) {
+        const tokens = paletteTokens && typeof paletteTokens === "object"
+          ? paletteTokens
+          : {};
+        for (const name of SEMANTIC_KEYS) {
+          const value = tokens[name];
+          if (typeof value === "string" && value.trim()) {
+            document.documentElement.style.setProperty("--as-" + name, value);
+          }
+        }
+      }
+
+      function setComponentValue(value) {
+        send("streamlit:setComponentValue", { value: normalize(value) });
+      }
+
+      function readStoredPalette() {
+        try {
+          return normalize(globalThis.localStorage.getItem(STORAGE_KEY));
+        } catch (_) {
+          return DEFAULT_PALETTE_ID;
+        }
+      }
+
+      function createSwatches(colors) {
+        const group = document.createElement("span");
+        group.className = "swatches";
+        group.setAttribute("aria-hidden", "true");
+        for (const color of colors) {
+          const swatch = document.createElement("span");
+          swatch.className = "swatch";
+          swatch.style.backgroundColor = color;
+          group.appendChild(swatch);
+        }
+        return group;
+      }
+
+      function render() {
+        const selected = normalize(args.selected);
+        const locked = Boolean(args.locked);
+        root.replaceChildren();
+        for (const [paletteId, label, colors] of PALETTES) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.dataset.paletteId = paletteId;
+          button.disabled = locked;
+          button.setAttribute("aria-disabled", String(locked));
+          button.setAttribute("aria-pressed", String(paletteId === selected));
+          button.appendChild(createSwatches(colors));
+          const copy = document.createElement("span");
+          copy.textContent = label;
+          button.appendChild(copy);
+          button.addEventListener("click", () => {
+            if (locked) return;
+            try { globalThis.localStorage.setItem(STORAGE_KEY, paletteId); }
+            catch (_) {}
+            setComponentValue(paletteId);
+          });
+          root.appendChild(button);
+        }
+        explanation.textContent = locked
+          ? "Palette is locked during an active study."
+          : "";
+        send("streamlit:setFrameHeight", {
+          height: Math.ceil(document.body.getBoundingClientRect().height),
+        });
+      }
+
+      window.addEventListener("message", (event) => {
+        if (!event.data || event.data.type !== "streamlit:render") return;
+        args = event.data.args || args;
+        applyPalette(args.palette_tokens);
+        if (!initialized) {
+          initialized = true;
+          const stored = readStoredPalette();
+          if (stored !== normalize(args.selected)) setComponentValue(stored);
+        }
+        render();
+      });
+
+      send("streamlit:componentReady", { apiVersion: 1 });
+    })();
+  </script>
+</body>
+</html>
+
