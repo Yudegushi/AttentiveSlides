@@ -236,15 +236,18 @@ class TestMainUIState(unittest.TestCase):
         self.assertEqual(
             first,
             {
-                "main_interaction_mode": "Manual",
+                "main_interaction_flow": "one_turn",
                 "main_live_master_enabled": False,
                 "main_confirmation_policy": (
-                    "Always confirm"
+                    "Confidence-based auto"
                 ),
                 "main_auto_confirm_threshold": 0.80,
                 "main_voice_engine": "single_turn",
-                "main_speech_mode": "continuous",
+                "main_speech_mode": "push_to_talk",
                 "main_answer_audio_enabled": True,
+                "main_ui_palette": "ivory-study-desk",
+                "main_slide_rail_expanded": True,
+                "main_study_started_monotonic": None,
                 "main_voice_status_message": None,
                 "main_live_proposal": None,
                 "main_live_original_transcript": None,
@@ -264,7 +267,7 @@ class TestMainUIState(unittest.TestCase):
         state = {
             **build_main_live_defaults(),
             **build_main_turn_defaults(),
-            "main_interaction_mode": "Live",
+            "main_interaction_flow": "realtime",
             "main_live_master_enabled": True,
             "main_confirmation_policy": (
                 "Confidence-based auto"
@@ -285,7 +288,7 @@ class TestMainUIState(unittest.TestCase):
 
         reset_main_live_turn_state(state)
 
-        self.assertEqual(state["main_interaction_mode"], "Live")
+        self.assertEqual(state["main_interaction_flow"], "realtime")
         self.assertTrue(state["main_live_master_enabled"])
         self.assertEqual(
             state["main_confirmation_policy"],

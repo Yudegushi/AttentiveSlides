@@ -198,13 +198,14 @@ class TestMainUIWidgetInventory(
             "main_loaded_pdf_button",
             "main_process_current_llm_aoi",
             "main_cloud_text_allowed",
-            "main_interaction_mode",
+            "main_interaction_flow",
             "main_live_master_enabled",
-            "main_voice_engine",
             "main_speech_mode",
             "main_answer_audio_enabled",
             "main_confirmation_policy",
-            "main_history_enabled",
+            "main_palette_control",
+            "main_slide_rail_collapse_button",
+            "main_slide_rail_expand_button",
             "main_previous_slide_button",
             "main_next_slide_button",
             "main_target_scope",
@@ -243,6 +244,10 @@ class TestMainUIWidgetInventory(
         self.assertTrue(
             {"main_review_start_new", "main_use_demo_button"}.isdisjoint(discovered)
         )
+
+    def test_removed_manual_live_widget_is_absent(self) -> None:
+        self.assertNotIn('options=["Manual", "Live"]', self.source)
+        self.assertNotIn('key="main_interaction_mode"', self.source)
 
     def test_no_arrow_widgets(
         self,

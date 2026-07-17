@@ -145,15 +145,18 @@ def build_main_turn_defaults() -> dict[str, Any]:
 
 
 def build_main_live_defaults() -> dict[str, Any]:
-    """Return the small set of Live-mode session defaults."""
+    """Return interaction, media, and UI preference defaults."""
     return {
-        "main_interaction_mode": "Manual",
+        "main_interaction_flow": "one_turn",
         "main_live_master_enabled": False,
-        "main_confirmation_policy": "Always confirm",
+        "main_confirmation_policy": "Confidence-based auto",
         "main_auto_confirm_threshold": 0.80,
         "main_voice_engine": "single_turn",
-        "main_speech_mode": "continuous",
+        "main_speech_mode": "push_to_talk",
         "main_answer_audio_enabled": True,
+        "main_ui_palette": "ivory-study-desk",
+        "main_slide_rail_expanded": True,
+        "main_study_started_monotonic": None,
         "main_voice_status_message": None,
         "main_live_proposal": None,
         "main_live_original_transcript": None,
@@ -215,7 +218,7 @@ def build_main_conversation_defaults() -> dict[str, Any]:
     return {
         "main_conversation_turns": [],
         "main_conversation_deck_id": None,
-        "main_history_enabled": True,
+        "main_history_enabled": False,
         "main_history_max_items": 4,
         "main_conversation_error": None,
     }
