@@ -1,12 +1,13 @@
 :root {
-  --as-font-heading: "Noto Serif", "DejaVu Serif", serif;
-  --as-font-ui: "Noto Sans", "DejaVu Sans", sans-serif;
-  --as-radius-control: 6px;
-  --as-radius-panel: 8px;
-  --as-radius-shell: 12px;
-  --as-left-rail-width: 232px;
-  --as-right-rail-width: 194px;
-  --as-topbar-height: 56px;
+  --as-font-heading: "Literata", "Noto Serif", "DejaVu Serif", serif;
+  --as-font-ui: "IBM Plex Sans", "Noto Sans", "DejaVu Sans", sans-serif;
+  --as-radius-control: 3px;
+  --as-radius-panel: 2px;
+  --as-radius-shell: 0px;
+  --as-left-rail-width: 226px;
+  --as-right-rail-width: 190px;
+  --as-control-width: 292px;
+  --as-topbar-height: 52px;
 }
 
 html,
@@ -16,6 +17,8 @@ body,
   background: var(--as-canvas);
   color: var(--as-ink);
   font-family: var(--as-font-ui);
+  font-size: 12px;
+  line-height: 17px;
 }
 
 [data-testid="stHeader"] {
@@ -56,29 +59,52 @@ body,
 }
 
 .as-topbar__identity {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
+  line-height: 20px;
 }
 
 .as-topbar__context,
-.as-topbar__status,
+.as-topbar__status {
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.as-panel-title {
+  font-family: var(--as-font-heading);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 20px;
+}
+
+.as-field-label,
+.as-eyebrow {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  line-height: 13px;
+  text-transform: uppercase;
+}
+
 .as-caption,
 .as-muted {
   color: var(--as-muted);
+  font-size: 10px;
+  line-height: 14px;
 }
 
 .as-workspace {
   background: var(--as-workspace);
   border: 1px solid var(--as-border);
   border-radius: var(--as-radius-shell);
-  padding: 16px;
+  padding: 14px 16px;
 }
 
 .as-study-grid {
   align-items: start;
   display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 42%);
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) var(--as-control-width);
 }
 
 .as-slide-stage {
@@ -92,8 +118,8 @@ body,
 .as-slide-surface {
   background: var(--as-surface);
   border: 1px solid var(--as-border-strong);
-  border-radius: 3px;
-  box-shadow: 0 8px 22px color-mix(in srgb, var(--as-ink) 12%, transparent);
+  border-radius: 0;
+  box-shadow: 0 8px 18px rgba(38, 55, 52, 0.09);
 }
 
 .as-interaction-panel,
@@ -106,13 +132,14 @@ body,
   border: 1px solid var(--as-border);
   border-radius: var(--as-radius-panel);
   color: var(--as-ink);
-  padding: 14px;
+  padding: 12px 14px;
 }
 
 .as-tutor-answer {
   font-family: var(--as-font-heading);
-  line-height: 1.65;
-  margin-top: 16px;
+  font-size: 15px;
+  line-height: 22px;
+  margin-top: 12px;
 }
 
 .as-right-rail {
@@ -135,7 +162,7 @@ body,
 .as-slide-thumb {
   background: var(--as-surface);
   border: 1px solid var(--as-border);
-  border-radius: var(--as-radius-control);
+  border-radius: 0;
   color: var(--as-ink);
   margin-bottom: 8px;
   padding: 5px;
@@ -253,6 +280,9 @@ textarea {
   border-radius: var(--as-radius-control);
   color: var(--as-ink);
   font-family: var(--as-font-ui);
+  font-size: 12px;
+  line-height: 17px;
+  min-height: 32px;
 }
 
 button[kind="primary"],
@@ -372,7 +402,7 @@ body:has(.st-key-main_slide_rail) .block-container {
 .as-slide-preview-empty {
   align-items: center;
   border: 1px dashed var(--as-border-strong);
-  border-radius: var(--as-radius-control);
+  border-radius: 0;
   color: var(--as-muted);
   display: flex;
   height: 4.8rem;
@@ -442,7 +472,7 @@ body:has(.st-key-main_slide_rail) .block-container {
   aspect-ratio: 16 / 9;
   background: var(--as-surface);
   border: 1px solid var(--as-border-strong);
-  border-radius: 3px;
+  border-radius: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;

@@ -110,6 +110,8 @@ Do not use:
 
 Font files must be vendored and installed locally for the Lenovo demo; the app must make no runtime request to Google Fonts, jsDelivr, a CDN, or any third-party host. Preserve license files and source provenance. The implementation plan names exact assets and installation checks.
 
+The approved pinned assets are the Literata 3.103 roman variable TTF and IBM Plex Sans Regular, SemiBold, and Bold WOFF2 files from the official `@ibm/plex-sans@1.1.0` package. That package does not ship TTF files; the WOFF2 files are used without conversion and are verified with `fc-scan` / `fc-match` on LenovoLinux_Dorm.
+
 ### 5.2 Type scale at the effective 1600×1000 viewport
 
 | Role | Family | Size / line height | Weight / treatment |

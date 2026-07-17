@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
     * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+    html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; font-family: "IBM Plex Sans", "Noto Sans", "DejaVu Sans", sans-serif; }
     #root { width: 100%; }
     #slide { position: relative; width: 100%; margin-inline: 0 auto; line-height: 0; user-select: none; }
     #slide img {
       background: var(--as-surface);
       border: 1px solid var(--as-border-strong);
-      border-radius: 3px;
-      box-shadow: 0 8px 22px color-mix(in srgb, var(--as-ink) 12%, transparent);
+      border-radius: 0;
+      box-shadow: 0 8px 18px rgba(38, 55, 52, 0.09);
       display: block;
       height: auto;
       width: 100%;
@@ -45,7 +45,7 @@
     }
     #manual { position: absolute; border: 2px solid #f97316; background: rgba(249, 115, 22, .14); display: none; }
     #slide.drawing { cursor: crosshair; touch-action: none; }
-    #error { padding: 12px; color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; line-height: 1.4; }
+    #error { padding: 12px; color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: 3px; font-size: 12px; line-height: 17px; }
   </style>
 </head>
 <body>

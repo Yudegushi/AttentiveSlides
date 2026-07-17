@@ -77,11 +77,13 @@ Open `http://127.0.0.1:8765/02-cool-instrument-panel.html`. Do not copy its plac
 
 ## Execution Ledger
 
+**Implementation start:** `06c4aac` on `codex/gaze-heatmap-review`.
+
 Update this table in the plan while executing. One row per checkpoint is enough. Before each checkpoint commit, update only that row and include this plan file in the same commit; do not create ledger-only commits or rerun tests for the Markdown change.
 
 | Checkpoint | Status | Focused GREEN result | Commit | Blocker / next |
 |---|---|---|---|---|
-| 1. Typography and 02 tokens | pending | — | — | Start here |
+| 1. Typography and 02 tokens | completed | 15 passed in 0.003s; both font families resolved | this checkpoint commit | Checkpoint 2 |
 | 2. Shell, top bar, rails, slide stage | pending | — | — | — |
 | 3. Control and Tutor output | pending | — | — | — |
 | 4. Pause persistence and timing | pending | — | — | — |
@@ -95,9 +97,9 @@ Update this table in the plan while executing. One row per checkpoint is enough.
 
 - `assets/fonts/literata/Literata-Variable.ttf`
 - `assets/fonts/literata/OFL.txt`
-- `assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf`
-- `assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBold.ttf`
-- `assets/fonts/ibm-plex-sans/IBMPlexSans-Bold.ttf`
+- `assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.woff2`
+- `assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBold.woff2`
+- `assets/fonts/ibm-plex-sans/IBMPlexSans-Bold.woff2`
 - `assets/fonts/ibm-plex-sans/OFL.txt`
 - `assets/fonts/README.md`
 - `scripts/install_attentiveslides_demo_fonts.sh`
@@ -175,9 +177,9 @@ npm pack @ibm/plex-sans@1.1.0 --pack-destination "$font_tmp"
 tar -xzf "$font_tmp/ibm-plex-sans-1.1.0.tgz" -C "$font_tmp"
 ```
 
-   From Literata 3.103, copy the one roman variable TTF matching `Literata*opsz*wght*.ttf` to `Literata-Variable.ttf`. From the extracted IBM package, copy `fonts/complete/ttf/IBMPlexSans-{Regular,SemiBold,Bold}.ttf` and its license to the stable paths in the file map. If the tag, package, or exact files are unavailable, stop and report it; do not silently select a later release or unofficial mirror.
+   From Literata 3.103, copy `fonts/variable/Literata[opsz,wght].ttf` to `Literata-Variable.ttf`. The pinned `@ibm/plex-sans@1.1.0` package contains WOFF/WOFF2 but no TTF files, so copy `fonts/complete/woff2/IBMPlexSans-{Regular,SemiBold,Bold}.woff2` and `LICENSE.txt` to the stable paths in the file map without conversion. If the tag, package, or these exact files are unavailable, stop and report it; do not silently select a later release or unofficial mirror.
 
-   In `assets/fonts/README.md`, record the official URL, exact tag/package, original filename, committed filename, SHA-256, license, and acquisition date. Generate the hashes after copying with `sha256sum assets/fonts/**/*.ttf`; `tests/test_font_assets.py` recomputes the committed hashes and requires an exact README match.
+   In `assets/fonts/README.md`, record the official URL, exact tag/package, original filename, committed filename, SHA-256, license, and acquisition date. Generate the hashes after copying with `sha256sum assets/fonts/literata/*.ttf assets/fonts/ibm-plex-sans/*.woff2`; `tests/test_font_assets.py` recomputes the committed hashes and requires an exact README match.
 
 2. Implement `scripts/install_attentiveslides_demo_fonts.sh` without root:
 
@@ -189,9 +191,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 font_root="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/attentiveslides"
 install -d "$font_root"
 install -m 0644 "$repo_root/assets/fonts/literata/Literata-Variable.ttf" "$font_root/"
-install -m 0644 "$repo_root/assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf" "$font_root/"
-install -m 0644 "$repo_root/assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBold.ttf" "$font_root/"
-install -m 0644 "$repo_root/assets/fonts/ibm-plex-sans/IBMPlexSans-Bold.ttf" "$font_root/"
+install -m 0644 "$repo_root/assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.woff2" "$font_root/"
+install -m 0644 "$repo_root/assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBold.woff2" "$font_root/"
+install -m 0644 "$repo_root/assets/fonts/ibm-plex-sans/IBMPlexSans-Bold.woff2" "$font_root/"
 fc-cache -f "$font_root"
 ```
 
@@ -221,7 +223,7 @@ fc-cache -f "$font_root"
 
 `tests/test_font_assets.py` must verify:
 
-- both stable font files and OFL files exist and are non-empty;
+- all four stable font files and both OFL files exist and are non-empty;
 - README provenance names the official projects and SHA-256 strings;
 - install script copies only repository font assets into a user font directory and calls `fc-cache`;
 - no CSS/HTML file contains a Google Fonts/CDN font URL.

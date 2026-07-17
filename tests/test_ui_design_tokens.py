@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 from modules.ui.design_tokens import (
@@ -13,6 +14,42 @@ from modules.ui.design_tokens import (
 
 
 class DesignTokenTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.workspace_css = Path("modules/ui/workspace.css").read_text(
+            encoding="utf-8"
+        )
+
+    def test_workspace_uses_exact_02_typography_and_geometry_tokens(self) -> None:
+        expected = (
+            '--as-font-heading: "Literata", "Noto Serif", "DejaVu Serif", serif;',
+            '--as-font-ui: "IBM Plex Sans", "Noto Sans", "DejaVu Sans", sans-serif;',
+            "--as-radius-control: 3px;",
+            "--as-radius-panel: 2px;",
+            "--as-radius-shell: 0px;",
+            "--as-left-rail-width: 226px;",
+            "--as-right-rail-width: 190px;",
+            "--as-control-width: 292px;",
+            "--as-topbar-height: 52px;",
+        )
+        for token in expected:
+            self.assertIn(token, self.workspace_css)
+        for legacy in (
+            "--as-radius-control: 6px;",
+            "--as-radius-panel: 8px;",
+            "--as-radius-shell: 12px;",
+        ):
+            self.assertNotIn(legacy, self.workspace_css)
+
+    def test_local_iframes_share_the_approved_ui_font_stack(self) -> None:
+        for relative_path in (
+            "modules/ui/voice_control_component/index.html",
+            "modules/ui/palette_control_component/index.html",
+            "modules/ui/slide_viewport_component/index.html",
+        ):
+            content = Path(relative_path).read_text(encoding="utf-8")
+            self.assertIn('"IBM Plex Sans"', content)
+
     def test_default_and_unknown_values_normalize_to_ivory(self) -> None:
         self.assertEqual(DEFAULT_PALETTE_ID, "ivory-study-desk")
         for value in (None, "", "unknown", object()):
