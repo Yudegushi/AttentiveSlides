@@ -155,7 +155,9 @@
         if (!initialized) {
           initialized = true;
           const stored = readStoredPalette();
-          if (stored !== normalize(args.selected)) setComponentValue(stored);
+          if (!Boolean(args.locked) && stored !== normalize(args.selected)) {
+            setComponentValue(stored);
+          }
         }
         render();
       });
@@ -165,4 +167,3 @@
   </script>
 </body>
 </html>
-

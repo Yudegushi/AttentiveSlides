@@ -258,56 +258,19 @@ class TestSidebarLayout(
             found,
         )
 
-    def test_system_status_has_two_rows(
+    def test_sidebar_uses_compact_participant_and_calibration_status(
         self,
     ) -> None:
-        column_calls = []
-
-        for node in ast.walk(
-            self.tree
-        ):
-            if not isinstance(
-                node,
-                ast.Call,
-            ):
-                continue
-
-            if dotted_name(
-                node.func
-            ) != "st.sidebar.columns":
-                continue
-
-            if not node.args:
-                continue
-
-            argument = node.args[0]
-
-            if (
-                isinstance(
-                    argument,
-                    ast.Constant,
-                )
-                and argument.value == 2
-            ):
-                column_calls.append(
-                    node.lineno
-                )
-
-        self.assertGreaterEqual(
-            len(column_calls),
-            2,
+        controls = next(
+            node for node in self.tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_render_live_controls"
         )
-
-        for required_text in (
-            '"MODE"',
-            '"CAMERA"',
-            '"MICROPHONE"',
-            '"CLOUD TUTOR"',
-        ):
-            self.assertIn(
-                required_text,
-                self.app_source,
-            )
+        source = ast.get_source_segment(self.app_source, controls) or ""
+        self.assertIn("Participant & calibration", source)
+        self.assertIn("Media ", source)
+        self.assertIn("runtime {runtime_state}", source)
+        self.assertNotIn("st.sidebar.columns", source)
 
     def test_main_workspace_status_metrics_are_absent(
         self,
@@ -376,7 +339,7 @@ class TestSidebarLayout(
             [],
         )
 
-    def test_voice_controls_are_scoped_to_live_mode(self) -> None:
+    def test_unified_flow_and_voice_controls_are_always_available(self) -> None:
         function = next(
             node
             for node in self.tree.body
@@ -384,14 +347,11 @@ class TestSidebarLayout(
             and node.name == "_render_live_controls"
         )
         source = ast.get_source_segment(self.app_source, function) or ""
-        self.assertIn('if live_mode:', source)
-        self.assertIn('"Dialogue engine"', source)
-        self.assertIn('"Speaking style"', source)
+        self.assertIn('"Conversation flow"', source)
+        self.assertIn('"Speaking control"', source)
         self.assertIn('"Answer audio"', source)
-        self.assertLess(
-            source.index('if live_mode:'),
-            source.index('"Dialogue engine"'),
-        )
+        self.assertIn('"Advanced voice settings"', source)
+        self.assertNotIn("live_mode", source)
 
 
 if __name__ == "__main__":

@@ -42,6 +42,7 @@ class TestCompactMainLayout(
         cls.source = APP_PATH.read_text(
             encoding="utf-8"
         )
+        cls.css = Path("modules/ui/workspace.css").read_text(encoding="utf-8")
 
         cls.tree = ast.parse(
             cls.source,
@@ -182,23 +183,17 @@ class TestCompactMainLayout(
             ],
         )
 
-    def test_learner_reminder_is_fixed_out_of_control_row_flow(self) -> None:
+    def test_learner_state_stays_in_the_primary_slide_actions(self) -> None:
         workspace = self.source_of("_render_slide_workspace")
         self.assertLess(
             workspace.index('with st.popover(\n                "Learner state"'),
             workspace.index("_render_learner_state_alert_periodic"),
         )
         self.assertIn('key="main_learner_state_reminder_slot"', workspace)
-        for contract in (
-            ".st-key-main_learner_state_reminder_slot",
-            "height: 0 !important",
-            "min-height: 0 !important",
-            "overflow: visible !important",
-            "position: fixed",
-            "top: 0.45rem",
-            "z-index: 1000001",
-        ):
-            self.assertIn(contract, self.source)
+        self.assertLess(
+            workspace.index('key="main_learner_state_reminder_slot"'),
+            workspace.index('key="main_slide_scale"'),
+        )
 
     def test_built_in_missing_image_uses_centered_16_by_9_placeholder(self) -> None:
         workspace = self.source_of("_render_slide_workspace")
@@ -209,8 +204,9 @@ class TestCompactMainLayout(
             workspace.index("_render_builtin_slide_placeholder()"),
             workspace.index("render_slide_viewport("),
         )
-        self.assertIn('st.session_state["main_slide_width_percent"]', placeholder)
-        self.assertIn("[margin, width_percent, margin]", placeholder)
+        width_helper = self.source_of("_left_aligned_slide_width")
+        self.assertIn('st.session_state["main_slide_width_percent"]', width_helper)
+        self.assertIn("[width_percent, 100 - width_percent]", width_helper)
         self.assertIn("attentive-built-in-stage", placeholder)
         self.assertIn("AttentiveSlides", placeholder)
         self.assertIn(
@@ -219,15 +215,15 @@ class TestCompactMainLayout(
         )
         self.assertNotIn("slide_text", placeholder)
         self.assertNotIn("Slide {", placeholder)
-        self.assertIn("aspect-ratio: 16 / 9", self.source)
+        self.assertIn("aspect-ratio: 16 / 9", self.css)
 
-    def test_interaction_area_has_three_columns(
+    def test_interaction_area_uses_the_approved_two_column_working_row(
         self,
     ) -> None:
         matches = []
 
         for call in self.calls_of(
-            "_render_manual_interaction"
+            "main"
         ):
             if dotted_name(
                 call.func
@@ -247,11 +243,15 @@ class TestCompactMainLayout(
                         ast.Tuple,
                     ),
                 )
-                and len(argument.elts) == 3
+                and len(argument.elts) == 2
             ):
-                matches.append(
-                    call.lineno
-                )
+                values = [
+                    item.value
+                    for item in argument.elts
+                    if isinstance(item, ast.Constant)
+                ]
+                if values == [1.0, 0.42]:
+                    matches.append(call.lineno)
 
         self.assertTrue(
             matches,

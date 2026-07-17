@@ -222,6 +222,34 @@ class SystemControllerTest(unittest.TestCase):
         self.assertEqual(self.controller.poll(), [])
         self.assertEqual(self.runner.contexts, [])
 
+    def test_pause_and_resume_audio_turns_preserve_media_and_sensing(self):
+        self.controller.start()
+        self.audio.emit_started(10.0)
+
+        self.controller.pause_audio_turns()
+
+        self.assertEqual(self.controller.state, RuntimeState.MONITORING)
+        self.assertEqual((self.audio.stops, self.audio.starts), (1, 1))
+        self.assertEqual((self.media.stops, self.sensing.stops), (0, 0))
+
+        self.controller.resume_audio_turns()
+
+        self.assertEqual((self.audio.stops, self.audio.starts), (1, 2))
+        self.assertEqual((self.media.stops, self.sensing.stops), (0, 0))
+
+    def test_pause_before_runtime_start_keeps_audio_stopped_until_resume(self):
+        self.controller.pause_audio_turns()
+
+        self.controller.start()
+
+        self.assertEqual(self.controller.state, RuntimeState.MONITORING)
+        self.assertEqual(self.audio.starts, 0)
+        self.assertEqual((self.media.starts, self.sensing.starts), (1, 1))
+
+        self.controller.resume_audio_turns()
+
+        self.assertEqual(self.audio.starts, 1)
+
     def test_exploding_learner_state_start_does_not_prevent_monitoring(self):
         learner_state = FakeLearnerState(explode_on_start=True)
         controller = SystemController(

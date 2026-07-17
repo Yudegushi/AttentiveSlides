@@ -250,6 +250,9 @@ class TestMainUIWidgetInventory(
         self.assertNotIn('options=["Manual", "Live"]', self.source)
         self.assertNotIn('key="main_interaction_mode"', self.source)
 
+    def test_shared_study_path_has_one_aoi_overlay_widget(self) -> None:
+        self.assertEqual(self.source.count('key="main_show_aoi_overlay"'), 1)
+
     def test_no_arrow_widgets(
         self,
     ) -> None:

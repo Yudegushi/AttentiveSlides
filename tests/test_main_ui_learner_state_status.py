@@ -206,21 +206,28 @@ class MainLearnerStateUIContractTest(unittest.TestCase):
         cls.source = Path("apps/streamlit_attentive_slides.py").read_text(
             encoding="utf-8"
         )
+        cls.css = Path("modules/ui/workspace.css").read_text(encoding="utf-8")
 
-    def test_stable_popover_is_between_enhance_and_slides(self):
+    def test_stable_popover_precedes_the_slide_stage(self):
         workspace_start = self.source.index("def _render_slide_workspace")
         workspace = self.source[workspace_start:]
         enhance = workspace.index("_render_current_slide_llm_aoi_action")
         popover = workspace.index('with st.popover(\n                "Learner state"')
         reminder = workspace.index("_render_learner_state_alert_periodic")
-        slides = workspace.index("_render_slide_selector(browser)")
+        slide_scale = workspace.index('key="main_slide_scale"')
         self.assertLess(enhance, popover)
         self.assertLess(popover, reminder)
-        self.assertLess(reminder, slides)
-        self.assertLess(popover, slides)
+        self.assertLess(reminder, slide_scale)
         self.assertIn('key="main_learner_state_popover"', workspace)
         self.assertIn('key="main_learner_state_reminder_slot"', workspace)
-        self.assertIn("[0.52, 0.33, 0.15]", workspace)
+        self.assertIn("[0.62, 0.38]", workspace)
+        main_start = self.source.index("def main()")
+        main_end = self.source.index("def _load_manifest_browser", main_start)
+        main_source = self.source[main_start:main_end]
+        self.assertLess(
+            main_source.index("_render_slide_selector(browser)"),
+            main_source.index("_render_slide_workspace("),
+        )
 
     def test_only_popover_contents_and_alert_refresh_at_one_second(self):
         self.assertIn(
@@ -233,14 +240,10 @@ class MainLearnerStateUIContractTest(unittest.TestCase):
         )
         self.assertNotIn("_render_fatigue_probability_periodic", self.source)
 
-    def test_floating_alert_has_no_layout_shift_or_pointer_capture(self):
-        self.assertIn("max-width: min(25rem, 70vw)", self.source)
-        self.assertIn("pointer-events: none", self.source)
-        self.assertIn("height: 0 !important", self.source)
-        self.assertIn("min-height: 0 !important", self.source)
-        self.assertIn("overflow: visible !important", self.source)
-        self.assertIn("position: fixed", self.source)
-        self.assertIn("z-index: 1000001", self.source)
+    def test_alert_uses_the_shared_bordered_surface_without_animation(self):
+        self.assertIn(".attentive-learner-alert", self.css)
+        self.assertIn("border: 1px solid var(--as-border-strong)", self.css)
+        self.assertNotIn("animation:", self.css)
         self.assertIn('role="status"', self.source)
 
     def test_live_popover_omits_disclaimer_while_review_retains_it(self):
@@ -253,7 +256,7 @@ class MainLearnerStateUIContractTest(unittest.TestCase):
         review_end = self.source.index("def _on_manual_region_change", review_start)
         review = self.source[review_start:review_end]
         self.assertNotIn("Model estimates; not a diagnosis.", live_contents)
-        self.assertIn("Model estimates; not a diagnosis.", review)
+        self.assertIn("Model estimates, not a diagnosis.", review)
 
 
 if __name__ == "__main__":

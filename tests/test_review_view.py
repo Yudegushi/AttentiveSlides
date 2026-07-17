@@ -197,7 +197,7 @@ class ReviewViewTests(unittest.TestCase):
         self.assertEqual(summary["Mean engagement"], UNAVAILABLE)
         self.assertEqual(summary["Mean fatigue"], UNAVAILABLE)
         self.assertEqual(summary["Top emotion"], UNAVAILABLE)
-        self.assertEqual(summary["Learner coverage"], "0%")
+        self.assertEqual(summary["Learner coverage"], UNAVAILABLE)
         self.assertTrue(all(
             metric.value == UNAVAILABLE
             for metric in view.emotion_distribution
@@ -207,6 +207,20 @@ class ReviewViewTests(unittest.TestCase):
         self.assertEqual(detail.gaze_coverage, UNAVAILABLE)
         self.assertIsNone(detail.distraction_alert_count)
         self.assertIsNone(detail.fatigue_alert_count)
+        self.assertEqual(detail.learner_coverage, UNAVAILABLE)
+
+    def test_legacy_gaze_only_review_keeps_session_time_and_marks_learner_data_missing(self) -> None:
+        view = build_review_view(review_session(
+            (),
+            (gaze_slide(3, observed=10.0, valid=5.0),),
+        ))
+        summary = {metric.label: metric.value for metric in view.summary}
+
+        self.assertEqual(summary["Study duration"], "00:30")
+        self.assertEqual(summary["Interactions"], UNAVAILABLE)
+        self.assertEqual(summary["Learner coverage"], UNAVAILABLE)
+        self.assertIsNone(view.slide_rows[0].interaction_count)
+        self.assertIsNone(view.slide_details[3].interaction_count)
 
 
 if __name__ == "__main__":

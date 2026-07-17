@@ -51,6 +51,8 @@ class VoiceControlComponentContractTests(unittest.TestCase):
     def test_global_v_focus_modifier_repeat_and_parent_guards_exist(self) -> None:
         for token in (
             "window.parent.document",
+            "const shortcutDocuments = new Set([document])",
+            "shortcutDocuments.add(window.parent.document)",
             "shortcutDocument.addEventListener",
             "shouldIgnoreShortcut",
             "event.repeat",
@@ -72,10 +74,23 @@ class VoiceControlComponentContractTests(unittest.TestCase):
             'window.addEventListener("beforeunload", teardown)',
             "safeStopPtt",
             "keepalive: true",
+            "Promise.resolve(pendingStart)",
             'shortcutDocument.removeEventListener("keydown"',
             'shortcutDocument.removeEventListener("keyup"',
             'shortcutDocument.removeEventListener("visibilitychange"',
             'shortcutWindow.removeEventListener("blur"',
+        ):
+            self.assertIn(token, self.component)
+
+    def test_ptt_command_responses_surface_nested_retryable_failures(self) -> None:
+        for token in (
+            "payload.ptt",
+            '"too_short"',
+            '"too_long"',
+            '"empty_transcript"',
+            '"stt_failed"',
+            "handleCommandResponse(await command",
+            "Please try speaking again.",
         ):
             self.assertIn(token, self.component)
 

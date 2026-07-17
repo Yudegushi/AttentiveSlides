@@ -176,7 +176,7 @@ from modules.ui.design_tokens import (
 )
 from modules.ui.palette_control_component import render_palette_control
 from modules.ui.voice_panel import VoicePanelView, build_voice_panel_view
-from modules.ui.review_view import ReviewMetric, build_review_view
+from modules.ui.review_view import UNAVAILABLE, ReviewMetric, build_review_view
 
 
 BUILT_IN_MANIFEST_PATH = (
@@ -223,6 +223,7 @@ class MainLiveResources:
     voice_events: VoiceEventHub
     single_turn_tts: SingleTurnTTSController
     study_review: StudyReviewStore
+    ingress_start_allowed: bool = True
     bound_deck_id: str | None = None
     bound_slide_id: int | None = None
     bound_aoi_signature: str | None = None
@@ -405,6 +406,15 @@ def build_main_live_resources(
         if controller is not None:
             controller.reset_audio_turn(reason)
 
+    def set_single_turn_continuous(enabled: bool) -> None:
+        controller = controller_holder.get("controller")
+        if controller is None:
+            return
+        if enabled:
+            controller.resume_audio_turns()
+        else:
+            controller.pause_audio_turns()
+
     omni_runtime = OmniVoiceRuntime(
         events=voice_events,
         target_switching=target_switching,
@@ -434,6 +444,7 @@ def build_main_live_resources(
         target_switching=target_switching,
         publish_single_turn_transcript=publish_fallback_transcript,
         on_single_turn_boundary=reset_single_turn_audio,
+        on_single_turn_continuous_changed=set_single_turn_continuous,
         resolve_initial_target=resolve_initial_omni_target,
     )
     voice_holder["voice"] = voice
@@ -477,8 +488,6 @@ def build_main_live_resources(
         capture_html=capture_html,
         voice_transport=voice,
     )
-    if start_ingress:
-        service.ensure_started()
     return MainLiveResources(
         runtime=runtime,
         provider=provider,
@@ -492,6 +501,7 @@ def build_main_live_resources(
         voice_events=voice_events,
         single_turn_tts=single_turn_tts,
         study_review=study_review,
+        ingress_start_allowed=start_ingress,
     )
 
 
@@ -1110,6 +1120,11 @@ def _finish_study_review(resources: MainLiveResources, deck_id: str) -> None:
 
 
 def _open_latest_review(resources: MainLiveResources) -> None:
+    if resources.study_review.lifecycle().status in {"active", "finish_pending"}:
+        st.session_state["main_review_error"] = (
+            "Finish the active Study before opening a saved review."
+        )
+        return
     review = resources.study_review.latest()
     if review is None:
         warnings = resources.study_review.load_warnings()
@@ -1239,13 +1254,21 @@ def _render_live_controls(
             locked=lifecycle.status in {"active", "finish_pending"},
             key="main_palette_control",
         )
-    if palette_value is not None and palette_value != selected_palette:
+    if (
+        lifecycle.status == "idle"
+        and palette_value is not None
+        and palette_value != selected_palette
+    ):
         st.session_state["main_ui_palette"] = normalize_palette_id(palette_value)
         st.rerun()
 
     enabled = _media_runtime_requested()
+    if enabled and resources.ingress_start_allowed:
+        resources.service.ensure_started()
     resources.service.set_master_enabled(enabled)
     resources.service.reconcile_once()
+    if not enabled and resources.service.server_thread is not None:
+        resources.service.shutdown()
 
     runtime_state = resources.runtime.controller.state.value
     session = resources.ingress.session_snapshot()
@@ -1306,6 +1329,7 @@ def _render_live_controls(
             ),
             key="main_open_latest_review",
             width="stretch",
+            disabled=lifecycle.status in {"active", "finish_pending"},
             on_click=_open_latest_review,
             args=(resources,),
         )
@@ -1354,24 +1378,26 @@ def _selected_study_review(resources: MainLiveResources):
 
 def _review_session_caption(review: Any) -> str:
     summary = review.learner_state_summary
+    learner_available = bool(summary.slides)
     engagement = (
-        "--"
+        UNAVAILABLE
         if summary.mean_engaged_probability is None
         else f"{summary.mean_engaged_probability:.0%}"
     )
     fatigue = (
-        "--"
+        UNAVAILABLE
         if summary.mean_fatigue_probability is None
         else f"{summary.mean_fatigue_probability:.0%}"
     )
     emotion = (
-        "--"
+        UNAVAILABLE
         if summary.top_emotion is None
         else f"{summary.top_emotion} {summary.top_emotion_probability:.0%}"
     )
     return (
-        f"Study {_format_review_duration(summary.study_seconds)} · "
-        f"{summary.interaction_count} interactions · Engaged {engagement} · "
+        f"Study {_format_review_duration(review.ended_at_epoch - review.started_at_epoch)} · "
+        f"{summary.interaction_count if learner_available else UNAVAILABLE} interactions · "
+        f"Engaged {engagement} · "
         f"Top emotion {emotion} · Fatigue {fatigue}"
     )
 
@@ -1416,15 +1442,20 @@ def _render_review_sidebar(resources: MainLiveResources) -> None:
         )
 
     st.sidebar.markdown("### Palette")
+    lifecycle = resources.study_review.lifecycle()
     with st.sidebar:
         selected_palette = str(st.session_state["main_ui_palette"])
         palette_value = render_palette_control(
             selected=selected_palette,
             palette_tokens=palette_semantic(selected_palette),
-            locked=False,
+            locked=lifecycle.status in {"active", "finish_pending"},
             key="main_review_palette_control",
         )
-    if palette_value is not None and palette_value != selected_palette:
+    if (
+        lifecycle.status == "idle"
+        and palette_value is not None
+        and palette_value != selected_palette
+    ):
         st.session_state["main_ui_palette"] = normalize_palette_id(palette_value)
         st.rerun()
 
@@ -1520,11 +1551,16 @@ def _render_review_workspace(
     with st.container(key="main_review_slide_overview"):
         st.markdown("### Slide-order overview")
         for row in review_view.slide_rows:
+            interaction_count = (
+                UNAVAILABLE
+                if row.interaction_count is None
+                else str(row.interaction_count)
+            )
             st.markdown(
                 '<div class="as-review-slide-row">'
                 f'<strong>Slide {row.slide_id}</strong>'
                 f'<span>Study {html.escape(row.study_time)}</span>'
-                f'<span>Interactions {row.interaction_count}</span>'
+                f'<span>Interactions {html.escape(interaction_count)}</span>'
                 f'<span>Engagement {html.escape(row.engagement)}</span>'
                 f'<span>Fatigue {html.escape(row.fatigue)}</span>'
                 f'<span>{html.escape(row.top_emotion)}</span>'
@@ -1645,9 +1681,9 @@ def _render_review_workspace(
 
     with detail_column:
         interaction_value = (
-            str(detail.interaction_count)
-            if detail.study_time != "Unavailable"
-            else "Unavailable"
+            UNAVAILABLE
+            if detail.interaction_count is None
+            else str(detail.interaction_count)
         )
         count_or_unavailable = lambda value: (
             "Unavailable" if value is None else str(value)
@@ -2448,10 +2484,8 @@ def _render_target_column(
         on_change=_on_target_scope_change,
     )
 
-    st.checkbox(
-        "Show AOI overlay",
-        key="main_show_aoi_overlay",
-        on_change=_on_overlay_change,
+    st.caption(
+        "Attention regions are controlled from the left settings rail."
     )
 
     if (

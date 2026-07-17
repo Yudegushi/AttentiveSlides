@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from modules.system.main_ui_state import MainUISlide
+from modules.ui.design_tokens import palette_semantic
 
 
 def valid_payload():
@@ -110,6 +111,7 @@ class SlideViewportComponentContractTest(unittest.TestCase):
                 drawing_enabled=False,
                 show_aoi_overlay=False,
                 display_width_percent=100,
+                palette_tokens=palette_semantic("ivory-study-desk"),
                 key="test-viewport",
             )
 
@@ -144,6 +146,7 @@ class SlideViewportComponentContractTest(unittest.TestCase):
                         drawing_enabled=False,
                         show_aoi_overlay=False,
                         display_width_percent=75,
+                        palette_tokens=palette_semantic("ivory-study-desk"),
                         key="test-viewport",
                     )
 
@@ -160,7 +163,7 @@ class SlideViewportComponentContractTest(unittest.TestCase):
     def test_static_component_uses_parent_viewport_protocol(self):
         component = self.component_source()
 
-        self.assertIn("margin-inline: auto", component)
+        self.assertIn("margin-inline: 0 auto", component)
         self.assertIn("display_width_percent", component)
         self.assertIn("slide.style.width", component)
         self.assertIn("image.getBoundingClientRect()", component)

@@ -34,6 +34,7 @@ class SystemController:
         self._deferred_sensing_slide_id: int | None = None
         self._active_context: Any | None = None
         self._ignored_started_at: set[float] = set()
+        self._audio_turns_enabled = True
         self.busy_turn_count = 0
         register = getattr(self.audio_worker, "set_turn_callbacks", None)
         if callable(register):
@@ -67,7 +68,10 @@ class SystemController:
             self._start_learner_state_best_effort()
             self.sensing_worker.set_slide(self._current_slide_id)
             self.sensing_worker.start()
-            self.audio_worker.start()
+            with self._lock:
+                audio_turns_enabled = self._audio_turns_enabled
+            if audio_turns_enabled:
+                self.audio_worker.start()
         except Exception:
             with self._lock:
                 self._state = RuntimeState.ERROR
@@ -127,6 +131,34 @@ class SystemController:
         # sensing worker, learner-state worker, and public port.
         self.audio_worker.stop()
         with self._lock:
+            if self._state == RuntimeState.STOPPED:
+                return
+        with self._lock:
+            audio_turns_enabled = self._audio_turns_enabled
+        if audio_turns_enabled:
+            self.audio_worker.start()
+        with self._lock:
+            if self._state == RuntimeState.STARTING and audio_turns_enabled:
+                self._state = RuntimeState.MONITORING
+        self._apply_deferred_sensing_slide()
+
+    def pause_audio_turns(self) -> None:
+        """Pause single-turn VAD without stopping capture or sensing."""
+        with self._lock:
+            self._audio_turns_enabled = False
+            if self._state == RuntimeState.STOPPED:
+                return
+            preserve_confirmation = self._state == RuntimeState.WAITING_CONFIRMATION
+            if not preserve_confirmation:
+                self._state = RuntimeState.MONITORING
+                self._active_context = None
+            self._ignored_started_at.clear()
+        self.audio_worker.stop()
+
+    def resume_audio_turns(self) -> None:
+        """Resume single-turn VAD while preserving the shared media graph."""
+        with self._lock:
+            self._audio_turns_enabled = True
             if self._state == RuntimeState.STOPPED:
                 return
         self.audio_worker.start()

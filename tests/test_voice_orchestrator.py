@@ -91,6 +91,7 @@ class VoiceOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.switching = TargetSwitchController()
         self.published = []
         self.boundaries = []
+        self.continuous_changes = []
         self.initial_target = None
         self.orchestrator = VoiceOrchestrator(
             events=self.events,
@@ -99,6 +100,7 @@ class VoiceOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             target_switching=self.switching,
             publish_single_turn_transcript=self.published.append,
             on_single_turn_boundary=self.boundaries.append,
+            on_single_turn_continuous_changed=self.continuous_changes.append,
             resolve_initial_target=lambda _target: self.initial_target,
         )
         self.orchestrator.attach_loop(asyncio.get_running_loop())
@@ -115,6 +117,13 @@ class VoiceOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         await self.orchestrator.accept_pcm("session", b"pcm")
         self.assertFalse(any(call[0] == "pcm" for call in self.ptt.calls))
         self.assertFalse(any(call[0] == "pcm" for call in self.omni.calls))
+
+    async def test_single_turn_hands_free_pause_and_resume_control_vad_worker(self) -> None:
+        await self.orchestrator.handle_http_command("continuous/start", "session")
+        await self.orchestrator.handle_http_command("continuous/start", "session")
+        await self.orchestrator.handle_http_command("continuous/stop", "session")
+
+        self.assertEqual(self.continuous_changes, [True, False])
 
     async def test_single_turn_ptt_consumes_only_the_active_button_session(self) -> None:
         self.orchestrator.update_preferences(

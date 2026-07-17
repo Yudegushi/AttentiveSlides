@@ -37,6 +37,7 @@ class VoiceOrchestrator:
         publish_single_turn_transcript: Callable[[str], None],
         on_target_changed: Callable[[TargetBinding], None] | None = None,
         on_single_turn_boundary: Callable[[str], None] | None = None,
+        on_single_turn_continuous_changed: Callable[[bool], None] | None = None,
         resolve_initial_target: Callable[
             [TargetBinding], TargetBinding | None
         ] | None = None,
@@ -48,6 +49,9 @@ class VoiceOrchestrator:
         self._publish_single_turn_transcript = publish_single_turn_transcript
         self._on_target_changed = on_target_changed or (lambda target: None)
         self._on_single_turn_boundary = on_single_turn_boundary or (lambda reason: None)
+        self._on_single_turn_continuous_changed = (
+            on_single_turn_continuous_changed or (lambda enabled: None)
+        )
         self._resolve_initial_target = resolve_initial_target
         self._lock = RLock()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -80,6 +84,7 @@ class VoiceOrchestrator:
             )
         ):
             self._on_single_turn_boundary("voice routing changed")
+            self._on_single_turn_continuous_changed(False)
         self._submit(lambda: self._apply_preferences(previous, preferences))
 
     def update_target(self, target: TargetBinding) -> None:
@@ -171,10 +176,16 @@ class VoiceOrchestrator:
             if preferences.engine is VoiceEngine.OMNI and not already_requested:
                 assert target is not None
                 await self._ensure_omni(target, preferences)
+            elif preferences.engine is VoiceEngine.SINGLE_TURN and not already_requested:
+                self._on_single_turn_continuous_changed(True)
         elif command == "continuous/stop":
-            self._continuous_requested = False
+            with self._lock:
+                was_requested = self._continuous_requested
+                self._continuous_requested = False
             if preferences.engine is VoiceEngine.OMNI:
                 await self._omni.stop_session("continuous stopped")
+            elif was_requested:
+                self._on_single_turn_continuous_changed(False)
         elif command == "target/confirm":
             if preferences.engine is not VoiceEngine.OMNI:
                 raise ValueError("target switching belongs to Omni mode")
@@ -222,8 +233,16 @@ class VoiceOrchestrator:
 
     async def stop(self, reason: str) -> None:
         with self._lock:
+            preferences = self._preferences
+            continuous_requested = self._continuous_requested
             self._active_session_id = None
             self._continuous_requested = False
+        if (
+            preferences.engine is VoiceEngine.SINGLE_TURN
+            and preferences.speech_mode is SpeechMode.CONTINUOUS
+            and continuous_requested
+        ):
+            self._on_single_turn_continuous_changed(False)
         await self._single_turn_ptt.cancel(reason)
         await self._omni.stop_session(reason)
         await self._events.clear_playback()

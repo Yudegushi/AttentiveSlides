@@ -22,7 +22,7 @@ class ReviewMetric:
 class ReviewSlideRowView:
     slide_id: int
     study_time: str
-    interaction_count: int
+    interaction_count: int | None
     engagement: str
     fatigue: str
     top_emotion: str
@@ -39,7 +39,7 @@ class ReviewAoiDwellView:
 class ReviewSlideDetailView:
     slide_id: int
     study_time: str
-    interaction_count: int
+    interaction_count: int | None
     engagement: str
     fatigue: str
     top_emotion_label: str
@@ -96,13 +96,21 @@ def build_review_view(review: StudyReviewSession) -> ReviewSessionView:
     gaze_by_id = {slide.slide_id: slide for slide in review.gaze_review.slides}
     slide_ids = sorted(set(learner_by_id) | set(gaze_by_id))
 
-    study_seconds = learner_summary.study_seconds
+    study_seconds = max(
+        0.0,
+        float(review.ended_at_epoch) - float(review.started_at_epoch),
+    )
+    learner_available = bool(learner_summary.slides)
     observed_seconds = sum(
         slide.observed_seconds for slide in learner_summary.slides
     )
     summary = (
         ReviewMetric("Study duration", _duration(study_seconds)),
-        ReviewMetric("Interactions", str(learner_summary.interaction_count)),
+        ReviewMetric(
+            "Interactions",
+            str(learner_summary.interaction_count)
+            if learner_available else UNAVAILABLE,
+        ),
         ReviewMetric("Mean engagement", _percent(
             learner_summary.mean_engaged_probability
         )),
@@ -115,7 +123,8 @@ def build_review_view(review: StudyReviewSession) -> ReviewSessionView:
         )),
         ReviewMetric(
             "Learner coverage",
-            _coverage(observed_seconds, study_seconds),
+            _coverage(observed_seconds, study_seconds)
+            if learner_available and observed_seconds > 0.0 else UNAVAILABLE,
             f"{_seconds(observed_seconds)} observed",
         ),
     )
@@ -163,7 +172,7 @@ def build_review_view(review: StudyReviewSession) -> ReviewSessionView:
         learner = learner_by_id.get(slide_id)
         gaze = gaze_by_id.get(slide_id)
         study_time = _duration(learner.study_seconds) if learner else UNAVAILABLE
-        interaction_count = learner.interaction_count if learner else 0
+        interaction_count = learner.interaction_count if learner else None
         engagement = _percent(
             learner.mean_engaged_probability
             if learner and learner.engagement_observed_seconds > 0.0 else None
@@ -231,7 +240,7 @@ def build_review_view(review: StudyReviewSession) -> ReviewSessionView:
             ),
             learner_coverage=(
                 _coverage(learner.observed_seconds, learner.study_seconds)
-                if learner else UNAVAILABLE
+                if learner and learner.observed_seconds > 0.0 else UNAVAILABLE
             ),
             valid_gaze_duration=(
                 _seconds(gaze.valid_gaze_seconds)

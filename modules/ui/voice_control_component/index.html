@@ -135,12 +135,12 @@
       let tornDown = false;
       const scheduledNodes = new Set();
 
-      let shortcutDocument = document;
-      let shortcutWindow = window;
+      const shortcutDocuments = new Set([document]);
+      const shortcutWindows = new Set([window]);
       try {
         if (window.parent && window.parent.document) {
-          shortcutDocument = window.parent.document;
-          shortcutWindow = window.parent;
+          shortcutDocuments.add(window.parent.document);
+          shortcutWindows.add(window.parent);
         }
       } catch (_) {}
 
@@ -249,8 +249,23 @@
         const payload = message.payload || {};
         if (message.type === "audio.config") return;
         if (message.type === "voice.snapshot" || message.type === "voice.state") {
-          const [title, detail, meter] = stateCopy(payload.state);
-          updateStatus(title, detail, meter);
+          const pttState = payload.ptt && typeof payload.ptt === "object"
+            ? payload.ptt
+            : null;
+          const pttStatus = pttState ? String(pttState.status || "") : "";
+          if (["too_short", "too_long", "empty_transcript", "stt_failed"].includes(pttStatus)) {
+            updateStatus(
+              "Voice input needs attention",
+              String(pttState.message || "Please try speaking again."),
+              0,
+              true
+            );
+          } else {
+            const [title, detail, meter] = stateCopy(
+              pttStatus === "recording" ? "recording" : payload.state
+            );
+            updateStatus(title, detail, meter);
+          }
           if (payload.pending_target) {
             switchMessage.textContent = "Switch to "
               + String(payload.pending_target.label || "this target") + "?";
@@ -273,6 +288,10 @@
           switchBox.hidden = false;
         }
         if (message.type === "target.switch.completed") switchBox.hidden = true;
+      }
+
+      function handleCommandResponse(payload) {
+        handleJson({ type: "voice.snapshot", payload: payload || {} });
       }
 
       function websocketUrl(session) {
@@ -337,7 +356,7 @@
             await ensureAudioContext();
             return command("/attentive-voice/ptt/start");
           })();
-          await pttStartPromise;
+          handleCommandResponse(await pttStartPromise);
         } catch (error) {
           pttActive = false;
           keyboardPttActive = false;
@@ -376,7 +395,7 @@
         updateStatus("Transcribing", "Preparing your question", 32);
         try {
           if (pendingStart) await pendingStart;
-          await command("/attentive-voice/ptt/stop");
+          handleCommandResponse(await command("/attentive-voice/ptt/stop"));
         } catch (error) {
           updateStatus("Voice input needs attention", error.message, 0, true);
         }
@@ -430,7 +449,12 @@
       }
 
       function onVisibilityChange() {
-        if (shortcutDocument.hidden) onShortcutBlur();
+        for (const shortcutDocument of shortcutDocuments) {
+          if (shortcutDocument.hidden) {
+            onShortcutBlur();
+            return;
+          }
+        }
       }
 
       async function setContinuousPaused(paused) {
@@ -471,6 +495,9 @@
         ensureSocket();
         if (args.speech_mode === "continuous" && continuousPaused) {
           void setContinuousPaused(false);
+        } else {
+          const [title, detail, meter] = stateCopy("ready");
+          updateStatus(title, detail, meter);
         }
       });
       confirm.addEventListener("click", () => {
@@ -484,10 +511,14 @@
         });
       });
 
-      shortcutDocument.addEventListener("keydown", onShortcutKeydown);
-      shortcutDocument.addEventListener("keyup", onShortcutKeyup);
-      shortcutDocument.addEventListener("visibilitychange", onVisibilityChange);
-      shortcutWindow.addEventListener("blur", onShortcutBlur);
+      for (const shortcutDocument of shortcutDocuments) {
+        shortcutDocument.addEventListener("keydown", onShortcutKeydown);
+        shortcutDocument.addEventListener("keyup", onShortcutKeyup);
+        shortcutDocument.addEventListener("visibilitychange", onVisibilityChange);
+      }
+      for (const shortcutWindow of shortcutWindows) {
+        shortcutWindow.addEventListener("blur", onShortcutBlur);
+      }
 
       async function render(nextArgs) {
         const previousMode = args.speech_mode;
@@ -527,13 +558,26 @@
       function teardown() {
         if (tornDown) return;
         tornDown = true;
-        shortcutDocument.removeEventListener("keydown", onShortcutKeydown);
-        shortcutDocument.removeEventListener("keyup", onShortcutKeyup);
-        shortcutDocument.removeEventListener("visibilitychange", onVisibilityChange);
-        shortcutWindow.removeEventListener("blur", onShortcutBlur);
+        for (const shortcutDocument of shortcutDocuments) {
+          shortcutDocument.removeEventListener("keydown", onShortcutKeydown);
+          shortcutDocument.removeEventListener("keyup", onShortcutKeyup);
+          shortcutDocument.removeEventListener("visibilitychange", onVisibilityChange);
+        }
+        for (const shortcutWindow of shortcutWindows) {
+          shortcutWindow.removeEventListener("blur", onShortcutBlur);
+        }
         if (reconnectTimer !== null) window.clearInterval(reconnectTimer);
         clearPlayback();
-        if (pttActive || pttStartPromise) keepaliveStop("/attentive-voice/ptt/stop");
+        const pendingStart = pttStartPromise;
+        if (pttActive || pendingStart) {
+          if (pendingStart) {
+            void Promise.resolve(pendingStart)
+              .catch(() => null)
+              .then(() => keepaliveStop("/attentive-voice/ptt/stop"));
+          } else {
+            keepaliveStop("/attentive-voice/ptt/stop");
+          }
+        }
         if (args.speech_mode === "continuous" && !continuousPaused) {
           keepaliveStop("/attentive-voice/continuous/stop");
         }

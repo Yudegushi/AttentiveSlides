@@ -55,6 +55,10 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
         self.assertIn("_media_runtime_requested()", self.functions["_learner_state_view"])
         self.assertIn("_media_runtime_requested()", self.functions["_render_tutor_result"])
         self.assertIn("_media_runtime_requested()", self.functions["_render_manual_interaction"])
+        builder = self.functions["build_main_live_resources"]
+        self.assertNotIn("service.ensure_started()", builder)
+        self.assertIn("resources.service.ensure_started()", controls)
+        self.assertIn("resources.service.shutdown()", controls)
 
     def test_palette_confirmation_and_slide_rail_defaults(self) -> None:
         defaults = build_main_live_defaults()
@@ -67,6 +71,10 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
             "modules/ui/palette_control_component/index.html"
         ).read_text(encoding="utf-8"))
         self.assertIn("render_palette_control", controls)
+        palette = Path(
+            "modules/ui/palette_control_component/index.html"
+        ).read_text(encoding="utf-8")
+        self.assertIn("!Boolean(args.locked)", palette)
 
     def test_visible_shell_uses_flow_speaking_and_advanced_sections(self) -> None:
         controls = self.functions["_render_live_controls"]

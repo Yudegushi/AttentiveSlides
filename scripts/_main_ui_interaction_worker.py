@@ -311,51 +311,28 @@ def run_sidebar_scenario() -> dict[str, Any]:
         )
 
     for index in range(2):
-        require_widget(
+        flow = require_widget(
             app.sidebar,
-            "checkbox",
-            "main_history_enabled",
-        ).uncheck()
-
-        run_step(
-            app,
-            completed,
-            f"history_off_{index}",
+            "radio",
+            "main_interaction_flow",
         )
+        flow.set_value("dialogue")
+        run_step(app, completed, f"dialogue_on_{index}")
+        if not app.session_state["main_history_enabled"]:
+            raise AssertionError("Dialogue must enable bounded history.")
 
-        if (
-            app.session_state[
-                "main_history_max_items"
-            ]
-            != 4
-        ):
-            raise AssertionError(
-                "Disabling history changed "
-                "the fixed limit."
-            )
-
-        require_widget(
+        flow = require_widget(
             app.sidebar,
-            "checkbox",
-            "main_history_enabled",
-        ).check()
-
-        run_step(
-            app,
-            completed,
-            f"history_on_{index}",
+            "radio",
+            "main_interaction_flow",
         )
+        flow.set_value("one_turn")
+        run_step(app, completed, f"dialogue_off_{index}")
+        if app.session_state["main_history_enabled"]:
+            raise AssertionError("One-turn must disable tutor history.")
 
-        if (
-            app.session_state[
-                "main_history_max_items"
-            ]
-            != 4
-        ):
-            raise AssertionError(
-                "Enabling history changed "
-                "the fixed limit."
-            )
+        if app.session_state["main_history_max_items"] != 4:
+            raise AssertionError("Changing flow changed the fixed history limit.")
 
     history_limit_sliders = [
         slider
@@ -387,6 +364,7 @@ def run_sidebar_scenario() -> dict[str, Any]:
                     "main_history_enabled"
                 ]
             ),
+            "interaction_flow": app.session_state["main_interaction_flow"],
             "history_max_items": (
                 app.session_state[
                     "main_history_max_items"

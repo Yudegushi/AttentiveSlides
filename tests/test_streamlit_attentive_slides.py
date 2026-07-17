@@ -137,15 +137,19 @@ class TestStreamlitAttentiveSlides(
         self.assertNotIn("render_slide_viewport", source)
         self.assertNotIn("parse_component_geometry", source)
 
-    def test_review_is_minimal_and_region_times_are_collapsed(self):
+    def test_review_uses_approved_summary_overview_and_detail_sections(self):
         source = self.function_source("_render_review_workspace")
-        self.assertIn("Valid gaze", source)
-        self.assertIn("Data coverage", source)
-        self.assertIn('st.expander("Learner state", expanded=False)', source)
-        self.assertIn("Region times", source)
-        self.assertIn("expanded=False", source)
-        self.assertNotIn("Most attended", source)
-        self.assertNotIn("Least attended", source)
+        for label in (
+            "Session Summary",
+            "Learner State Overview",
+            "Slide-order overview",
+            "Selected Slide Detail",
+            "AOI dwell",
+        ):
+            self.assertIn(label, source)
+        self.assertIn("build_review_view(review)", source)
+        self.assertNotIn('st.expander("Learner state"', source)
+        self.assertNotIn('st.expander("Region times"', source)
 
     def test_review_history_selector_uses_stable_session_ids_newest_first(self):
         source = self.function_source("_render_review_sidebar")
@@ -185,40 +189,41 @@ class TestStreamlitAttentiveSlides(
     def test_open_latest_selects_newest_valid_review(self):
         source = self.function_source("_open_latest_review")
         self.assertEqual(source.count("resources.study_review.latest()"), 1)
+        self.assertIn("resources.study_review.lifecycle()", source)
+        self.assertIn('{"active", "finish_pending"}', source)
+        self.assertIn("Finish the active Study", source)
         self.assertIn('main_review_session"] = review.session_id', source)
         self.assertNotIn("latest.json", source)
 
-    def test_review_state_summary_follows_gaze_coverage_and_precedes_regions(self):
+    def test_review_sections_follow_the_approved_information_hierarchy(self):
         source = self.function_source("_render_review_workspace")
-        coverage = source.index("Valid gaze")
-        learner = source.index('st.expander("Learner state"')
-        regions = source.index('st.expander("Region times"')
-        self.assertLess(coverage, learner)
-        self.assertLess(learner, regions)
+        positions = [
+            source.index(label)
+            for label in (
+                "Session Summary",
+                "Learner State Overview",
+                "Slide-order overview",
+                "Selected Slide Detail",
+                "AOI dwell",
+            )
+        ]
+        self.assertEqual(positions, sorted(positions))
         for expected in (
             "Study time",
             "Interactions",
-            "Engaged",
+            "Mean engagement",
             "Top emotion",
-            "Fatigue",
-            "Alerts: distraction",
-            "Model estimates; not a diagnosis.",
+            "Mean fatigue",
+            "Distraction alerts",
+            "Fatigue alerts",
+            "Model estimates, not a diagnosis.",
         ):
             self.assertIn(expected, source)
-        for forbidden in (
-            "AOI entries",
-            "Cognitive load",
-            "Emotion table",
-            "Emotion alert",
-        ):
-            self.assertNotIn(forbidden, source)
 
     def test_review_state_empty_copy_keeps_gaze_review(self):
         source = self.function_source("_render_review_workspace")
-        self.assertIn(
-            "No learner-state estimate was available for this slide",
-            source,
-        )
+        self.assertIn("build_review_view(review)", source)
+        self.assertIn("No valid gaze captured", source)
         self.assertIn("render_review_slide", source)
         self.assertIn("Show heatmap", source)
 
@@ -232,27 +237,36 @@ class TestStreamlitAttentiveSlides(
         workspace = self.function_source("_render_review_workspace")
         sidebar = self.function_source("_render_review_sidebar")
         self.assertLess(
-            workspace.index("_review_session_caption(review)"),
+            workspace.index("build_review_view(review)"),
             workspace.index("review.deck_id != view.deck_id"),
         )
+        self.assertIn("_review_session_caption(review)", sidebar)
         self.assertIn("main_review_download_json", sidebar)
         self.assertIn("main_review_delete", sidebar)
 
     def test_live_sidebar_exposes_review_actions(self):
-        source = self.function_source("_render_live_controls")
-        self.assertIn("Start study", source)
-        self.assertIn("End study & review", source)
-        self.assertIn("Open latest review", source)
-        self.assertEqual(source.count("resources.study_review.lifecycle()"), 1)
-        self.assertIn("load_warnings()", source)
+        controls = self.function_source("_render_live_controls")
+        header = self.function_source("_render_header")
+        self.assertIn("Start study", header)
+        self.assertIn("End study & review", header)
+        self.assertIn("Open latest review", controls)
+        self.assertIn('disabled=lifecycle.status in {"active", "finish_pending"}', controls)
+        self.assertIn("load_warnings()", controls)
+
+    def test_palette_changes_are_defensively_ignored_while_study_is_active(self):
+        controls = self.function_source("_render_live_controls")
+        review_sidebar = self.function_source("_render_review_sidebar")
+        for source in (controls, review_sidebar):
+            self.assertIn('lifecycle.status == "idle"', source)
+            self.assertIn('{"active", "finish_pending"}', source)
 
     def test_study_buttons_follow_one_atomic_lifecycle_snapshot(self):
-        source = self.function_source("_render_live_controls")
+        source = self.function_source("_render_header")
         self.assertIn('key="main_start_study"', source)
-        self.assertIn('lifecycle.status != "idle"', source)
+        self.assertIn('lifecycle.status == "idle"', source)
         self.assertIn('key="main_end_study_review"', source)
         self.assertIn('{"active", "finish_pending"}', source)
-        self.assertIn('args=(resources, lifecycle_deck_id or "")', source)
+        self.assertIn('args=(resources, lifecycle.deck_id or "")', source)
         self.assertNotIn("is_armed", source)
 
     def test_live_sidebar_preserves_authoritative_deck_mismatch(self):
@@ -328,7 +342,7 @@ class TestStreamlitAttentiveSlides(
         header = self.function_source("_render_header")
         self.assertEqual(
             header.count(
-                '<span class="attentive-top-title">AttentiveSlides</span>'
+                '<div class="as-topbar__identity">AttentiveSlides</div>'
             ),
             1,
         )
@@ -434,10 +448,10 @@ class TestStreamlitAttentiveSlides(
             ordered,
             sorted(ordered),
         )
-        workspace = self.function_source("_render_slide_workspace")
+        main_source = self.function_source("main")
         self.assertLess(
-            workspace.index("_render_slide_selector(browser)"),
-            workspace.index("_render_navigation(browser, view)"),
+            main_source.index("_render_slide_selector(browser)"),
+            main_source.index("_render_slide_workspace("),
         )
 
     def test_slide_workspace_heading_removed(
@@ -695,7 +709,7 @@ class TestStreamlitAttentiveSlides(
         self.assertIn("main_confirmed_interaction", periodic)
         self.assertIn("clear_match", periodic)
         self.assertLess(
-            periodic.index("_render_live_interaction"),
+            periodic.index("_render_unified_interaction"),
             periodic.index("render_live_debug_bridge"),
         )
         self.assertNotIn("main_live_debug_match", self.source)
@@ -741,11 +755,11 @@ class TestStreamlitAttentiveSlides(
     def test_live_fragment_runs_only_while_media_is_enabled(self) -> None:
         interaction = self.function_source("_render_manual_interaction")
 
-        self.assertIn("main_live_master_enabled", interaction)
-        self.assertIn("_render_live_interaction", interaction)
-        master_check = interaction.index("main_live_master_enabled")
+        self.assertIn("_media_runtime_requested()", interaction)
+        self.assertIn("_render_unified_interaction", interaction)
+        master_check = interaction.index("_media_runtime_requested()")
         periodic = interaction.index("_render_live_periodic", master_check)
-        inactive = interaction.index("_render_live_interaction", periodic)
+        inactive = interaction.index("_render_unified_interaction", periodic)
 
         self.assertLess(master_check, periodic)
         self.assertLess(periodic, inactive)
@@ -936,11 +950,13 @@ class TestStreamlitAttentiveSlides(
         self.assertLess(provider_position, voice_position)
         self.assertIn("resources.bound_voice_target_signature = None", binding)
 
-    def test_omni_ui_preserves_three_column_interaction_layout(self) -> None:
-        source = self.function_source("_render_omni_interaction")
-        self.assertIn("st.columns", source)
-        self.assertIn("[1.05, 1.20, 1.35]", source)
+    def test_all_flows_share_one_attention_and_voice_panel(self) -> None:
+        source = self.function_source("_render_unified_interaction")
+        self.assertIn("Attention & Voice", source)
         self.assertIn("_render_voice_component(view)", source)
+        self.assertIn("_render_target_column(view)", source)
+        self.assertIn("_render_intent_column(view)", source)
+        self.assertNotIn("main_interaction_mode", source)
 
     def test_single_turn_tts_is_text_first_and_uses_the_cached_controller(self) -> None:
         result = self.function_source("_render_tutor_result")
@@ -949,7 +965,7 @@ class TestStreamlitAttentiveSlides(
             result.index("tts_controller.synthesize_once("),
         )
         self.assertIn("st.audio", result)
-        self.assertIn('main_interaction_mode") == "Live"', result)
+        self.assertIn("_media_runtime_requested()", result)
         self.assertIn('main_voice_engine") == "single_turn"', result)
         builder = self.function_source("build_main_live_resources")
         self.assertEqual(builder.count("SingleTurnTTSController("), 1)
