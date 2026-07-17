@@ -3022,6 +3022,9 @@ def _render_slide_workspace(
             display_width_percent=int(
                 st.session_state["main_slide_width_percent"]
             ),
+            palette_tokens=palette_semantic(
+                st.session_state["main_ui_palette"]
+            ),
             clear_server_match=(
                 not isinstance(
                     st.session_state.get("main_live_proposal"),

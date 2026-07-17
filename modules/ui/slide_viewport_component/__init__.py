@@ -6,11 +6,12 @@ import base64
 import mimetypes
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import streamlit.components.v1 as components
 
 from modules.system.main_ui_state import MainUISlide
+from modules.ui.design_tokens import SEMANTIC_KEYS
 
 
 _COMPONENT: Any = None
@@ -24,6 +25,7 @@ def render_slide_viewport(
     drawing_enabled: bool,
     show_aoi_overlay: bool,
     display_width_percent: int,
+    palette_tokens: Mapping[str, str],
     key: str,
     clear_server_match: bool = False,
 ) -> dict[str, object] | None:
@@ -39,6 +41,13 @@ def render_slide_viewport(
         + base64.b64encode(image_path.read_bytes()).decode("ascii")
     )
     bounded_width = max(50, min(100, int(display_width_percent)))
+    missing = set(SEMANTIC_KEYS) - set(palette_tokens)
+    if missing:
+        raise ValueError("palette_tokens must contain every semantic token")
+    safe_tokens = {
+        name: str(palette_tokens[name])
+        for name in SEMANTIC_KEYS
+    }
     value: Any = _component()(
         deck_id=deck_id,
         slide_id=slide.slide_id,
@@ -56,6 +65,7 @@ def render_slide_viewport(
         show_aoi_overlay=bool(show_aoi_overlay),
         clear_server_match=bool(clear_server_match),
         display_width_percent=bounded_width,
+        palette_tokens=safe_tokens,
         default={"event": "mounted"},
         key=key,
     )

@@ -22,6 +22,12 @@ class TestSlidePreviewCanvas(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = APP_PATH.read_text(encoding="utf-8")
+        cls.viewport = Path(
+            "modules/ui/slide_viewport_component/index.html"
+        ).read_text(encoding="utf-8")
+        cls.viewport_wrapper = Path(
+            "modules/ui/slide_viewport_component/__init__.py"
+        ).read_text(encoding="utf-8")
         cls.tree = ast.parse(cls.source, filename=str(APP_PATH))
         cls.functions = {
             node.name: node
@@ -82,6 +88,49 @@ class TestSlidePreviewCanvas(unittest.TestCase):
         self.assertIn("Manual region", rendered)
         self.assertIn("format_func=_target_scope_label", rendered)
         self.assertNotIn('options=[\'Use whole slide\'', rendered)
+
+    def test_live_gaze_cursor_is_exactly_low_salience_and_static(self) -> None:
+        gaze_css = self.viewport.split(".gaze-dot {", 1)[1].split("}", 1)[0]
+        for token in (
+            "width: 10px",
+            "height: 10px",
+            "margin: -5px 0 0 -5px",
+            "border: 1px solid rgba(72, 84, 78, 0.18)",
+            "background: rgba(72, 84, 78, 0.16)",
+            "box-shadow: 0 0 8px 5px rgba(72, 84, 78, 0.08)",
+            "pointer-events: none",
+        ):
+            self.assertIn(token, gaze_css)
+        for forbidden in (
+            "#2563eb",
+            "#ffffff",
+            "rgba(15, 23, 42",
+            "animation",
+            "transition",
+            "pulse",
+            "scale",
+        ):
+            self.assertNotIn(forbidden, gaze_css)
+        self.assertIn("const GAZE_STALE_AFTER_MS = 1000", self.viewport)
+
+    def test_viewport_receives_complete_palette_for_chrome_only(self) -> None:
+        self.assertIn("palette_tokens=safe_tokens", self.viewport_wrapper)
+        self.assertIn("palette_tokens must contain every semantic token", self.viewport_wrapper)
+        self.assertIn("applyPalette(nextArgs.palette_tokens)", self.viewport)
+        self.assertIn("document.documentElement.style.setProperty", self.viewport)
+        self.assertIn("for (const name of SEMANTIC_KEYS)", self.viewport)
+        self.assertNotIn("var(--as-primary)", self.viewport.split(".gaze-dot {", 1)[1].split("}", 1)[0])
+        self.assertIn("palette_tokens=palette_semantic", ast.unparse(
+            self.functions["_render_slide_workspace"]
+        ))
+
+    def test_turn_boundary_copy_distinguishes_sampling_lock_and_confirmation(self) -> None:
+        for copy in (
+            "Sampling attention",
+            "Target locked",
+            "Target needs confirmation",
+        ):
+            self.assertIn(copy, self.source)
 
 
 if __name__ == "__main__":
