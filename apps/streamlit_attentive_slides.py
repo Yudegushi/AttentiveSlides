@@ -176,6 +176,7 @@ from modules.ui.design_tokens import (
 )
 from modules.ui.palette_control_component import render_palette_control
 from modules.ui.voice_panel import VoicePanelView, build_voice_panel_view
+from modules.ui.review_view import ReviewMetric, build_review_view
 
 
 BUILT_IN_MANIFEST_PATH = (
@@ -1378,7 +1379,7 @@ def _review_session_caption(review: Any) -> str:
 def _render_review_sidebar(resources: MainLiveResources) -> None:
     st.sidebar.markdown("### Study review")
     st.sidebar.button(
-        "Back to workspace",
+        "Back to Study Workspace",
         key="main_review_back",
         width="stretch",
         on_click=_back_to_study_workspace,
@@ -1404,6 +1405,7 @@ def _render_review_sidebar(resources: MainLiveResources) -> None:
 
     review = _selected_study_review(resources)
     if review is not None:
+        st.sidebar.caption(_review_session_caption(review))
         st.sidebar.download_button(
             "Download session JSON",
             data=review.to_json().encode("utf-8"),
@@ -1412,6 +1414,19 @@ def _render_review_sidebar(resources: MainLiveResources) -> None:
             key="main_review_download_json",
             width="stretch",
         )
+
+    st.sidebar.markdown("### Palette")
+    with st.sidebar:
+        selected_palette = str(st.session_state["main_ui_palette"])
+        palette_value = render_palette_control(
+            selected=selected_palette,
+            palette_tokens=palette_semantic(selected_palette),
+            locked=False,
+            key="main_review_palette_control",
+        )
+    if palette_value is not None and palette_value != selected_palette:
+        st.session_state["main_ui_palette"] = normalize_palette_id(palette_value)
+        st.rerun()
 
     load_warnings = resources.study_review.load_warnings()
     inline_error = st.session_state.get("main_review_error")
@@ -1448,6 +1463,29 @@ def _render_review_text_fallback(slide: MainUISlide) -> None:
         st.write(slide.slide_text or "Slide image unavailable.")
 
 
+def _render_review_metric_band(
+    metrics: Sequence[ReviewMetric],
+    *,
+    key: str,
+) -> None:
+    items = "".join(
+        '<div class="as-review-metric">'
+        f'<span>{html.escape(metric.label)}</span>'
+        f'<strong>{html.escape(metric.value)}</strong>'
+        + (
+            f'<small>{html.escape(metric.detail)}</small>'
+            if metric.detail else ""
+        )
+        + "</div>"
+        for metric in metrics
+    )
+    with st.container(key=key):
+        st.markdown(
+            f'<div class="as-review-metric-band">{items}</div>',
+            unsafe_allow_html=True,
+        )
+
+
 def _render_review_workspace(
     view: MainUIViewModel,
     *,
@@ -1457,46 +1495,70 @@ def _render_review_workspace(
     review = _selected_study_review(resources)
     if review is None:
         st.info(
-            "No completed gaze review is available. "
-            "Start a new study to collect gaze data."
+            "No completed Study Review is available. "
+            "Start a study to collect gaze and learner-state summaries."
         )
         return
-    st.caption(_review_session_caption(review))
+
+    review_view = build_review_view(review)
+    st.markdown("## Session Summary")
+    _render_review_metric_band(
+        review_view.summary,
+        key="main_review_session_summary",
+    )
+
+    st.markdown("## Learner State Overview")
+    st.caption("Model estimates, not a diagnosis.")
+    _render_review_metric_band(
+        review_view.emotion_distribution,
+        key="main_review_emotion_distribution",
+    )
+    _render_review_metric_band(
+        review_view.alert_summary,
+        key="main_review_alert_summary",
+    )
+    with st.container(key="main_review_slide_overview"):
+        st.markdown("### Slide-order overview")
+        for row in review_view.slide_rows:
+            st.markdown(
+                '<div class="as-review-slide-row">'
+                f'<strong>Slide {row.slide_id}</strong>'
+                f'<span>Study {html.escape(row.study_time)}</span>'
+                f'<span>Interactions {row.interaction_count}</span>'
+                f'<span>Engagement {html.escape(row.engagement)}</span>'
+                f'<span>Fatigue {html.escape(row.fatigue)}</span>'
+                f'<span>{html.escape(row.top_emotion)}</span>'
+                "</div>",
+                unsafe_allow_html=True,
+            )
+
     if review.deck_id != view.deck_id:
         st.warning(
             "The saved review belongs to a deck that is not currently available. "
-            "You can still download its JSON or delete it from the sidebar."
+            "You can still download its JSON or delete it from the left rail."
         )
         return
 
     available_slide_ids = set(browser.slide_ids)
-    review_slides = tuple(
-        slide for slide in review.gaze_review.slides
-        if slide.slide_id in available_slide_ids
+    review_slide_ids = tuple(
+        row.slide_id
+        for row in review_view.slide_rows
+        if row.slide_id in available_slide_ids
     )
-    if not review_slides:
-        st.info("No slide gaze data was captured in this study.")
+    if not review_slide_ids:
+        st.info("No reviewed slide is available in the current deck.")
         return
-
-    slide_by_id = {slide.slide_id: slide for slide in review_slides}
-    if view.active_slide_id not in slide_by_id:
-        st.session_state["main_active_slide_id"] = review_slides[0].slide_id
+    if view.active_slide_id not in review_slide_ids:
+        st.session_state["main_active_slide_id"] = review_slide_ids[0]
         st.rerun()
-    slide_review = slide_by_id[view.active_slide_id]
-    review_slide_ids = tuple(slide_by_id)
 
     _render_slide_selector(browser, slide_ids=review_slide_ids)
-
-    with st.container(key="main_slide_scale"):
-        st.slider(
-            "Slide size",
-            min_value=50,
-            max_value=100,
-            step=5,
-            key="main_slide_width_percent",
-            label_visibility="collapsed",
-        )
-
+    detail = review_view.slide_details[view.active_slide_id]
+    gaze_by_id = {
+        slide.slide_id: slide
+        for slide in review.gaze_review.slides
+    }
+    slide_review = gaze_by_id.get(view.active_slide_id)
     image_path = (
         view.active_slide.image_path
         if view.active_slide.image_available
@@ -1504,150 +1566,133 @@ def _render_review_workspace(
     )
     show_heatmap = bool(st.session_state["main_review_show_heatmap"])
 
-    def show_image(image: Image.Image) -> None:
-        width_percent = int(st.session_state["main_slide_width_percent"])
-        if width_percent >= 100:
-            st.image(image, width="stretch")
-            return
-        slide_column, remainder = st.columns(
-            [width_percent, 100 - width_percent],
-            gap=None,
+    st.markdown("## Selected Slide Detail")
+    slide_column, detail_column = st.columns(
+        [1.0, 0.42],
+        gap="medium",
+        vertical_alignment="top",
+    )
+    with slide_column:
+        st.checkbox(
+            "Show heatmap",
+            key="main_review_show_heatmap",
+            on_change=_on_review_option_change,
+            disabled=slide_review is None or slide_review.valid_gaze_seconds <= 0.0,
         )
-        del remainder
-        with slide_column:
-            st.image(image, width="stretch")
+        with st.container(key="main_slide_scale"):
+            st.slider(
+                "Slide size",
+                min_value=50,
+                max_value=100,
+                step=5,
+                key="main_slide_width_percent",
+                label_visibility="collapsed",
+            )
+        with st.container(key="main_slide_stage"):
+            _render_navigation(
+                browser,
+                view,
+                slide_ids=review_slide_ids,
+            )
+            if image_path is None:
+                _render_review_text_fallback(view.active_slide)
+            else:
+                try:
+                    if slide_review is not None and slide_review.valid_gaze_seconds > 0.0:
+                        rendered = render_review_slide(
+                            image_path,
+                            slide_review,
+                            show_heatmap=show_heatmap,
+                        )
+                    else:
+                        rendered = _load_slide_image(image_path)
+                    try:
+                        with _left_aligned_slide_width():
+                            st.image(rendered, width="stretch")
+                    finally:
+                        rendered.close()
+                except (OSError, ValueError):
+                    st.warning("The slide image or heatmap is unavailable.")
 
-    with st.container(key="main_slide_stage"):
-        _render_navigation(
-            browser,
-            view,
-            slide_ids=review_slide_ids,
-        )
-        if image_path is None:
-            _render_review_text_fallback(view.active_slide)
-        else:
+        if slide_review is None or slide_review.valid_gaze_seconds <= 0.0:
+            st.info("No valid gaze captured")
+        elif show_heatmap:
+            st.markdown(
+                '<div class="attentive-review-legend">'
+                '<span>Lower attention</span>'
+                '<span class="attentive-review-gradient" aria-hidden="true"></span>'
+                '<span>Higher attention</span>'
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        if image_path is not None and slide_review is not None:
             try:
-                rendered = render_review_slide(
+                png_payload = review_png_bytes(
                     image_path,
                     slide_review,
                     show_heatmap=show_heatmap,
                 )
-                try:
-                    show_image(rendered)
-                finally:
-                    rendered.close()
             except (OSError, ValueError):
-                st.warning("Heatmap unavailable for this slide.")
-                try:
-                    original = _load_slide_image(image_path)
-                except (OSError, ValueError):
-                    _render_review_text_fallback(view.active_slide)
-                else:
-                    try:
-                        show_image(original)
-                    finally:
-                        original.close()
-
-    st.markdown(
-        """
-        <div class="attentive-review-legend">
-            <span>Lower attention</span>
-            <span class="attentive-review-gradient" aria-hidden="true"></span>
-            <span>Higher attention</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        f"Valid gaze: {slide_review.valid_gaze_seconds:.1f} s · "
-        f"Data coverage: {slide_review.coverage:.0%}"
-    )
-    learner_slides = {
-        slide.slide_id: slide
-        for slide in review.learner_state_summary.slides
-    }
-    learner_summary = learner_slides.get(slide_review.slide_id)
-    with st.expander("Learner state", expanded=False):
-        if learner_summary is None or learner_summary.observed_seconds <= 0.0:
-            st.caption(
-                "No learner-state estimate was available for this slide"
-            )
-        else:
-            engagement = (
-                "--"
-                if learner_summary.mean_engaged_probability is None
-                else f"{learner_summary.mean_engaged_probability:.0%}"
-            )
-            fatigue = (
-                "--"
-                if learner_summary.mean_fatigue_probability is None
-                else f"{learner_summary.mean_fatigue_probability:.0%}"
-            )
-            emotion = (
-                "--"
-                if learner_summary.top_emotion is None
-                else (
-                    f"{learner_summary.top_emotion} "
-                    f"{learner_summary.top_emotion_probability:.0%}"
+                st.caption("Heatmap PNG export is unavailable for this slide.")
+            else:
+                st.download_button(
+                    "Download heatmap PNG",
+                    data=png_payload,
+                    file_name=f"slide_{slide_review.slide_id:03d}_gaze_heatmap.png",
+                    mime="image/png",
+                    key="main_review_download_png",
                 )
-            )
-            st.caption(
-                f"Study time {_format_review_duration(learner_summary.study_seconds)} · "
-                f"Interactions {learner_summary.interaction_count} · "
-                f"Engaged {engagement}"
-            )
-            st.caption(
-                f"Top emotion {emotion} · Fatigue {fatigue} · "
-                "Alerts: distraction "
-                f"{learner_summary.distraction_alert_count}, fatigue "
-                f"{learner_summary.fatigue_alert_count}"
-            )
-        st.caption("Model estimates; not a diagnosis.")
-    if slide_review.valid_gaze_seconds <= 0.0:
-        st.info("No valid gaze was captured on this slide.")
-    st.checkbox(
-        "Show heatmap",
-        key="main_review_show_heatmap",
-        on_change=_on_review_option_change,
-    )
 
-    rows = [
-        {
-            "Region": item.label,
-            "Time": f"{item.dwell_seconds:.1f} s",
-        }
-        for item in slide_review.aoi_dwell
-    ]
-    if slide_review.other_slide_seconds > 0.05:
-        rows.append(
-            {
-                "Region": "Other slide area",
-                "Time": f"{slide_review.other_slide_seconds:.1f} s",
-            }
+    with detail_column:
+        interaction_value = (
+            str(detail.interaction_count)
+            if detail.study_time != "Unavailable"
+            else "Unavailable"
         )
-    with st.expander("Region times", expanded=False):
-        if rows:
-            _render_records_table(rows)
+        count_or_unavailable = lambda value: (
+            "Unavailable" if value is None else str(value)
+        )
+        detail_metrics = (
+            ReviewMetric("Study time", detail.study_time),
+            ReviewMetric("Interactions", interaction_value),
+            ReviewMetric("Mean engagement", detail.engagement),
+            ReviewMetric("Mean fatigue", detail.fatigue),
+            ReviewMetric(
+                "Top emotion",
+                detail.top_emotion_label,
+                detail.top_emotion_probability,
+            ),
+            ReviewMetric("Learner coverage", detail.learner_coverage),
+            ReviewMetric("Valid gaze duration", detail.valid_gaze_duration),
+            ReviewMetric("Gaze coverage", detail.gaze_coverage),
+            ReviewMetric(
+                "Distraction alerts",
+                detail.distraction_alert_duration,
+                count_or_unavailable(detail.distraction_alert_count) + " events",
+            ),
+            ReviewMetric(
+                "Fatigue alerts",
+                detail.fatigue_alert_duration,
+                count_or_unavailable(detail.fatigue_alert_count) + " events",
+            ),
+        )
+        _render_review_metric_band(
+            detail_metrics,
+            key="main_review_selected_slide_metrics",
+        )
+        st.markdown("### AOI dwell")
+        if detail.aoi_dwell:
+            for item in detail.aoi_dwell:
+                st.markdown(
+                    '<div class="as-review-aoi-row">'
+                    f'<span>{html.escape(item.label)}</span>'
+                    f'<strong>{html.escape(item.dwell_seconds)}</strong>'
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
         else:
-            st.caption("No region timing data is available for this slide.")
+            st.caption("No AOI dwell data is available for this slide.")
 
-    if image_path is not None:
-        try:
-            png_payload = review_png_bytes(
-                image_path,
-                slide_review,
-                show_heatmap=show_heatmap,
-            )
-        except (OSError, ValueError):
-            st.caption("PNG export is unavailable for this slide.")
-        else:
-            st.download_button(
-                "Download heatmap PNG",
-                data=png_payload,
-                file_name=f"slide_{slide_review.slide_id:03d}_gaze_heatmap.png",
-                mime="image/png",
-                key="main_review_download_png",
-            )
 
 
 def _on_manual_region_change() -> None:
