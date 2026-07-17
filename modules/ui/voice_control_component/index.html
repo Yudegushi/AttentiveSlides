@@ -5,68 +5,173 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
     * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; background: transparent; color: #1f2937; font: 14px/1.4 system-ui, sans-serif; }
-    #root { border: 1px solid #dbe4ee; border-radius: 10px; padding: 10px; background: #f8fafc; }
-    #controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    button { border: 1px solid #94a3b8; border-radius: 8px; padding: 7px 11px; background: #fff; cursor: pointer; }
-    button:disabled { cursor: not-allowed; opacity: .55; }
-    #ptt.active { background: #dc2626; border-color: #b91c1c; color: #fff; }
-    #status { font-weight: 650; }
-    .copy { margin: 7px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .label { color: #64748b; font-size: 12px; }
-    #switch { margin-top: 8px; padding-top: 8px; border-top: 1px solid #dbe4ee; }
+    html, body {
+      background: transparent;
+      color: var(--as-ink);
+      font: 13px/1.4 "Noto Sans", "DejaVu Sans", sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+    #root {
+      background: var(--as-surface);
+      border: 1px solid var(--as-border);
+      border-radius: 8px;
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+    }
+    #status-title { font-weight: 700; }
+    #status-detail { color: var(--as-muted); font-size: 12px; }
+    #meter {
+      background: var(--as-segment);
+      border-radius: 999px;
+      height: 4px;
+      overflow: hidden;
+      width: 100%;
+    }
+    #meter-fill {
+      background: var(--as-primary);
+      height: 100%;
+      width: 8%;
+    }
+    #controls, #switch {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    button {
+      background: var(--as-surface);
+      border: 1px solid var(--as-border-strong);
+      border-radius: 6px;
+      color: var(--as-ink);
+      cursor: pointer;
+      font: inherit;
+      min-height: 34px;
+      padding: 6px 9px;
+    }
+    button:focus-visible {
+      outline: 2px solid var(--as-primary);
+      outline-offset: 2px;
+    }
+    button:disabled { cursor: not-allowed; opacity: .58; }
+    #ptt { background: var(--as-primary); color: var(--as-primary-on); flex: 1 1 150px; }
+    #ptt.active { background: var(--as-slide-accent); }
+    kbd {
+      background: var(--as-primary-on);
+      border: 1px solid var(--as-border);
+      border-radius: 4px;
+      color: var(--as-primary);
+      font: inherit;
+      margin-left: 6px;
+      padding: 1px 5px;
+    }
+    #switch {
+      border-top: 1px solid var(--as-border);
+      color: var(--as-muted);
+      padding-top: 8px;
+    }
+    #switch-message { flex: 1 1 100%; }
   </style>
 </head>
 <body>
   <div id="root">
-    <div id="controls">
-      <span id="status">Waiting for live media…</span>
-      <button id="ptt" type="button" hidden>Hold to talk</button>
-      <button id="playback" type="button">Enable playback</button>
+    <div>
+      <div id="status-title">Preparing voice</div>
+      <div id="status-detail">Connecting the current input mode</div>
     </div>
-    <div class="copy"><span class="label">You: </span><span id="transcript"></span></div>
-    <div class="copy"><span class="label">Tutor: </span><span id="answer"></span></div>
+    <div id="meter" aria-label="Voice activity"><div id="meter-fill"></div></div>
+    <div id="controls">
+      <button id="ptt" type="button" hidden>Hold to speak <kbd>V</kbd></button>
+      <button id="cancel" type="button" hidden>Cancel</button>
+      <button id="handsfree" type="button" hidden>Pause listening</button>
+      <button id="playback" type="button">Enable playback</button>
+      <button id="retry" type="button" hidden>Retry</button>
+    </div>
     <div id="switch" hidden>
       <span id="switch-message"></span>
-      <button id="confirm" type="button">Confirm</button>
+      <button id="confirm" type="button">Confirm target</button>
       <button id="reject" type="button">Keep current</button>
     </div>
   </div>
   <script>
-    window.parent.postMessage({
-      isStreamlitMessage: true,
-      type: "streamlit:componentReady",
-      apiVersion: 1,
-    }, "*");
     (() => {
       const MEDIA_SESSION_KEY = "attentive-media-session";
+      const SEMANTIC_KEYS = [
+        "canvas", "workspace", "topbar", "rail", "surface", "ink", "muted",
+        "muted-2", "border", "border-strong", "primary", "primary-on",
+        "primary-soft", "segment", "slide-accent", "slide-accent-soft",
+      ];
       const root = document.getElementById("root");
-      const status = document.getElementById("status");
+      const statusTitle = document.getElementById("status-title");
+      const statusDetail = document.getElementById("status-detail");
+      const meterFill = document.getElementById("meter-fill");
       const ptt = document.getElementById("ptt");
+      const cancel = document.getElementById("cancel");
+      const handsfree = document.getElementById("handsfree");
       const playback = document.getElementById("playback");
-      const transcript = document.getElementById("transcript");
-      const answer = document.getElementById("answer");
+      const retry = document.getElementById("retry");
       const switchBox = document.getElementById("switch");
       const switchMessage = document.getElementById("switch-message");
       const confirm = document.getElementById("confirm");
       const reject = document.getElementById("reject");
-      let args = { engine: "single_turn", speech_mode: "continuous" };
+      let args = {
+        engine: "single_turn",
+        flow: "one_turn",
+        speech_mode: "push_to_talk",
+        palette_tokens: {},
+      };
       let socket = null;
       let socketSession = null;
       let pttActive = false;
       let pttStartPromise = null;
       let pttPointerId = null;
+      let keyboardPttActive = false;
       let continuousSignature = null;
+      let continuousPaused = false;
       let audioContext = null;
       let playbackCursor = 0;
+      let reconnectTimer = null;
+      let tornDown = false;
       const scheduledNodes = new Set();
+
+      let shortcutDocument = document;
+      let shortcutWindow = window;
+      try {
+        if (window.parent && window.parent.document) {
+          shortcutDocument = window.parent.document;
+          shortcutWindow = window.parent;
+        }
+      } catch (_) {}
 
       function send(type, payload = {}) {
         window.parent.postMessage({ isStreamlitMessage: true, type, ...payload }, "*");
       }
 
       function setFrameHeight() {
-        send("streamlit:setFrameHeight", { height: Math.ceil(root.getBoundingClientRect().height) });
+        send("streamlit:setFrameHeight", {
+          height: Math.ceil(root.getBoundingClientRect().height),
+        });
+      }
+
+      function applyPalette(paletteTokens) {
+        const tokens = paletteTokens && typeof paletteTokens === "object"
+          ? paletteTokens
+          : {};
+        for (const name of SEMANTIC_KEYS) {
+          const value = tokens[name];
+          if (typeof value === "string" && value.trim()) {
+            document.documentElement.style.setProperty("--as-" + name, value);
+          }
+        }
+      }
+
+      function updateStatus(title, detail, meter = 8, retryable = false) {
+        statusTitle.textContent = String(title);
+        statusDetail.textContent = String(detail);
+        meterFill.style.width = Math.max(0, Math.min(100, Number(meter))) + "%";
+        retry.hidden = !retryable;
+        setFrameHeight();
       }
 
       function mediaSession() {
@@ -91,7 +196,9 @@
           audioContext = new AudioContextClass({ sampleRate: 24000 });
         }
         await audioContext.resume();
-        playback.textContent = audioContext.state === "running" ? "Playback enabled" : "Enable playback";
+        playback.textContent = audioContext.state === "running"
+          ? "Playback enabled"
+          : "Enable playback";
       }
 
       function clearPlayback() {
@@ -122,37 +229,50 @@
         source.start(startsAt);
       }
 
+      function stateCopy(state) {
+        const phase = String(state || "").toLowerCase();
+        if (["recording", "sampling", "speech_detected"].includes(phase)) {
+          return ["Recording", "Sampling attention", 68];
+        }
+        if (phase === "transcribing") return ["Transcribing", "Preparing your question", 32];
+        if (phase === "resolving") return ["Resolving target", "Matching attention evidence", 22];
+        if (phase === "answering") return ["Answering", "Generating a grounded explanation", 18];
+        if (phase === "playing") return ["Tutor speaking", "Realtime can be interrupted", 46];
+        if (phase === "paused") return ["Listening paused", "Resume when you are ready", 0];
+        if (args.speech_mode === "continuous") {
+          return ["Listening for speech", "Hands-free input is active", 12];
+        }
+        return ["Ready", "Hold V or the button to speak", 8];
+      }
+
       function handleJson(message) {
         const payload = message.payload || {};
         if (message.type === "audio.config") return;
-        if (message.type === "voice.snapshot") {
-          status.textContent = String(payload.status_message || payload.state || "ready");
-          transcript.textContent = String(payload.user_transcript || "");
-          answer.textContent = String(payload.answer_text || "");
+        if (message.type === "voice.snapshot" || message.type === "voice.state") {
+          const [title, detail, meter] = stateCopy(payload.state);
+          updateStatus(title, detail, meter);
           if (payload.pending_target) {
-            switchMessage.textContent = "Switch to " + String(payload.pending_target.label || "this target") + "?";
+            switchMessage.textContent = "Switch to "
+              + String(payload.pending_target.label || "this target") + "?";
             switchBox.hidden = false;
-          } else {
+          } else if (message.type === "voice.snapshot") {
             switchBox.hidden = true;
           }
         }
-        if (message.type === "voice.state") status.textContent = String(payload.state || "ready");
-        if (message.type === "user.transcript.delta" || message.type === "user.transcript.done") {
-          transcript.textContent = String(payload.text || "");
-        }
-        if (message.type === "assistant.text.delta" || message.type === "assistant.text.done") {
-          answer.textContent = String(payload.text || "");
-        }
         if (message.type === "playback.clear") clearPlayback();
         if (message.type === "voice.error" || message.type === "voice.notice") {
-          status.textContent = String(payload.message || "Voice unavailable");
+          updateStatus(
+            "Voice input needs attention",
+            String(payload.message || "Voice unavailable"),
+            0,
+            true
+          );
         }
         if (message.type === "target.switch.pending") {
           switchMessage.textContent = String(payload.message || "Confirm target switch?");
           switchBox.hidden = false;
         }
         if (message.type === "target.switch.completed") switchBox.hidden = true;
-        setFrameHeight();
       }
 
       function websocketUrl(session) {
@@ -163,45 +283,55 @@
       }
 
       function ensureSocket() {
+        if (tornDown) return;
         const session = mediaSession();
         if (!session) {
-          status.textContent = "Enable camera and microphone first.";
+          updateStatus("Voice unavailable", "Enable camera and microphone first", 0, true);
           ptt.disabled = true;
+          handsfree.disabled = true;
           if (socket) socket.close();
           socket = null;
           socketSession = null;
           return;
         }
         ptt.disabled = false;
+        handsfree.disabled = false;
         if (socket && socketSession === session && socket.readyState <= WebSocket.OPEN) return;
         if (socket) socket.close();
         socketSession = session;
         socket = new WebSocket(websocketUrl(session));
         socket.binaryType = "arraybuffer";
-        socket.addEventListener("open", () => { status.textContent = "Voice ready"; });
+        socket.addEventListener("open", () => {
+          const [title, detail, meter] = stateCopy("ready");
+          updateStatus(title, detail, meter);
+        });
         socket.addEventListener("message", (event) => {
           if (event.data instanceof ArrayBuffer) {
             void playPcm(event.data);
             return;
           }
           try { handleJson(JSON.parse(event.data)); }
-          catch (_) { status.textContent = "Voice event could not be read."; }
+          catch (_) { updateStatus("Voice unavailable", "Voice event could not be read", 0, true); }
         });
         socket.addEventListener("close", () => {
-          if (socketSession === session) status.textContent = "Voice connection closed.";
+          if (!tornDown && socketSession === session) {
+            updateStatus("Voice unavailable", "Voice connection closed", 0, true);
+          }
         });
       }
 
       async function startPtt(event) {
-        event.preventDefault();
-        if (pttActive || pttStartPromise) return;
-        if (Number.isInteger(event.pointerId) && ptt.setPointerCapture) {
+        if (event) event.preventDefault();
+        if (args.speech_mode !== "push_to_talk" || pttActive || pttStartPromise) return;
+        if (event && Number.isInteger(event.pointerId) && ptt.setPointerCapture) {
           pttPointerId = event.pointerId;
           try { ptt.setPointerCapture(event.pointerId); } catch (_) {}
         }
         pttActive = true;
+        cancel.hidden = false;
         ptt.classList.add("active");
-        ptt.textContent = "Release to send";
+        ptt.textContent = "Release to continue";
+        updateStatus("Recording", "Sampling attention", 68);
         try {
           pttStartPromise = (async () => {
             await ensureAudioContext();
@@ -210,12 +340,26 @@
           await pttStartPromise;
         } catch (error) {
           pttActive = false;
+          keyboardPttActive = false;
+          cancel.hidden = true;
           ptt.classList.remove("active");
-          ptt.textContent = "Hold to talk";
-          status.textContent = error.message;
+          ptt.replaceChildren(document.createTextNode("Hold to speak "));
+          const keycap = document.createElement("kbd");
+          keycap.textContent = "V";
+          ptt.appendChild(keycap);
+          updateStatus("Voice input needs attention", error.message, 0, true);
         } finally {
           pttStartPromise = null;
         }
+      }
+
+      function resetPttVisual() {
+        cancel.hidden = true;
+        ptt.classList.remove("active");
+        ptt.replaceChildren(document.createTextNode("Hold to speak "));
+        const keycap = document.createElement("kbd");
+        keycap.textContent = "V";
+        ptt.appendChild(keycap);
       }
 
       async function stopPtt(event) {
@@ -223,17 +367,89 @@
         if (!pttActive && !pttStartPromise) return;
         const pendingStart = pttStartPromise;
         pttActive = false;
-        ptt.classList.remove("active");
-        ptt.textContent = "Hold to talk";
+        keyboardPttActive = false;
+        resetPttVisual();
         if (pttPointerId !== null && ptt.releasePointerCapture) {
           try { ptt.releasePointerCapture(pttPointerId); } catch (_) {}
           pttPointerId = null;
         }
+        updateStatus("Transcribing", "Preparing your question", 32);
         try {
           if (pendingStart) await pendingStart;
           await command("/attentive-voice/ptt/stop");
+        } catch (error) {
+          updateStatus("Voice input needs attention", error.message, 0, true);
         }
-        catch (error) { status.textContent = error.message; }
+      }
+
+      function keepaliveStop(path) {
+        const session = mediaSession();
+        if (!session) return;
+        void fetch(path, {
+          method: "POST",
+          headers: { "X-Attentive-Media-Session": session },
+          keepalive: true,
+        }).catch(() => {});
+      }
+
+      function safeStopPtt() {
+        if (!pttActive && !pttStartPromise) return;
+        void stopPtt();
+      }
+
+      function shouldIgnoreShortcut(event) {
+        const target = event.target;
+        const editing = target && (
+          target.matches?.("input, textarea, select, [contenteditable='true']") ||
+          target.closest?.("[role='dialog'], [role='menu'], .palette-control")
+        );
+        return editing || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey;
+      }
+
+      function onShortcutKeydown(event) {
+        if (
+          event.code !== "KeyV"
+          || args.speech_mode !== "push_to_talk"
+          || event.repeat
+          || shouldIgnoreShortcut(event)
+          || keyboardPttActive
+        ) return;
+        keyboardPttActive = true;
+        void startPtt(event);
+      }
+
+      function onShortcutKeyup(event) {
+        if (event.code !== "KeyV" || !keyboardPttActive) return;
+        keyboardPttActive = false;
+        void stopPtt(event);
+      }
+
+      function onShortcutBlur() {
+        keyboardPttActive = false;
+        safeStopPtt();
+      }
+
+      function onVisibilityChange() {
+        if (shortcutDocument.hidden) onShortcutBlur();
+      }
+
+      async function setContinuousPaused(paused) {
+        if (args.speech_mode !== "continuous") return;
+        try {
+          if (paused) {
+            await command("/attentive-voice/continuous/stop");
+            continuousPaused = true;
+            handsfree.textContent = "Resume listening";
+            updateStatus("Listening paused", "Resume when you are ready", 0);
+          } else {
+            await command("/attentive-voice/continuous/start");
+            continuousPaused = false;
+            handsfree.textContent = "Pause listening";
+            updateStatus("Listening for speech", "Hands-free input is active", 12);
+          }
+        } catch (error) {
+          updateStatus("Voice input needs attention", error.message, 0, true);
+        }
       }
 
       ptt.addEventListener("pointerdown", (event) => void startPtt(event));
@@ -241,36 +457,90 @@
       ptt.addEventListener("pointercancel", (event) => void stopPtt(event));
       ptt.addEventListener("lostpointercapture", (event) => void stopPtt(event));
       ptt.addEventListener("keydown", (event) => {
-        if ((event.code === "Space" || event.code === "Enter") && !event.repeat) void startPtt(event);
+        if ((event.code === "Space" || event.code === "Enter") && !event.repeat) {
+          void startPtt(event);
+        }
       });
       ptt.addEventListener("keyup", (event) => {
         if (event.code === "Space" || event.code === "Enter") void stopPtt(event);
       });
+      cancel.addEventListener("click", (event) => void stopPtt(event));
+      handsfree.addEventListener("click", () => void setContinuousPaused(!continuousPaused));
       playback.addEventListener("click", () => void ensureAudioContext());
-      confirm.addEventListener("click", () => void command("/attentive-voice/target/confirm").catch((error) => {
-        status.textContent = error.message;
-      }));
-      reject.addEventListener("click", () => void command("/attentive-voice/target/reject").catch((error) => {
-        status.textContent = error.message;
-      }));
+      retry.addEventListener("click", () => {
+        ensureSocket();
+        if (args.speech_mode === "continuous" && continuousPaused) {
+          void setContinuousPaused(false);
+        }
+      });
+      confirm.addEventListener("click", () => {
+        void command("/attentive-voice/target/confirm").catch((error) => {
+          updateStatus("Voice input needs attention", error.message, 0, true);
+        });
+      });
+      reject.addEventListener("click", () => {
+        void command("/attentive-voice/target/reject").catch((error) => {
+          updateStatus("Voice input needs attention", error.message, 0, true);
+        });
+      });
+
+      shortcutDocument.addEventListener("keydown", onShortcutKeydown);
+      shortcutDocument.addEventListener("keyup", onShortcutKeyup);
+      shortcutDocument.addEventListener("visibilitychange", onVisibilityChange);
+      shortcutWindow.addEventListener("blur", onShortcutBlur);
 
       async function render(nextArgs) {
         const previousMode = args.speech_mode;
+        const previousSignature = continuousSignature;
         args = nextArgs;
+        applyPalette(args.palette_tokens);
         ptt.hidden = args.speech_mode !== "push_to_talk";
+        cancel.hidden = !pttActive;
+        handsfree.hidden = args.speech_mode !== "continuous";
         ensureSocket();
         const session = mediaSession();
-        const signature = session ? session + ":" + args.engine + ":" + args.speech_mode : null;
+        const signature = session
+          ? session + ":" + args.engine + ":" + args.speech_mode
+          : null;
+
         if (previousMode === "continuous" && args.speech_mode !== "continuous" && session) {
           await command("/attentive-voice/continuous/stop").catch(() => {});
         }
-        if (args.speech_mode === "continuous" && signature && continuousSignature !== signature) {
+        if (signature !== previousSignature) {
           continuousSignature = signature;
+          continuousPaused = false;
+          handsfree.textContent = "Pause listening";
+        }
+        if (
+          args.speech_mode === "continuous"
+          && signature
+          && signature !== previousSignature
+        ) {
           await command("/attentive-voice/continuous/start").catch((error) => {
-            status.textContent = error.message;
+            updateStatus("Voice input needs attention", error.message, 0, true);
           });
         }
-        setFrameHeight();
+        const [title, detail, meter] = stateCopy("ready");
+        updateStatus(title, detail, meter);
+      }
+
+      function teardown() {
+        if (tornDown) return;
+        tornDown = true;
+        shortcutDocument.removeEventListener("keydown", onShortcutKeydown);
+        shortcutDocument.removeEventListener("keyup", onShortcutKeyup);
+        shortcutDocument.removeEventListener("visibilitychange", onVisibilityChange);
+        shortcutWindow.removeEventListener("blur", onShortcutBlur);
+        if (reconnectTimer !== null) window.clearInterval(reconnectTimer);
+        clearPlayback();
+        if (pttActive || pttStartPromise) keepaliveStop("/attentive-voice/ptt/stop");
+        if (args.speech_mode === "continuous" && !continuousPaused) {
+          keepaliveStop("/attentive-voice/continuous/stop");
+        }
+        pttActive = false;
+        keyboardPttActive = false;
+        if (socket) socket.close();
+        socket = null;
       }
 
       window.addEventListener("message", (event) => {
@@ -278,23 +548,11 @@
           void render(event.data.args || {});
         }
       });
-      window.addEventListener("pagehide", () => {
-        clearPlayback();
-        if (pttActive || pttStartPromise) {
-          const session = mediaSession();
-          if (session) {
-            void fetch("/attentive-voice/ptt/stop", {
-              method: "POST",
-              headers: { "X-Attentive-Media-Session": session },
-              keepalive: true,
-            }).catch(() => {});
-          }
-          pttActive = false;
-        }
-        if (socket) socket.close();
-      });
+      window.addEventListener("pagehide", teardown);
+      window.addEventListener("beforeunload", teardown);
+      reconnectTimer = window.setInterval(ensureSocket, 1000);
+      send("streamlit:componentReady", { apiVersion: 1 });
       setFrameHeight();
-      window.setInterval(ensureSocket, 1000);
     })();
   </script>
 </body>

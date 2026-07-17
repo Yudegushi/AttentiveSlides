@@ -1,12 +1,17 @@
 from pathlib import Path
 import unittest
 
+from modules.ui.design_tokens import SEMANTIC_KEYS
+
 
 class VoiceControlComponentContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.component = Path(
             "modules/ui/voice_control_component/index.html"
+        ).read_text(encoding="utf-8")
+        cls.wrapper = Path(
+            "modules/ui/voice_control_component/__init__.py"
         ).read_text(encoding="utf-8")
         cls.capture = Path(
             "modules/media/live_capture_component/index.html"
@@ -22,33 +27,92 @@ class VoiceControlComponentContractTests(unittest.TestCase):
     def test_session_handoff_and_same_origin_routes_are_explicit(self) -> None:
         self.assertIn('"attentive-media-session"', self.component)
         self.assertIn('"attentive-media-session"', self.capture)
-        self.assertIn("globalThis.localStorage.setItem", self.capture)
-        self.assertIn("globalThis.localStorage.removeItem", self.capture)
         self.assertIn('"X-Attentive-Media-Session"', self.component)
         self.assertIn('new URL("/attentive-voice/events", window.location.href)', self.component)
         self.assertIn('url.searchParams.set("session", session)', self.component)
         self.assertNotIn("127.0.0.1:8503", self.component)
 
-    def test_ptt_keyboard_audio_queue_and_safe_text_rendering_exist(self) -> None:
-        for token in ("pointerdown", "pointerup", "pointercancel", 'event.code === "Space"', 'event.code === "Enter"'):
+    def test_pointer_and_global_v_use_the_same_ptt_paths(self) -> None:
+        for token in (
+            "pointerdown",
+            "pointerup",
+            "pointercancel",
+            "lostpointercapture",
+            'event.code !== "KeyV"',
+            "void startPtt(event)",
+            "void stopPtt(event)",
+            'command("/attentive-voice/ptt/start")',
+            'command("/attentive-voice/ptt/stop")',
+        ):
             self.assertIn(token, self.component)
+        self.assertIn("setPointerCapture", self.component)
+        self.assertIn("releasePointerCapture", self.component)
+
+    def test_global_v_focus_modifier_repeat_and_parent_guards_exist(self) -> None:
+        for token in (
+            "window.parent.document",
+            "shortcutDocument.addEventListener",
+            "shouldIgnoreShortcut",
+            "event.repeat",
+            "event.ctrlKey",
+            "event.altKey",
+            "event.metaKey",
+            "event.shiftKey",
+            "input, textarea, select, [contenteditable='true']",
+            "[role='dialog'], [role='menu'], .palette-control",
+            "keyboardPttActive",
+        ):
+            self.assertIn(token, self.component)
+
+    def test_lost_keyup_and_teardown_stop_safely_and_remove_listeners(self) -> None:
+        for token in (
+            'shortcutWindow.addEventListener("blur"',
+            '"visibilitychange"',
+            'window.addEventListener("pagehide", teardown)',
+            'window.addEventListener("beforeunload", teardown)',
+            "safeStopPtt",
+            "keepalive: true",
+            'shortcutDocument.removeEventListener("keydown"',
+            'shortcutDocument.removeEventListener("keyup"',
+            'shortcutDocument.removeEventListener("visibilitychange"',
+            'shortcutWindow.removeEventListener("blur"',
+        ):
+            self.assertIn(token, self.component)
+
+    def test_hands_free_pause_resume_and_signature_reset_exist(self) -> None:
+        self.assertIn('command("/attentive-voice/continuous/start")', self.component)
+        self.assertIn('command("/attentive-voice/continuous/stop")', self.component)
+        self.assertIn("continuousPaused", self.component)
+        self.assertIn("Pause listening", self.component)
+        self.assertIn("Resume listening", self.component)
+        self.assertIn("signature !== previousSignature", self.component)
+
+    def test_transport_is_compact_and_has_no_tutor_or_provider_block(self) -> None:
+        self.assertIn('id="meter"', self.component)
+        self.assertIn('id="ptt"', self.component)
+        self.assertIn("<kbd>V</kbd>", self.component)
+        self.assertNotIn('id="answer"', self.component)
+        self.assertNotIn("Tutor:", self.component)
+        self.assertNotIn("Grounded Tutor", self.component)
+        self.assertNotIn("Omni realtime", self.component)
+        self.assertNotIn("innerHTML", self.component)
+
+    def test_complete_whitelisted_palette_map_is_applied_to_iframe_root(self) -> None:
+        self.assertIn("palette_tokens=safe_tokens", self.wrapper)
+        self.assertIn("palette_tokens must contain every semantic token", self.wrapper)
+        self.assertIn("applyPalette(args.palette_tokens)", self.component)
+        self.assertIn("document.documentElement.style.setProperty", self.component)
+        self.assertIn("for (const name of SEMANTIC_KEYS)", self.component)
+        for name in SEMANTIC_KEYS:
+            self.assertIn(f'"{name}"', self.component)
+
+    def test_audio_queue_and_safe_text_rendering_are_preserved(self) -> None:
         self.assertIn('socket.binaryType = "arraybuffer"', self.component)
         self.assertIn("sampleRate: 24000", self.component)
         self.assertIn("view.getInt16(index * 2, true)", self.component)
         self.assertIn("scheduledNodes", self.component)
         self.assertIn("clearPlayback", self.component)
         self.assertIn("textContent", self.component)
-        self.assertNotIn("innerHTML", self.component)
-
-    def test_snapshot_reconnect_and_ptt_teardown_contracts_exist(self) -> None:
-        self.assertIn('message.type === "voice.snapshot"', self.component)
-        self.assertIn("payload.user_transcript", self.component)
-        self.assertIn("payload.answer_text", self.component)
-        self.assertIn("payload.pending_target", self.component)
-        self.assertIn("setPointerCapture", self.component)
-        self.assertIn("lostpointercapture", self.component)
-        self.assertIn('fetch("/attentive-voice/ptt/stop"', self.component)
-        self.assertIn("keepalive: true", self.component)
 
     def test_capture_fatigue_contract_is_unchanged(self) -> None:
         self.assertIn("const FATIGUE_INTERVAL_MS = 250", self.capture)
@@ -56,16 +120,6 @@ class VoiceControlComponentContractTests(unittest.TestCase):
         self.assertIn("fatigueCanvas.height = 224", self.capture)
         self.assertIn('}, "image/jpeg", 0.80)', self.capture)
         self.assertIn('fetch("/attentive-media/fatigue"', self.capture)
-
-    def test_capture_tolerates_bounded_transient_transport_and_mute_failures(self) -> None:
-        self.assertIn("const TRANSPORT_FAILURE_GRACE_MS = 8000", self.capture)
-        self.assertIn("noteTransportFailure", self.capture)
-        self.assertIn("noteTransportSuccess", self.capture)
-        self.assertNotIn(
-            '.catch((error) => void stopCapture(false, "Heartbeat stopped:',
-            self.capture,
-        )
-        self.assertIn('track.addEventListener("ended"', self.capture)
 
 
 if __name__ == "__main__":

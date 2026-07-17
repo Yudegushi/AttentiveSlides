@@ -175,6 +175,7 @@ from modules.ui.design_tokens import (
     render_palette_css,
 )
 from modules.ui.palette_control_component import render_palette_control
+from modules.ui.voice_panel import VoicePanelView, build_voice_panel_view
 
 
 BUILT_IN_MANIFEST_PATH = (
@@ -2387,7 +2388,7 @@ def _render_target_column(
     view: MainUIViewModel,
 ) -> None:
     st.markdown(
-        "### 1. Select region"
+        "### Target"
     )
 
     target_options = ["Whole slide", "Manual region"]
@@ -2449,7 +2450,7 @@ def _render_intent_column(
     view: MainUIViewModel,
 ) -> None:
     st.markdown(
-        "### 2. Ask"
+        "### Ask tutor"
     )
 
     _render_quick_intent_actions()
@@ -2551,16 +2552,20 @@ def _render_xai_drawer() -> None:
         _render_main_xai()
 
 
-def _render_answer_column(
+def _render_unified_answer(
     view: MainUIViewModel,
     resources: MainLiveResources,
 ) -> None:
-    st.markdown(
-        "### 3. Tutor answer"
+    _render_generation_status(view, resources)
+    realtime_answer = (
+        str(resources.voice.snapshot().get("answer_text") or "").strip()
+        if st.session_state.get("main_interaction_flow") == "realtime"
+        else ""
     )
-
-    _render_tutor_generation_panel(view, resources)
-    _render_tutor_result(resources.single_turn_tts)
+    if realtime_answer:
+        st.markdown(realtime_answer)
+    else:
+        _render_tutor_result(resources.single_turn_tts)
     _render_xai_drawer()
 
     st.button(
@@ -3623,7 +3628,7 @@ def _render_confirmation_panel(
     )
 
     confirm_clicked = confirm_column.button(
-        "Confirm target and intent",
+        "Ask tutor",
         type="primary",
         disabled=(
             not assessment.ready
@@ -4080,221 +4085,69 @@ def _render_conversation_history(
             )
 
 
-def _render_tutor_generation_panel(
+def _confirmed_interaction_id() -> str:
+    wrapper = st.session_state.get("main_confirmed_interaction") or {}
+    return str(wrapper.get("interaction", {}).get("interaction_id", ""))
+
+
+def _generate_confirmed_turn(
     view: MainUIViewModel,
     resources: MainLiveResources,
-) -> None:
-    """Render explicit grounded generation with history gates."""
-    api_configured = bool(
-        os.environ.get(
-            "DASHSCOPE_API_KEY"
-        )
-    )
-
+) -> bool:
+    """Generate one confirmed turn while preserving existing backend gates."""
+    interaction_id = _confirmed_interaction_id()
+    api_configured = bool(os.environ.get("DASHSCOPE_API_KEY"))
     assessment = assess_tutor_generation(
-        st.session_state[
-            "main_confirmed_interaction"
-        ],
-        cloud_text_allowed=(
-            st.session_state[
-                "main_cloud_text_allowed"
-            ]
-        ),
+        st.session_state["main_confirmed_interaction"],
+        cloud_text_allowed=st.session_state["main_cloud_text_allowed"],
         api_configured=api_configured,
     )
-
-    if assessment.ready:
-        st.success(
-            assessment.message
-        )
-    elif (
-        assessment.code
-        == "cloud_permission_required"
-    ):
-        st.warning(
-            assessment.message
-        )
-    elif (
-        assessment.code
-        == "api_not_configured"
-    ):
-        st.error(
-            assessment.message
-        )
-    elif assessment.code != "confirmation_missing":
-        st.info(
-            assessment.message
-        )
-
-    confirmed_wrapper = (
-        st.session_state.get(
-            "main_confirmed_interaction"
-        )
-        or {}
-    )
-
-    confirmed_interaction = (
-        confirmed_wrapper.get(
-            "interaction",
-            {},
-        )
-    )
-
-    current_interaction_id = str(
-        confirmed_interaction.get(
-            "interaction_id",
-            "",
-        )
-    )
-
-    already_generated = bool(
-        current_interaction_id
-        and st.session_state.get(
-            "main_last_generated_interaction_id"
-        )
-        == current_interaction_id
-        and st.session_state.get(
-            "main_tutor_result"
-        )
-    )
-
-    generate_clicked = st.button(
-        "Generate grounded answer",
-        type="primary",
-        disabled=(
-            not assessment.ready
-            or already_generated
-        ),
-        width="stretch",
-        key="main_generate_answer_button",
-        help=(
-            "Change the target or command "
-            "to create a new turn."
-            if already_generated
-            else None
-        ),
-    )
-
-    if generate_clicked:
-        st.session_state[
-            "main_tutor_error"
-        ] = None
-
-        st.session_state[
-            "main_conversation_error"
-        ] = None
-
-        try:
-            with st.spinner(
-                "Generating and validating "
-                "the grounded answer..."
-            ):
-                client = (
-                    OpenAICompatibleLLMClient
-                    .from_env()
-                )
-
-                agent = GroundedTutorAgent(
-                    llm_client=client,
-                    max_retries=1,
-                )
-
-                generation = (
-                    generate_main_tutor_response(
-                        st.session_state[
-                            "main_confirmed_interaction"
-                        ],
-                        slide=view.active_slide,
-                        agent=agent,
-                        cloud_text_allowed=(
-                            st.session_state[
-                                "main_cloud_text_allowed"
-                            ]
-                        ),
-                        api_configured=True,
-                        conversation_turns=(
-                            st.session_state[
-                                "main_conversation_turns"
-                            ]
-                            if st.session_state[
-                                "main_history_enabled"
-                            ]
-                            else []
-                        ),
-                        history_max_items=int(
-                            st.session_state[
-                                "main_history_max_items"
-                            ]
-                        ),
-                    )
-                )
-
-                payload = (
-                    generation
-                    .to_session_payload()
-                )
-
-        except Exception as exc:
-            st.session_state[
-                "main_tutor_error"
-            ] = (
-                f"{type(exc).__name__}: "
-                f"{exc}"
+    if not interaction_id or not assessment.ready:
+        return False
+    st.session_state["main_last_generation_attempted_interaction_id"] = interaction_id
+    st.session_state["main_tutor_error"] = None
+    st.session_state["main_conversation_error"] = None
+    try:
+        with st.spinner("Generating and validating the grounded answer..."):
+            client = OpenAICompatibleLLMClient.from_env()
+            agent = GroundedTutorAgent(llm_client=client, max_retries=1)
+            generation = generate_main_tutor_response(
+                st.session_state["main_confirmed_interaction"],
+                slide=view.active_slide,
+                agent=agent,
+                cloud_text_allowed=st.session_state["main_cloud_text_allowed"],
+                api_configured=True,
+                conversation_turns=(
+                    st.session_state["main_conversation_turns"]
+                    if st.session_state.get("main_interaction_flow") == "dialogue"
+                    else []
+                ),
+                history_max_items=int(st.session_state["main_history_max_items"]),
             )
+            payload = generation.to_session_payload()
+    except Exception as exc:
+        st.session_state["main_tutor_error"] = f"{type(exc).__name__}: {exc}"
+        st.session_state["main_tutor_context"] = None
+        st.session_state["main_tutor_result"] = None
+        st.session_state["main_xai_result"] = None
+        return False
 
-            st.session_state[
-                "main_tutor_context"
-            ] = None
-
-            st.session_state[
-                "main_tutor_result"
-            ] = None
-
-            st.session_state[
-                "main_xai_result"
-            ] = None
-
-        else:
-            st.session_state[
-                "main_tutor_context"
-            ] = payload["context"]
-
-            st.session_state[
-                "main_tutor_result"
-            ] = payload["tutor"]
-
-            st.session_state[
-                "main_xai_result"
-            ] = payload["xai"]
-
-            st.session_state[
-                "main_tutor_error"
-            ] = None
-
-            st.session_state[
-                "main_last_generated_interaction_id"
-            ] = current_interaction_id
-
-            try:
-                _record_completed_turn(
-                    resources=resources,
-                    tutor_payload=(
-                        payload["tutor"]
-                    ),
-                    llm_xai_payload=(
-                        payload["xai"]
-                    ),
-                )
-
-            except Exception as exc:
-                st.session_state[
-                    "main_conversation_error"
-                ] = (
-                    "Tutor answer succeeded, but "
-                    "conversation recording failed: "
-                    f"{type(exc).__name__}: {exc}"
-                )
-
+    st.session_state["main_tutor_context"] = payload["context"]
+    st.session_state["main_tutor_result"] = payload["tutor"]
+    st.session_state["main_xai_result"] = payload["xai"]
+    st.session_state["main_tutor_error"] = None
+    st.session_state["main_last_generated_interaction_id"] = interaction_id
+    try:
+        _record_completed_turn(
+            resources=resources,
+            tutor_payload=payload["tutor"],
+            llm_xai_payload=payload["xai"],
+        )
+    except Exception as exc:
+        st.session_state["main_conversation_error"] = (
+            "Tutor answer succeeded, but conversation recording failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
     try:
         _log_completed_interaction_once()
     except Exception as exc:
@@ -4302,32 +4155,57 @@ def _render_tutor_generation_panel(
             "Tutor answer succeeded, but JSONL recording failed: "
             f"{type(exc).__name__}: {exc}"
         )
+    return True
 
-    if st.session_state[
-        "main_tutor_error"
-    ]:
-        st.error(
-            st.session_state[
-                "main_tutor_error"
-            ]
-        )
 
-    if st.session_state[
-        "main_conversation_error"
-    ]:
-        st.warning(
-            st.session_state[
-                "main_conversation_error"
-            ]
-        )
+def _maybe_generate_confirmed_turn(
+    view: MainUIViewModel,
+    resources: MainLiveResources,
+) -> bool:
+    """Automatically continue once per newly confirmed interaction."""
+    interaction_id = _confirmed_interaction_id()
+    if (
+        not interaction_id
+        or st.session_state.get("main_last_generated_interaction_id")
+        == interaction_id
+        or st.session_state.get("main_last_generation_attempted_interaction_id")
+        == interaction_id
+    ):
+        return False
+    return _generate_confirmed_turn(view, resources)
 
-    if st.session_state[
-        "main_tutor_result"
-    ]:
-        st.success(
-            "A validated tutor response "
-            "is shown below."
+
+def _retry_confirmed_turn() -> None:
+    st.session_state["main_last_generation_attempted_interaction_id"] = None
+    st.session_state["main_tutor_error"] = None
+
+
+def _render_generation_status(
+    view: MainUIViewModel,
+    resources: MainLiveResources,
+) -> None:
+    assessment = assess_tutor_generation(
+        st.session_state["main_confirmed_interaction"],
+        cloud_text_allowed=st.session_state["main_cloud_text_allowed"],
+        api_configured=bool(os.environ.get("DASHSCOPE_API_KEY")),
+    )
+    _maybe_generate_confirmed_turn(view, resources)
+    if st.session_state["main_tutor_error"]:
+        st.error(st.session_state["main_tutor_error"])
+        st.button(
+            "Retry",
+            key="main_retry_answer_button",
+            on_click=_retry_confirmed_turn,
         )
+    elif assessment.code == "cloud_permission_required":
+        st.warning(assessment.message)
+    elif assessment.code == "api_not_configured":
+        st.error(assessment.message)
+    elif assessment.code not in {"ready", "confirmation_missing"}:
+        st.info(assessment.message)
+    if st.session_state["main_conversation_error"]:
+        st.warning(st.session_state["main_conversation_error"])
+
 
 
 def _render_tutor_result(
@@ -4340,7 +4218,7 @@ def _render_tutor_result(
 
     if result is None:
         st.info(
-            "Confirm the request and generate an answer."
+            "Ask a question to receive a grounded explanation."
         )
         return
 
@@ -5053,12 +4931,7 @@ def _render_live_target_column(
     view: MainUIViewModel,
     proposal: LiveInteractionProposal | None,
 ) -> str | None:
-    st.markdown("### 1. Live target")
-    st.checkbox(
-        "Show AOI overlay",
-        key="main_show_aoi_overlay",
-        on_change=_on_live_overlay_change,
-    )
+    st.markdown("### Target")
     if proposal is None:
         st.caption("Waiting for a completed speech turn and gaze evidence.")
         return None
@@ -5107,7 +4980,9 @@ def _render_voice_component(
 ) -> None:
     render_voice_control_component(
         engine=str(st.session_state["main_voice_engine"]),
+        flow=str(st.session_state["main_interaction_flow"]),
         speech_mode=str(st.session_state["main_speech_mode"]),
+        palette_tokens=palette_semantic(st.session_state["main_ui_palette"]),
         key=(
             "main_voice_control_"
             f"{view.deck_id}_{view.active_slide_id}"
@@ -5115,123 +4990,127 @@ def _render_voice_component(
     )
 
 
-def _render_omni_interaction(
-    view: MainUIViewModel,
+def _current_voice_panel_view(
     resources: MainLiveResources,
-) -> None:
+) -> VoicePanelView:
     snapshot = resources.voice.snapshot()
-    target_column, intent_column = st.columns(
-        [1.0, 1.0],
-        gap="medium",
-    )
-    with target_column:
-        st.markdown("### 1. Locked target")
-        st.checkbox(
-            "Show AOI overlay",
-            key="main_show_aoi_overlay",
-            on_change=_on_live_overlay_change,
-        )
-        target_label = snapshot.get("target_label")
-        if target_label:
-            st.success(str(target_label))
-            st.caption(
-                "Gaze may suggest another AOI, but switching requires "
-                "an explicit request and confirmation."
-            )
-        else:
-            st.warning(
-                "Select a whole-slide or manual-region target before "
-                "starting Omni."
-            )
-    with intent_column:
-        st.markdown("### Realtime dialogue")
-        st.caption(
-            "Speak naturally. Use an explicit phrase such as ‘switch to "
-            "this’ when you want to change the locked target."
-        )
-        st.caption(
-            "Mode: "
-            + (
-                "Push to talk"
-                if st.session_state["main_speech_mode"] == "push_to_talk"
-                else "Continuous"
-            )
-        )
-        status_message = snapshot.get("status_message")
-        if status_message:
-            st.info(str(status_message))
-        _render_voice_component(view)
-
-
-def _render_live_interaction(
-    view: MainUIViewModel,
-    resources: MainLiveResources,
-) -> None:
-    if st.session_state.get("main_voice_engine") == "omni":
-        _render_omni_interaction(view, resources)
-        return
     proposal = st.session_state.get("main_live_proposal")
     if not isinstance(proposal, LiveInteractionProposal):
         proposal = None
-    target_column, intent_column = st.columns(
-        [1.0, 1.0],
-        gap="medium",
+    phase_aliases = {
+        "capturing": "sampling",
+        "recording": "sampling",
+        "processing": "transcribing",
+        "responding": "answering",
+    }
+    raw_phase = str(snapshot.get("state") or "").strip().lower()
+    phase = phase_aliases.get(raw_phase, raw_phase)
+    target_needs_confirmation = bool(
+        proposal is not None and not st.session_state.get("main_confirmed")
     )
-    with target_column:
-        selected = _render_live_target_column(view, proposal)
-    with intent_column:
-        st.markdown("### Voice or typed request")
+    confirmed_aoi_id = st.session_state.get("main_confirmed_aoi_id")
+    target_label = snapshot.get("target_label") or confirmed_aoi_id
+    transcript = (
+        snapshot.get("user_transcript")
+        if st.session_state.get("main_interaction_flow") == "realtime"
+        else st.session_state.get("main_typed_command")
+    )
+    if target_needs_confirmation:
+        phase = "confirmation"
+    elif confirmed_aoi_id and phase in {"", "ready", "listening"}:
+        phase = "locked"
+    error_code = snapshot.get("error_code")
+    if st.session_state.get("main_tutor_error"):
+        error_code = "tutor_failed"
+    return build_voice_panel_view(
+        speech_mode=str(st.session_state["main_speech_mode"]),
+        turn_phase=phase,
+        transcript=str(transcript or ""),
+        target_label=str(target_label) if target_label else None,
+        target_needs_confirmation=target_needs_confirmation,
+        error_code=str(error_code) if error_code else None,
+    )
+
+
+def _render_unified_interaction(
+    view: MainUIViewModel,
+    resources: MainLiveResources,
+) -> None:
+    panel = _current_voice_panel_view(resources)
+    st.markdown("## Attention & Voice")
+    st.markdown(
+        '<div class="as-voice-state" role="status">'
+        f'<strong>{html.escape(panel.title)}</strong>'
+        f'<span>{html.escape(panel.detail)}</span>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    if panel.target_state == "sampling":
+        st.caption("Sampling attention")
+    elif panel.target_state == "needs_confirmation":
+        st.warning("Target needs confirmation")
+    elif panel.target_state == "locked" and panel.target_label:
+        st.success(f"Target locked · {panel.target_label}")
+
+    if _media_runtime_requested():
         _render_voice_component(view)
-        st.text_area(
-            "Speech transcript",
-            key="main_typed_command",
-            height=110,
-            placeholder="Speak a request after enabling camera and microphone.",
-            on_change=_on_typed_command_change,
-            label_visibility="collapsed",
-        )
-        if proposal is not None:
-            edited = (
-                st.session_state["main_typed_command"].strip()
-                != proposal.original_speech_transcript.strip()
+    else:
+        st.caption("Camera and microphone are off. Typed input remains available.")
+
+    proposal = st.session_state.get("main_live_proposal")
+    if not isinstance(proposal, LiveInteractionProposal):
+        proposal = None
+    if proposal is None:
+        _render_target_column(view)
+        _render_intent_column(view)
+        if _maybe_generate_confirmed_turn(view, resources) and _media_runtime_requested():
+            st.session_state["main_live_full_rerun_requested"] = True
+        return
+
+    selected = _render_live_target_column(view, proposal)
+    st.text_area(
+        "Speech transcript",
+        key="main_typed_command",
+        height=96,
+        placeholder="Your completed speech turn appears here.",
+        on_change=_on_typed_command_change,
+    )
+    st.caption(
+        "Edited transcript: hybrid provenance."
+        if st.session_state["main_typed_command"].strip()
+        != proposal.original_speech_transcript.strip()
+        else "Original speech transcript: sensor-assisted provenance."
+    )
+    confirm_clicked = st.button(
+        "Use this target",
+        type="primary",
+        disabled=(
+            selected is None
+            or not st.session_state["main_typed_command"].strip()
+            or st.session_state["main_confirmed"]
+        ),
+        width="stretch",
+        key="main_live_confirm_button",
+    )
+    if confirm_clicked and selected is not None:
+        try:
+            _store_live_confirmation(
+                view,
+                proposal,
+                selected_option=selected,
+                automatic=False,
             )
-            st.caption(
-                "Edited transcript: hybrid provenance."
-                if edited
-                else "Original speech transcript: sensor-assisted provenance."
+            _maybe_generate_confirmed_turn(view, resources)
+        except Exception as exc:
+            _invalidate_confirmation()
+            st.session_state["main_confirmation_error"] = (
+                f"{type(exc).__name__}: {exc}"
             )
-        confirm_clicked = st.button(
-            "Confirm target and command",
-            type="primary",
-            disabled=(
-                proposal is None
-                or selected is None
-                or not st.session_state["main_typed_command"].strip()
-                or st.session_state["main_confirmed"]
-            ),
-            width="stretch",
-            key="main_live_confirm_button",
-        )
-        if confirm_clicked and proposal is not None and selected is not None:
-            try:
-                _store_live_confirmation(
-                    view,
-                    proposal,
-                    selected_option=selected,
-                    automatic=False,
-                )
-            except Exception as exc:
-                _invalidate_confirmation()
-                st.session_state["main_confirmation_error"] = (
-                    f"{type(exc).__name__}: {exc}"
-                )
-        if st.session_state["main_confirmation_error"]:
-            st.error(st.session_state["main_confirmation_error"])
-        elif st.session_state["main_confirmed"]:
-            st.success(
-                "Live request confirmed via "
-                f"{st.session_state['main_confirmation_source']}."
-            )
+    if st.session_state["main_confirmation_error"]:
+        st.error(st.session_state["main_confirmation_error"])
+
+
+
 @st.fragment(run_every=0.5)
 def _render_live_periodic(
     resources: MainLiveResources,
@@ -5242,6 +5121,7 @@ def _render_live_periodic(
         return
     try:
         _consume_live_proposal(resources, view)
+        _maybe_generate_confirmed_turn(view, resources)
     except Exception as exc:
         st.error(
             "Live proposal processing failed: "
@@ -5256,7 +5136,7 @@ def _render_live_periodic(
         f"Media: {'ready' if session.video_fresh and session.audio_fresh else 'waiting'} · "
         f"Local gaze: {'ready' if ingress_stats['gaze_fresh'] else 'fallback'}"
     )
-    _render_live_interaction(view, resources)
+    _render_unified_interaction(view, resources)
     proposal = st.session_state.get("main_live_proposal")
     if not isinstance(proposal, LiveInteractionProposal):
         proposal = None
@@ -5301,22 +5181,13 @@ def _render_manual_interaction(
     *,
     live_resources: MainLiveResources | None = None,
 ) -> None:
-    """Render the core learner workflow in one horizontal row."""
-    if live_resources is not None and (
-        _media_runtime_requested()
-        or st.session_state.get("main_interaction_flow") == "realtime"
-    ):
-        if _media_runtime_requested():
-            _render_live_periodic(
-                live_resources,
-                view,
-            )
-        else:
-            _render_live_interaction(view, live_resources)
+    """Route every flow through one stable Attention & Voice panel."""
+    if live_resources is None:
         return
-
-    _render_target_column(view)
-    _render_intent_column(view)
+    if _media_runtime_requested():
+        _render_live_periodic(live_resources, view)
+        return
+    _render_unified_interaction(view, live_resources)
 
 
 
@@ -5327,7 +5198,7 @@ def _render_lower_workspace(
     """Keep the Tutor explanation stable below the working row."""
     with st.container(key="main_tutor_answer"):
         st.markdown("## Tutor explanation")
-        _render_answer_column(view, live_resources)
+        _render_unified_answer(view, live_resources)
     with st.expander(
         "Conversation history",
         expanded=False,

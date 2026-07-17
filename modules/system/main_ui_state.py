@@ -139,6 +139,7 @@ def build_main_turn_defaults() -> dict[str, Any]:
         "main_tutor_result": None,
         "main_tutor_context": None,
         "main_last_generated_interaction_id": None,
+        "main_last_generation_attempted_interaction_id": None,
         "main_tutor_error": None,
         "main_xai_result": None,
     }

@@ -256,6 +256,21 @@ textarea:focus-visible,
   padding: 0.85rem;
 }
 
+.as-voice-state {
+  background: var(--as-primary-soft);
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-control);
+  display: grid;
+  gap: 2px;
+  margin-bottom: 0.65rem;
+  padding: 0.55rem 0.65rem;
+}
+
+.as-voice-state span {
+  color: var(--as-muted);
+  font-size: 0.8rem;
+}
+
 .st-key-main_tutor_answer {
   font-family: var(--as-font-heading);
   margin-top: 1rem;

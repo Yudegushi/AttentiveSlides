@@ -214,7 +214,7 @@ class TestMainUIWidgetInventory(
             "main_typed_command",
             "main_confirm_button",
             "main_live_confirm_button",
-            "main_generate_answer_button",
+            "main_retry_answer_button",
             "main_reset_turn_button",
             "main_clear_conversation_button",
             "main_start_study",
