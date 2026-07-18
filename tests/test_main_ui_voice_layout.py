@@ -28,10 +28,18 @@ class VoicePanelMappingTests(unittest.TestCase):
             target_label=None,
             target_needs_confirmation=False,
         )
+        typed = build_voice_panel_view(
+            speech_mode="push_to_talk",
+            turn_phase="typed",
+            transcript="",
+            target_label=None,
+            target_needs_confirmation=False,
+        )
         self.assertEqual((ptt.title, ptt.detail), (
             "Ready", "Hold V or the button to speak"
         ))
         self.assertEqual(hands_free.title, "Listening for speech")
+        self.assertEqual(typed.title, "Typed input ready")
 
     def test_sampling_confirmation_locked_and_answering_copy(self) -> None:
         sampling = build_voice_panel_view(
@@ -85,7 +93,9 @@ class VoicePanelMappingTests(unittest.TestCase):
             error_code="empty_transcript",
         )
         self.assertEqual(unknown.title, "Preparing voice")
-        self.assertEqual(error.title, "Voice input needs attention")
+        self.assertEqual((error.title, error.detail), (
+            "Try again", "No speech was detected"
+        ))
         self.assertTrue(error.retryable)
 
 
@@ -130,6 +140,39 @@ class MainUIVoiceLayoutTests(unittest.TestCase):
             self.assertNotIn(obsolete, self.source)
         lower = self.functions["_render_lower_workspace"]
         self.assertEqual(lower.count("_render_unified_answer"), 1)
+
+    def test_control_and_tutor_output_match_compact_02_hierarchy(self) -> None:
+        unified = self.functions["_render_unified_interaction"]
+        target = self.functions["_render_target_column"]
+        intent = self.functions["_render_intent_column"]
+        lower = self.functions["_render_lower_workspace"]
+        tutor = self.functions["_render_tutor_result"]
+        periodic = self.functions["_render_live_periodic"]
+
+        self.assertIn("Attention and voice controls", unified)
+        self.assertIn("as-panel-index", unified)
+        self.assertIn("CONTROL", unified)
+        self.assertIn("as-status-badge", unified)
+        self.assertEqual(unified.count("as-voice-state"), 1)
+        self.assertIn("Target source", target)
+        self.assertIn("Quick prompts", intent)
+        self.assertNotIn("### Target", target)
+        self.assertNotIn("### Ask tutor", intent)
+        self.assertIn("TUTOR OUTPUT", lower)
+        self.assertIn("main_reset_turn_button", lower)
+        self.assertIn("as-tutor-meta", tutor)
+        self.assertNotIn(".metric(", tutor)
+        self.assertNotIn("Live transport:", periodic)
+
+        for routine_copy in (
+            "Camera and microphone are off. Typed input remains available.",
+            "Attention regions are controlled from the left settings rail.",
+            "The complete slide is selected.",
+            "Target ready · Slide",
+            "Matched: ",
+            "#### Quick actions",
+        ):
+            self.assertNotIn(routine_copy, self.source)
 
     def test_default_policy_auto_confirms_only_valid_high_confidence_target(self) -> None:
         high = make_proposal(

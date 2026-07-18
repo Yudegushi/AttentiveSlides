@@ -17,11 +17,23 @@
       border: 0;
       border-radius: 0;
       display: grid;
-      gap: 8px;
+      gap: 6px;
       padding: 0;
     }
-    #status-title { font-size: 11px; font-weight: 650; line-height: 15px; }
+    #status-row { align-items: center; display: flex; gap: 8px; }
+    #status-title {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      line-height: 14px;
+      text-transform: uppercase;
+    }
     #status-detail { color: var(--as-muted); font-size: 10px; line-height: 14px; }
+    #activity { display: flex; gap: 2px; margin-left: auto; }
+    #activity i { background: var(--as-primary); display: block; opacity: .55; width: 2px; }
+    #activity i:nth-child(1), #activity i:nth-child(5) { height: 7px; }
+    #activity i:nth-child(2), #activity i:nth-child(4) { height: 13px; }
+    #activity i:nth-child(3) { height: 18px; }
     #meter {
       background: var(--as-segment);
       border-radius: 999px;
@@ -55,7 +67,12 @@
       outline-offset: 2px;
     }
     button:disabled { cursor: not-allowed; opacity: .58; }
-    #ptt { background: var(--as-primary); color: var(--as-primary-on); flex: 1 1 150px; }
+    #ptt {
+      background: var(--as-primary);
+      color: var(--as-primary-on);
+      flex: 1 1 150px;
+      min-height: 42px;
+    }
     #ptt.active { background: var(--as-slide-accent); }
     kbd {
       background: var(--as-primary-on);
@@ -77,7 +94,10 @@
 <body>
   <div id="root">
     <div>
-      <div id="status-title">Preparing voice</div>
+      <div id="status-row">
+        <div id="status-title">Input ready</div>
+        <span id="activity" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+      </div>
       <div id="status-detail">Connecting the current input mode</div>
     </div>
     <div id="meter" aria-label="Voice activity"><div id="meter-fill"></div></div>

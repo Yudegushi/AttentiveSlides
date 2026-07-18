@@ -1303,6 +1303,7 @@ def _render_live_controls(
 
     runtime_state = resources.runtime.controller.state.value
     session = resources.ingress.session_snapshot()
+    ingress_stats = resources.ingress.stats_payload()
     st.sidebar.markdown(
         '<div class="as-field-label">Participant &amp; calibration</div>',
         unsafe_allow_html=True,
@@ -1316,6 +1317,11 @@ def _render_live_controls(
         st.caption(
             "Engine: "
             + ("Omni realtime" if st.session_state["main_voice_engine"] == "omni" else "Grounded single-turn")
+        )
+        st.caption(
+            f"Transport {'armed' if session.armed else 'off'} · "
+            f"media {'ready' if session.video_fresh and session.audio_fresh else 'waiting'} · "
+            f"local gaze {'ready' if ingress_stats['gaze_fresh'] else 'fallback'}"
         )
         st.radio(
             "Confirmation policy",
@@ -2404,45 +2410,35 @@ def _render_slide_selector(
 def _render_compact_target_summary(
     view: MainUIViewModel,
 ) -> None:
-    bbox = st.session_state.get(
-        "main_manual_bbox"
-    )
-
-    selected_aoi_ids = (
-        st.session_state.get(
-            "main_selected_aoi_ids",
-            [],
-        )
-    )
-
-    if not bbox:
-        st.caption(
-            "No target has been selected."
-        )
+    """Show only an actionable manual-selection summary."""
+    del view
+    if st.session_state.get("main_target_scope") != "Manual region":
         return
 
-    st.caption(
-        "Target ready · "
-        f"Slide {view.active_slide_id} · "
-        f"{len(selected_aoi_ids)} AOI match(es)"
-    )
-
-    if selected_aoi_ids:
-        st.caption(
-            "Matched: "
-            + ", ".join(
-                selected_aoi_ids
-            )
+    bbox = st.session_state.get("main_manual_bbox")
+    if not bbox:
+        copy = "Draw one region directly on the slide."
+    else:
+        match_count = len(st.session_state.get("main_selected_aoi_ids", []))
+        copy = (
+            "Manual region selected"
+            if match_count == 0
+            else f"Manual region selected · {match_count} mapped"
         )
+    st.markdown(
+        f'<div class="as-inline-note">{html.escape(copy)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def _render_target_column(
     view: MainUIViewModel,
 ) -> None:
+    """Render one compact, actionable target-source control."""
     st.markdown(
-        "### Target"
+        '<div class="as-field-label">Target source</div>',
+        unsafe_allow_html=True,
     )
-
     target_options = ["Whole slide", "Manual region"]
     if st.session_state.get("main_voice_engine") == "omni":
         target_options.insert(0, "Gaze AOI")
@@ -2453,127 +2449,69 @@ def _render_target_column(
         horizontal=True,
         key="main_target_scope",
         on_change=_on_target_scope_change,
+        label_visibility="collapsed",
     )
 
-    st.caption(
-        "Attention regions are controlled from the left settings rail."
-    )
-
-    if (
-        st.session_state[
-            "main_target_scope"
-        ]
-        == "Manual region"
-    ):
-        st.caption(
-            "Drag directly on the slide to draw one rectangular target."
-        )
-
+    target_scope = st.session_state["main_target_scope"]
+    if target_scope == "Manual region":
+        _render_compact_target_summary(view)
         st.button(
-            "Clear selected region",
+            "CLEAR REGION",
             key="main_clear_region_button",
-            width="stretch",
             on_click=_clear_manual_region,
         )
-
-    elif st.session_state["main_target_scope"] == "Gaze AOI":
-        st.caption(
-            "Look steadily at an AOI before starting Omni. "
-            "The first stable target stays locked until you explicitly switch."
+    elif target_scope == "Gaze AOI":
+        st.markdown(
+            '<div class="as-inline-note">Hold your gaze before speaking; the stable target locks for the turn.</div>',
+            unsafe_allow_html=True,
         )
     else:
-        _set_whole_slide_target(
-            view
-        )
-
-        st.caption(
-            "The complete slide is selected."
-        )
-
-    _render_compact_target_summary(
-        view
-    )
-
+        _set_whole_slide_target(view)
 
 
 def _render_intent_column(
     view: MainUIViewModel,
 ) -> None:
+    """Render quick prompts and typed input without routine diagnostics."""
     st.markdown(
-        "### Ask tutor"
+        '<div class="as-field-label">Quick prompts</div>',
+        unsafe_allow_html=True,
     )
-
     _render_quick_intent_actions()
 
+    st.markdown(
+        '<div class="as-field-label">Ask tutor</div>',
+        unsafe_allow_html=True,
+    )
     st.text_area(
         "Typed command",
         key="main_typed_command",
-        height=110,
-        placeholder=(
-            "Examples: explain this, "
-            "summarize this, quiz me"
-        ),
+        height=88,
+        placeholder="Explain, summarize, simplify, or ask a question",
         on_change=_on_typed_command_change,
+        label_visibility="collapsed",
     )
 
-    command = st.session_state[
-        "main_typed_command"
-    ].strip()
-
-    target_ready = bool(
-        st.session_state[
-            "main_manual_bbox"
-        ]
-    )
-
-    resolution = (
-        _resolve_current_intent()
-    )
-
+    command = st.session_state["main_typed_command"].strip()
+    target_ready = bool(st.session_state["main_manual_bbox"])
+    resolution = _resolve_current_intent()
     assessment = assess_intent_target(
         resolution,
         target_available=target_ready,
-        selected_aoi_count=len(
-            st.session_state[
-                "main_selected_aoi_ids"
-            ]
-        ),
+        selected_aoi_count=len(st.session_state["main_selected_aoi_ids"]),
     )
 
-    if st.session_state[
-        "main_intent_error"
-    ]:
-        st.error(
-            st.session_state[
-                "main_intent_error"
-            ]
-        )
-    elif not command:
-        st.caption(
-            "Choose a Quick action or type a command."
-        )
-    elif resolution is None:
-        st.info(
-            assessment.message
-        )
-    elif not resolution.recognized:
-        st.error(
-            assessment.message
-        )
-    elif assessment.status == "warning":
-        st.warning(
-            assessment.message
-        )
-    else:
-        st.success(
-            "Intent recognized: "
-            f"{resolution.intent_result.intent}"
-        )
+    if st.session_state["main_intent_error"]:
+        st.error(st.session_state["main_intent_error"])
+    elif command and resolution is None:
+        st.info(assessment.message)
+    elif command and not resolution.recognized:
+        st.error(assessment.message)
+    elif command and assessment.status == "warning":
+        st.warning(assessment.message)
 
-    _render_confirmation_panel(
-        view,
-        resolution,
-    )
+    if command and resolution is not None and resolution.recognized:
+        _render_confirmation_panel(view, resolution)
 
 
 @contextmanager
@@ -2606,6 +2544,7 @@ def _render_unified_answer(
     view: MainUIViewModel,
     resources: MainLiveResources,
 ) -> None:
+    """Render every tutor mode through the same compact output route."""
     _render_generation_status(view, resources)
     realtime_answer = (
         str(resources.voice.snapshot().get("answer_text") or "").strip()
@@ -2618,12 +2557,6 @@ def _render_unified_answer(
         _render_tutor_result(resources.single_turn_tts)
     _render_xai_drawer()
 
-    st.button(
-        "Reset current turn",
-        width="stretch",
-        key="main_reset_turn_button",
-        on_click=_reset_turn_state,
-    )
 
 def _render_header(
     view: MainUIViewModel,
@@ -3577,11 +3510,7 @@ def _resolve_current_intent(
 
 
 def _render_quick_intent_actions() -> None:
-    """Render explicit intent buttons in two rows."""
-    st.markdown(
-        "#### Quick actions"
-    )
-
+    """Render explicit intent buttons in two compact rows."""
     first_row = st.columns(3)
 
     for column, action in zip(
@@ -3733,11 +3662,6 @@ def _render_confirmation_panel(
         st.warning(
             assessment.message
         )
-    else:
-        st.caption(
-            assessment.message
-        )
-
     confirm_column, whole_column, cancel_column = (
         st.columns(3)
     )
@@ -4326,20 +4250,16 @@ def _render_generation_status(
 def _render_tutor_result(
     tts_controller: SingleTurnTTSController,
 ) -> None:
-    """Render the learner-facing answer without developer diagnostics."""
-    result = st.session_state[
-        "main_tutor_result"
-    ]
-
+    """Render the answer, meaningful follow-up, and one metadata line."""
+    result = st.session_state["main_tutor_result"]
     if result is None:
-        st.info(
-            "Ask a question to receive a grounded explanation."
+        st.markdown(
+            '<div class="as-empty-output">Ask a question to receive a grounded explanation.</div>',
+            unsafe_allow_html=True,
         )
         return
 
-    st.markdown(
-        result["answer"]
-    )
+    st.markdown(result["answer"])
 
     speech = tts_controller.synthesize_once(
         interaction_id=str(
@@ -4357,53 +4277,25 @@ def _render_tutor_result(
     elif speech.error_message:
         st.warning(speech.error_message)
 
-    if result.get(
-        "active_recall_question"
-    ):
-        st.info(
-            "Active recall: "
-            + result[
-                "active_recall_question"
-            ]
-        )
+    if result.get("active_recall_question"):
+        st.info("Active recall: " + result["active_recall_question"])
+    if result.get("uncertainty_note"):
+        st.warning("Uncertainty: " + result["uncertainty_note"])
 
-    if result.get(
-        "uncertainty_note"
-    ):
-        st.warning(
-            "Uncertainty: "
-            + result[
-                "uncertainty_note"
-            ]
-        )
-
-    status_column, validation_column = (
-        st.columns(2)
+    validation = "PASS" if result["validation_is_valid"] else "REVIEW"
+    st.markdown(
+        '<div class="as-tutor-meta">'
+        f'STATUS {html.escape(str(result["status"]).upper())}'
+        '<span>•</span>'
+        f'VALIDATION {validation}'
+        "</div>",
+        unsafe_allow_html=True,
     )
-
-    status_column.metric(
-        "Status",
-        result["status"],
-    )
-
-    validation_column.metric(
-        "Validation",
-        (
-            "PASS"
-            if result[
-                "validation_is_valid"
-            ]
-            else "FAIL"
-        ),
-    )
-
     st.button(
-        "Start follow-up",
-        width="stretch",
+        "FOLLOW-UP",
         key="main_start_follow_up_button",
         on_click=_start_follow_up,
     )
-
 
 
 def _render_main_xai() -> None:
@@ -5046,11 +4938,15 @@ def _render_live_target_column(
     view: MainUIViewModel,
     proposal: LiveInteractionProposal | None,
 ) -> str | None:
-    st.markdown("### Target")
+    """Expose target correction only after a speech proposal exists."""
+    del view
     if proposal is None:
-        st.caption("Waiting for a completed speech turn and gaze evidence.")
         return None
 
+    st.markdown(
+        '<div class="as-field-label">Target source</div>',
+        unsafe_allow_html=True,
+    )
     options = _live_target_options(proposal)
     current = st.session_state.get("main_live_target_choice")
     if current not in options:
@@ -5069,24 +4965,13 @@ def _render_live_target_column(
         on_change=_invalidate_confirmation,
         label_visibility="collapsed",
     )
-    if proposal.predicted_aoi_id:
-        st.caption(
-            f"Predicted: {proposal.predicted_aoi_id} · "
-            f"confidence {proposal.target_confidence:.2f} · "
-            f"grid {proposal.gaze_grid}"
-        )
-    else:
-        st.warning(
-            "No valid gaze target. Choose whole slide or draw a region."
-        )
+    if not proposal.predicted_aoi_id:
+        st.warning("No gaze target was resolved. Choose the whole slide or draw a region.")
     st.button(
-        "Draw manual region",
+        "EDIT TARGET",
         key="main_live_draw_region_button",
-        width="stretch",
         on_click=_enable_live_manual_region,
     )
-    if st.session_state.get("main_manual_bbox"):
-        st.caption("A manual rectangle is available as a fallback target.")
     return selected
 
 
@@ -5120,6 +5005,8 @@ def _current_voice_panel_view(
     }
     raw_phase = str(snapshot.get("state") or "").strip().lower()
     phase = phase_aliases.get(raw_phase, raw_phase)
+    if not _media_runtime_requested():
+        phase = "typed"
     target_needs_confirmation = bool(
         proposal is not None and not st.session_state.get("main_confirmed")
     )
@@ -5132,11 +5019,13 @@ def _current_voice_panel_view(
     )
     if target_needs_confirmation:
         phase = "confirmation"
-    elif confirmed_aoi_id and phase in {"", "ready", "listening"}:
+    elif confirmed_aoi_id and phase not in {"typed"} and phase in {"", "ready", "listening"}:
         phase = "locked"
-    error_code = snapshot.get("error_code")
-    if st.session_state.get("main_tutor_error"):
-        error_code = "tutor_failed"
+    error_code = (
+        snapshot.get("error_code")
+        if _media_runtime_requested()
+        else None
+    )
     return build_voice_panel_view(
         speech_mode=str(st.session_state["main_speech_mode"]),
         turn_phase=phase,
@@ -5151,26 +5040,35 @@ def _render_unified_interaction(
     view: MainUIViewModel,
     resources: MainLiveResources,
 ) -> None:
+    """Render one stable learner-facing Control panel for every voice mode."""
     panel = _current_voice_panel_view(resources)
-    st.markdown("## Attention & Voice")
+    badge = panel.state.replace("_", " ").upper()
+    target_label = panel.target_label
+    if target_label in {"whole_slide", "whole-slide"}:
+        target_label = "Whole slide"
+    detail = panel.detail
+    if panel.target_state == "locked" and target_label:
+        detail = f"{detail} · {target_label}"
+
     st.markdown(
-        '<div class="as-voice-state" role="status">'
-        f'<strong>{html.escape(panel.title)}</strong>'
-        f'<span>{html.escape(panel.detail)}</span>'
+        '<div class="as-panel-heading" role="heading" aria-level="2" '
+        'aria-label="Attention and voice controls">'
+        '<span class="as-panel-index">1</span>'
+        '<h2>CONTROL</h2>'
+        f'<span class="as-status-badge">{html.escape(badge)}</span>'
         "</div>",
         unsafe_allow_html=True,
     )
-    if panel.target_state == "sampling":
-        st.caption("Sampling attention")
-    elif panel.target_state == "needs_confirmation":
-        st.warning("Target needs confirmation")
-    elif panel.target_state == "locked" and panel.target_label:
-        st.success(f"Target locked · {panel.target_label}")
+    st.markdown(
+        '<div class="as-voice-state" role="status">'
+        f'<strong>{html.escape(panel.title)}</strong>'
+        f'<span>{html.escape(detail)}</span>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     if _media_runtime_requested():
         _render_voice_component(view)
-    else:
-        st.caption("Camera and microphone are off. Typed input remains available.")
 
     proposal = st.session_state.get("main_live_proposal")
     if not isinstance(proposal, LiveInteractionProposal):
@@ -5183,21 +5081,20 @@ def _render_unified_interaction(
         return
 
     selected = _render_live_target_column(view, proposal)
+    st.markdown(
+        '<div class="as-field-label">Question / transcript</div>',
+        unsafe_allow_html=True,
+    )
     st.text_area(
         "Speech transcript",
         key="main_typed_command",
-        height=96,
+        height=88,
         placeholder="Your completed speech turn appears here.",
         on_change=_on_typed_command_change,
-    )
-    st.caption(
-        "Edited transcript: hybrid provenance."
-        if st.session_state["main_typed_command"].strip()
-        != proposal.original_speech_transcript.strip()
-        else "Original speech transcript: sensor-assisted provenance."
+        label_visibility="collapsed",
     )
     confirm_clicked = st.button(
-        "Use this target",
+        "CONFIRM TARGET",
         type="primary",
         disabled=(
             selected is None
@@ -5225,7 +5122,6 @@ def _render_unified_interaction(
         st.error(st.session_state["main_confirmation_error"])
 
 
-
 @st.fragment(run_every=0.5)
 def _render_live_periodic(
     resources: MainLiveResources,
@@ -5242,15 +5138,7 @@ def _render_live_periodic(
             "Live proposal processing failed: "
             f"{type(exc).__name__}: {exc}"
         )
-    session = resources.ingress.session_snapshot()
-    ingress_stats = resources.ingress.stats_payload()
-    runtime_state = resources.runtime.controller.state.value
-    st.caption(
-        f"Live transport: {'armed' if session.armed else 'off'} · "
-        f"Runtime: {runtime_state} · "
-        f"Media: {'ready' if session.video_fresh and session.audio_fresh else 'waiting'} · "
-        f"Local gaze: {'ready' if ingress_stats['gaze_fresh'] else 'fallback'}"
-    )
+
     _render_unified_interaction(view, resources)
     proposal = st.session_state.get("main_live_proposal")
     if not isinstance(proposal, LiveInteractionProposal):
@@ -5310,19 +5198,41 @@ def _render_lower_workspace(
     view: MainUIViewModel,
     live_resources: MainLiveResources,
 ) -> None:
-    """Keep the Tutor explanation stable below the working row."""
+    """Keep the compact Tutor Output below the slide column only."""
     with st.container(key="main_tutor_answer"):
-        st.markdown("## Tutor explanation")
+        heading, action = st.columns(
+            [0.8, 0.2],
+            gap="small",
+            vertical_alignment="center",
+        )
+        with heading:
+            output_ready = bool(
+                st.session_state.get("main_tutor_result")
+                or (
+                    st.session_state.get("main_interaction_flow") == "realtime"
+                    and str(live_resources.voice.snapshot().get("answer_text") or "").strip()
+                )
+            )
+            st.markdown(
+                '<div class="as-panel-heading" role="heading" aria-level="2">'
+                '<span class="as-panel-index">2</span>'
+                '<h2>TUTOR OUTPUT</h2>'
+                f'<span class="as-status-badge">{"READY" if output_ready else "WAITING"}</span>'
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        with action:
+            st.button(
+                "RESET TURN",
+                key="main_reset_turn_button",
+                on_click=_reset_turn_state,
+            )
         _render_unified_answer(view, live_resources)
-    with st.expander(
-        "Conversation history",
-        expanded=False,
-    ):
+    with st.expander("Conversation history", expanded=False):
         _render_conversation_history(
             view,
             live_resources.single_turn_tts,
         )
-
 
 
 def _draw_aoi_overlay(

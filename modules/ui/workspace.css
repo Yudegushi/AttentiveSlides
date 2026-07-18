@@ -62,6 +62,14 @@ footer {
   z-index: 46;
 }
 
+.st-key-main_sidebar_brand > div,
+.st-key-main_sidebar_brand [data-testid="stVerticalBlock"],
+.st-key-main_sidebar_brand [data-testid="stMarkdownContainer"] {
+  align-items: center;
+  display: flex;
+  height: 100%;
+}
+
 .as-brand-cell {
   align-items: center;
   display: flex;
@@ -544,24 +552,118 @@ body:has(.st-key-main_slide_rail_reopen) .st-key-main_topbar {
   white-space: nowrap;
 }
 
-.as-voice-state {
-  background: var(--as-primary-soft);
-  border: 1px solid var(--as-border);
-  border-radius: var(--as-radius-control);
-  display: grid;
-  gap: 2px;
-  margin-bottom: 0.65rem;
-  padding: 0.55rem 0.65rem;
+.as-panel-heading {
+  align-items: center;
+  border-bottom: 1px solid var(--as-border);
+  display: flex;
+  gap: 8px;
+  min-height: 32px;
+  padding-bottom: 8px;
 }
 
-.as-voice-state span {
+.as-panel-heading h2 {
+  color: var(--as-ink);
+  font-family: var(--as-font-heading);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 20px;
+  margin: 0;
+}
+
+.as-panel-index {
+  align-items: center;
+  border: 1px solid var(--as-border-strong);
+  border-radius: 50%;
+  color: var(--as-primary);
+  display: inline-flex;
+  font-family: var(--as-font-heading);
+  font-size: 11px;
+  height: 22px;
+  justify-content: center;
+  line-height: 1;
+  width: 22px;
+}
+
+.as-status-badge {
+  border: 1px solid var(--as-border);
+  border-radius: 999px;
   color: var(--as-muted);
-  font-size: 0.8rem;
+  font-family: var(--as-font-ui);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  line-height: 16px;
+  margin-left: auto;
+  padding: 0 6px;
+}
+
+.as-voice-state {
+  background: var(--as-primary-soft);
+  border-left: 2px solid var(--as-primary);
+  display: grid;
+  gap: 2px;
+  margin: 10px 0 8px;
+  padding: 10px 12px;
+}
+
+.as-voice-state strong {
+  font-family: var(--as-font-heading);
+  font-size: 14px;
+  line-height: 18px;
+}
+
+.as-voice-state span,
+.as-inline-note,
+.as-empty-output {
+  color: var(--as-muted);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.as-inline-note {
+  margin: 4px 0 7px;
+}
+
+.st-key-main_interaction_workspace .as-field-label {
+  color: var(--as-muted);
+  letter-spacing: 0.04em;
+  margin: 12px 0 5px;
+}
+
+.st-key-main_interaction_workspace button {
+  font-size: 10px;
 }
 
 .st-key-main_tutor_answer {
   font-family: var(--as-font-heading);
-  margin-top: 1rem;
+  margin-top: 12px;
+}
+
+.st-key-main_tutor_answer p {
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.st-key-main_tutor_answer button,
+.st-key-main_tutor_answer [data-testid="stExpander"] {
+  font-family: var(--as-font-ui);
+  font-size: 10px;
+}
+
+.as-empty-output {
+  font-family: var(--as-font-ui);
+  padding: 12px 0 5px;
+}
+
+.as-tutor-meta {
+  align-items: center;
+  color: var(--as-muted);
+  display: flex;
+  font-family: var(--as-font-ui);
+  font-size: 10px;
+  gap: 8px;
+  letter-spacing: 0.03em;
+  margin: 9px 0 7px;
 }
 
 .st-key-main_slide_rail {
@@ -724,6 +826,8 @@ div[class*="st-key-main_slide_thumb_"]:has(button[kind="primary"]) {
   justify-content: center;
   padding: 2rem;
   text-align: center;
+
+
 }
 
 .attentive-built-in-title {
@@ -736,6 +840,73 @@ div[class*="st-key-main_slide_thumb_"]:has(button[kind="primary"]) {
 .attentive-built-in-tagline {
   color: var(--as-muted);
   font-family: var(--as-font-heading);
+}
+
+/* Streamlit shell overrides: keep the 02 light theme and fixed desktop geometry. */
+[data-testid="stHeader"] {
+  display: none !important;
+}
+
+[data-testid="stSidebar"] {
+  flex: 0 0 var(--as-left-rail-width) !important;
+  max-width: var(--as-left-rail-width) !important;
+  min-width: var(--as-left-rail-width) !important;
+  width: var(--as-left-rail-width) !important;
+}
+
+[data-testid="stSidebarContent"] {
+  max-width: var(--as-left-rail-width) !important;
+  width: var(--as-left-rail-width) !important;
+}
+
+.st-key-main_topbar {
+  max-width: none !important;
+  width: auto !important;
+}
+
+.stApp p,
+.stApp label {
+  color: var(--as-ink);
+}
+
+.stApp button p {
+  color: inherit !important;
+}
+
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p {
+  color: var(--as-muted) !important;
+}
+
+button[data-testid="stBaseButton-secondary"] {
+  background: var(--as-surface) !important;
+  border-color: var(--as-border-strong) !important;
+  color: var(--as-ink) !important;
+}
+
+button[data-testid="stBaseButton-primary"] {
+  background: var(--as-primary) !important;
+  border-color: var(--as-primary) !important;
+  color: var(--as-primary-on) !important;
+}
+
+[data-testid="stButtonGroup"] button {
+  background: var(--as-segment) !important;
+  border-color: var(--as-border) !important;
+  color: var(--as-ink) !important;
+}
+
+[data-testid="stButtonGroup"] button[aria-checked="true"] {
+  background: var(--as-primary-soft) !important;
+  border-color: var(--as-primary) !important;
+  color: var(--as-primary) !important;
+}
+
+[data-testid="stCheckbox"] label,
+[data-testid="stCheckbox"] p,
+[data-testid="stRadio"] label,
+[data-testid="stRadio"] p {
+  color: var(--as-ink) !important;
 }
 
 div[data-testid="stCustomComponentV1"] iframe,

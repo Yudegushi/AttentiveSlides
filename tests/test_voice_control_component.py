@@ -106,6 +106,8 @@ class VoiceControlComponentContractTests(unittest.TestCase):
         self.assertIn('id="meter"', self.component)
         self.assertIn('id="ptt"', self.component)
         self.assertIn("<kbd>V</kbd>", self.component)
+        self.assertIn('id="activity"', self.component)
+        self.assertIn("min-height: 42px", self.component)
         self.assertNotIn('id="answer"', self.component)
         self.assertNotIn("Tutor:", self.component)
         self.assertNotIn("Grounded Tutor", self.component)

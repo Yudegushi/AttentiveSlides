@@ -30,6 +30,7 @@ def build_voice_panel_view(
     if not phase:
         phase = "listening" if speech_mode == "continuous" else "ready"
     copy = {
+        "typed": ("Typed input ready", "Choose a prompt or ask below"),
         "ready": ("Ready", "Hold V or the button to speak"),
         "listening": ("Listening for speech", "Hands-free input is active"),
         "paused": ("Listening paused", "Resume when you are ready"),
@@ -44,7 +45,15 @@ def build_voice_panel_view(
         "playing": ("Tutor speaking", "You can interrupt in Realtime"),
     }
     if error_code:
-        title, detail = "Voice input needs attention", str(error_code)
+        title, detail = {
+            "too_short": ("Try again", "Hold V and speak a little longer"),
+            "empty_transcript": ("Try again", "No speech was detected"),
+            "stt_failed": ("Try again", "Speech could not be transcribed"),
+            "tutor_failed": ("Tutor unavailable", "Retry the answer below"),
+        }.get(
+            str(error_code),
+            ("Voice input needs attention", "Check the input and try again"),
+        )
         phase = "error"
     else:
         title, detail = copy.get(
