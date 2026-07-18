@@ -138,7 +138,9 @@ class ReviewViewTests(unittest.TestCase):
         view = build_review_view(self.review)
         summary = {metric.label: metric.value for metric in view.summary}
         self.assertEqual(summary["Study duration"], "00:30")
+        self.assertEqual(summary["Slides viewed"], "3")
         self.assertEqual(summary["Interactions"], "3")
+        self.assertEqual(summary["Gaze coverage"], "50%")
         self.assertEqual(summary["Mean engagement"], "61%")
         self.assertEqual(summary["Mean fatigue"], "34%")
         self.assertEqual(summary["Learner coverage"], "50%")

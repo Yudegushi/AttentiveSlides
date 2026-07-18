@@ -15,6 +15,7 @@ class MainUIReviewLayoutTests(unittest.TestCase):
         cls.combined = cls.source + Path(
             "modules/ui/review_view.py"
         ).read_text(encoding="utf-8")
+        cls.css = Path("modules/ui/workspace.css").read_text(encoding="utf-8")
         tree = ast.parse(cls.source, filename=str(APP_PATH))
         cls.functions = {
             node.name: ast.unparse(node)
@@ -26,10 +27,10 @@ class MainUIReviewLayoutTests(unittest.TestCase):
     def test_review_sections_render_in_approved_order(self) -> None:
         labels = (
             "Session Summary",
-            "Learner State Overview",
-            "Slide-order overview",
+            "Slide Review",
             "Selected Slide Detail",
-            "AOI dwell",
+            "AOI DWELL",
+            "Learner State Evidence",
         )
         positions = [self.review.index(label) for label in labels]
         self.assertEqual(positions, sorted(positions))
@@ -43,7 +44,9 @@ class MainUIReviewLayoutTests(unittest.TestCase):
     def test_required_review_metrics_and_exports_are_visible(self) -> None:
         for label in (
             "Study duration",
+            "Slides viewed",
             "Interactions",
+            "Gaze coverage",
             "Mean engagement",
             "Mean fatigue",
             "Top emotion",
@@ -56,6 +59,40 @@ class MainUIReviewLayoutTests(unittest.TestCase):
             "Model estimates, not a diagnosis.",
         ):
             self.assertIn(label, self.combined)
+
+    def test_review_reuses_shell_and_has_one_topbar_back_action(self) -> None:
+        main = self.functions["main"]
+        sidebar = self.functions["_render_review_sidebar"]
+        header = self.functions["_render_header"]
+        self.assertIn("main_review_workspace", main)
+        self.assertIn("REVIEW / WORKSPACE", header)
+        self.assertIn("BACK TO STUDY", header)
+        self.assertNotIn("Back to Study Workspace", sidebar)
+        self.assertIn("main_slide_rail", self.source)
+
+    def test_review_uses_compact_instrument_toolbar_not_wide_slider(self) -> None:
+        self.assertIn("main_review_slide_toolbar", self.review)
+        self.assertIn("main_review_slide_stage", self.review)
+        self.assertIn("main_review_slide_scale_down", self.review)
+        self.assertIn("main_review_slide_scale_up", self.review)
+        self.assertIn("main_review_slide_scale_fit", self.review)
+        self.assertNotIn("st.slider", self.review)
+        self.assertIn(".as-review-table-head", self.css)
+        self.assertIn("grid-template-columns", self.css)
+        self.assertIn("border-left: 3px solid var(--as-slide-accent)", self.css)
+
+    def test_summary_band_separates_primary_and_learner_evidence(self) -> None:
+        for label in (
+            "Study duration",
+            "Slides viewed",
+            "Interactions",
+            "Gaze coverage",
+            "Learner coverage",
+        ):
+            self.assertIn(label, self.review)
+        self.assertIn("learner_summary", self.review)
+        self.assertIn("main_review_emotion_distribution", self.review)
+        self.assertIn("main_review_alert_summary", self.review)
 
     def test_no_raw_timeline_or_transcript_history_is_added(self) -> None:
         self.assertNotIn("second-by-second learner", self.source.lower())

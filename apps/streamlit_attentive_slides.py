@@ -602,11 +602,12 @@ def main() -> None:
     if st.session_state["main_workspace_mode"] == "review":
         _render_header(view, resources=live_resources, review=True)
         _render_review_sidebar(live_resources)
-        _render_review_workspace(
-            view,
-            browser=browser,
-            resources=live_resources,
-        )
+        with st.container(key="main_review_workspace"):
+            _render_review_workspace(
+                view,
+                browser=browser,
+                resources=live_resources,
+            )
         return
 
     _render_header(view, resources=live_resources)
@@ -1556,7 +1557,14 @@ def _review_session_caption(review: Any) -> str:
 
 
 def _render_review_sidebar(resources: MainLiveResources) -> None:
-    st.sidebar.markdown("### Study review")
+    st.sidebar.markdown(
+        '<section class="as-rail-lesson">'
+        '<span class="as-eyebrow">COMPLETED SESSION</span>'
+        '<h2 class="as-rail-title">Study Review</h2>'
+        '<span class="as-rail-copy">Evidence summary</span>'
+        '</section><div class="as-sidebar-rule"></div>',
+        unsafe_allow_html=True,
+    )
     sessions = resources.study_review.list_sessions()
     session_ids = tuple(review.session_id for review in sessions)
     selected_id = st.session_state.get("main_review_session")
@@ -1565,6 +1573,10 @@ def _render_review_sidebar(resources: MainLiveResources) -> None:
             session_ids[0] if session_ids else None
         )
     if session_ids:
+        st.sidebar.markdown(
+            '<div class="as-field-label">Session</div>',
+            unsafe_allow_html=True,
+        )
         st.sidebar.selectbox(
             "Study session",
             options=session_ids,
@@ -1588,7 +1600,10 @@ def _render_review_sidebar(resources: MainLiveResources) -> None:
             width="stretch",
         )
 
-    st.sidebar.markdown("### Palette")
+    st.sidebar.markdown(
+        '<div class="as-field-label">Palette</div>',
+        unsafe_allow_html=True,
+    )
     lifecycle = resources.study_review.lifecycle()
     with st.sidebar:
         selected_palette = str(st.session_state["main_ui_palette"])
@@ -1664,6 +1679,16 @@ def _render_review_metric_band(
         )
 
 
+def _render_review_section_heading(index: str, title: str) -> None:
+    st.markdown(
+        '<div class="as-review-section-heading">'
+        f'<span>{html.escape(index)}</span>'
+        f'<h2>{html.escape(title)}</h2>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def _render_review_workspace(
     view: MainUIViewModel,
     *,
@@ -1679,24 +1704,43 @@ def _render_review_workspace(
         return
 
     review_view = build_review_view(review)
-    st.markdown("## Session Summary")
+    summary_by_label = {
+        metric.label: metric for metric in review_view.summary
+    }
+    primary_summary = tuple(
+        summary_by_label[label]
+        for label in (
+            "Study duration",
+            "Slides viewed",
+            "Interactions",
+            "Gaze coverage",
+            "Learner coverage",
+        )
+    )
+    learner_summary = tuple(
+        summary_by_label[label]
+        for label in (
+            "Top emotion",
+            "Mean engagement",
+            "Mean fatigue",
+        )
+    )
+
+    _render_review_section_heading("01", "Session Summary")
     _render_review_metric_band(
-        review_view.summary,
+        primary_summary,
         key="main_review_session_summary",
     )
 
-    st.markdown("## Learner State Overview")
-    st.caption("Model estimates, not a diagnosis.")
-    _render_review_metric_band(
-        review_view.emotion_distribution,
-        key="main_review_emotion_distribution",
-    )
-    _render_review_metric_band(
-        review_view.alert_summary,
-        key="main_review_alert_summary",
-    )
+    _render_review_section_heading("02", "Slide Review")
     with st.container(key="main_review_slide_overview"):
-        st.markdown("### Slide-order overview")
+        st.markdown(
+            '<div class="as-review-table-head">'
+            '<span>SLIDE</span><span>STUDY</span><span>INTERACTIONS</span>'
+            '<span>ENGAGEMENT</span><span>FATIGUE</span><span>EMOTION</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         for row in review_view.slide_rows:
             interaction_count = (
                 UNAVAILABLE
@@ -1704,12 +1748,14 @@ def _render_review_workspace(
                 else str(row.interaction_count)
             )
             st.markdown(
-                '<div class="as-review-slide-row">'
+                '<div class="as-review-slide-row'
+                + (' is-selected' if row.slide_id == view.active_slide_id else '')
+                + '">'
                 f'<strong>Slide {row.slide_id}</strong>'
-                f'<span>Study {html.escape(row.study_time)}</span>'
-                f'<span>Interactions {html.escape(interaction_count)}</span>'
-                f'<span>Engagement {html.escape(row.engagement)}</span>'
-                f'<span>Fatigue {html.escape(row.fatigue)}</span>'
+                f'<span>{html.escape(row.study_time)}</span>'
+                f'<span>{html.escape(interaction_count)}</span>'
+                f'<span>{html.escape(row.engagement)}</span>'
+                f'<span>{html.escape(row.fatigue)}</span>'
                 f'<span>{html.escape(row.top_emotion)}</span>'
                 "</div>",
                 unsafe_allow_html=True,
@@ -1749,29 +1795,68 @@ def _render_review_workspace(
     )
     show_heatmap = bool(st.session_state["main_review_show_heatmap"])
 
-    st.markdown("## Selected Slide Detail")
+    _render_review_section_heading("03", "Selected Slide Detail")
     slide_column, detail_column = st.columns(
-        [1.0, 0.42],
+        [1.0, 0.36],
         gap="medium",
         vertical_alignment="top",
     )
     with slide_column:
-        st.checkbox(
-            "Show heatmap",
-            key="main_review_show_heatmap",
-            on_change=_on_review_option_change,
-            disabled=slide_review is None or slide_review.valid_gaze_seconds <= 0.0,
-        )
-        with st.container(key="main_slide_scale"):
-            st.slider(
-                "Slide size",
-                min_value=50,
-                max_value=100,
-                step=5,
-                key="main_slide_width_percent",
-                label_visibility="collapsed",
+        scale = int(st.session_state["main_slide_width_percent"])
+        with st.container(key="main_review_slide_toolbar"):
+            label_column, heatmap_column, scale_column = st.columns(
+                [0.4, 0.25, 0.35],
+                gap="small",
+                vertical_alignment="center",
             )
-        with st.container(key="main_slide_stage"):
+            with label_column:
+                st.markdown(
+                    f'<div class="as-slide-toolbar-label">EVIDENCE / SLIDE {view.active_slide_id:02d}</div>',
+                    unsafe_allow_html=True,
+                )
+            with heatmap_column:
+                st.checkbox(
+                    "Show heatmap",
+                    key="main_review_show_heatmap",
+                    on_change=_on_review_option_change,
+                    disabled=(
+                        slide_review is None
+                        or slide_review.valid_gaze_seconds <= 0.0
+                    ),
+                )
+            with scale_column:
+                minus, percent, plus, fit = st.columns(
+                    [0.2, 0.28, 0.2, 0.32],
+                    gap="small",
+                    vertical_alignment="center",
+                )
+                minus.button(
+                    "−",
+                    key="main_review_slide_scale_down",
+                    help="Reduce slide size",
+                    disabled=scale <= 50,
+                    on_click=_adjust_slide_width,
+                    args=(-5,),
+                )
+                percent.markdown(
+                    f'<div class="as-slide-scale-value">{scale}%</div>',
+                    unsafe_allow_html=True,
+                )
+                plus.button(
+                    "+",
+                    key="main_review_slide_scale_up",
+                    help="Increase slide size",
+                    disabled=scale >= 100,
+                    on_click=_adjust_slide_width,
+                    args=(5,),
+                )
+                fit.button(
+                    "FIT",
+                    key="main_review_slide_scale_fit",
+                    help="Fit slide to the evidence stage",
+                    on_click=_fit_slide_width,
+                )
+        with st.container(key="main_review_slide_stage"):
             _render_navigation(
                 browser,
                 view,
@@ -1863,7 +1948,10 @@ def _render_review_workspace(
             detail_metrics,
             key="main_review_selected_slide_metrics",
         )
-        st.markdown("### AOI dwell")
+        st.markdown(
+            '<div class="as-review-subheading">AOI DWELL</div>',
+            unsafe_allow_html=True,
+        )
         if detail.aoi_dwell:
             for item in detail.aoi_dwell:
                 st.markdown(
@@ -1875,6 +1963,21 @@ def _render_review_workspace(
                 )
         else:
             st.caption("No AOI dwell data is available for this slide.")
+
+    _render_review_section_heading("04", "Learner State Evidence")
+    st.caption("Model estimates, not a diagnosis.")
+    _render_review_metric_band(
+        learner_summary,
+        key="main_review_learner_summary",
+    )
+    _render_review_metric_band(
+        review_view.emotion_distribution,
+        key="main_review_emotion_distribution",
+    )
+    _render_review_metric_band(
+        review_view.alert_summary,
+        key="main_review_alert_summary",
+    )
 
 
 

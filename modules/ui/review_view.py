@@ -101,12 +101,31 @@ def build_review_view(review: StudyReviewSession) -> ReviewSessionView:
     observed_seconds = sum(
         slide.observed_seconds for slide in learner_summary.slides
     )
+    gaze_observed_seconds = sum(
+        slide.observed_seconds for slide in review.gaze_review.slides
+    )
+    valid_gaze_seconds = sum(
+        slide.valid_gaze_seconds for slide in review.gaze_review.slides
+    )
     summary = (
         ReviewMetric("Study duration", _duration(study_seconds)),
+        ReviewMetric("Slides viewed", str(len(slide_ids))),
         ReviewMetric(
             "Interactions",
             str(learner_summary.interaction_count)
             if learner_available else UNAVAILABLE,
+        ),
+        ReviewMetric(
+            "Gaze coverage",
+            _coverage(valid_gaze_seconds, gaze_observed_seconds)
+            if gaze_observed_seconds > 0.0 else UNAVAILABLE,
+            f"{_seconds(valid_gaze_seconds)} valid",
+        ),
+        ReviewMetric(
+            "Learner coverage",
+            _coverage(observed_seconds, study_seconds)
+            if learner_available and observed_seconds > 0.0 else UNAVAILABLE,
+            f"{_seconds(observed_seconds)} observed",
         ),
         ReviewMetric("Mean engagement", _percent(
             learner_summary.mean_engaged_probability
@@ -118,12 +137,6 @@ def build_review_view(review: StudyReviewSession) -> ReviewSessionView:
             learner_summary.top_emotion,
             learner_summary.top_emotion_probability,
         )),
-        ReviewMetric(
-            "Learner coverage",
-            _coverage(observed_seconds, study_seconds)
-            if learner_available and observed_seconds > 0.0 else UNAVAILABLE,
-            f"{_seconds(observed_seconds)} observed",
-        ),
     )
 
     emotion_values = learner_summary.emotion_probabilities
