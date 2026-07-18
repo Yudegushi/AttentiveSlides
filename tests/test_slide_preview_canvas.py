@@ -71,7 +71,7 @@ class TestSlidePreviewCanvas(unittest.TestCase):
         self.assertNotIn("st.popover", selector)
         self.assertIn("main_slide_rail", selector)
         self.assertIn("main_slide_rail_collapse_button", selector)
-        self.assertIn("main_slide_rail_expand_button", selector)
+        self.assertNotIn("main_slide_rail_expand_button", selector)
         self.assertIn("Collapse slide deck", selector)
         self.assertIn("SLIDES INDEX", selector)
         self.assertIn("SLIDES /", selector)
@@ -81,6 +81,13 @@ class TestSlidePreviewCanvas(unittest.TestCase):
         self.assertIn("active_slide", selector)
         self.assertNotIn("browser.get_slide", selector)
         self.assertIn("slide_id == active_slide_id", selector)
+
+    def test_reopen_actions_are_owned_by_the_topbar_not_the_selector(self) -> None:
+        selector = ast.unparse(self.functions["_render_slide_selector"])
+        header = ast.unparse(self.functions["_render_header"])
+        self.assertNotIn("main_slide_rail_expand_button", selector)
+        self.assertIn("_render_left_rail_reopen", header)
+        self.assertIn("_render_right_rail_reopen", header)
 
     def test_slide_scale_is_one_compact_toolbar_not_a_slider(self) -> None:
         rendered = ast.unparse(self.functions["_render_slide_workspace"])

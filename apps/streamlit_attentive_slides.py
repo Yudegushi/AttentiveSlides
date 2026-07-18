@@ -546,15 +546,29 @@ def _render_sidebar_brand() -> None:
 
 
 def _render_left_rail_reopen() -> None:
-    """Render the small left-edge trigger while settings are collapsed."""
-    if st.session_state.get("main_left_rail_expanded", True):
-        return
+    """Render the settings reopen action inside the fixed top bar."""
     with st.container(key="main_sidebar_reopen"):
         st.button(
-            "»",
+            "Open settings",
             key="main_sidebar_expand_button",
             help="Open settings",
+            type="tertiary",
+            icon=":material/keyboard_double_arrow_right:",
             on_click=_set_left_rail_expanded,
+            args=(True,),
+        )
+
+
+def _render_right_rail_reopen() -> None:
+    """Render the slides-index reopen action inside the fixed top bar."""
+    with st.container(key="main_slide_rail_reopen"):
+        st.button(
+            "Open slides index",
+            key="main_slide_rail_expand_button",
+            help="Open slides index",
+            type="tertiary",
+            icon=":material/keyboard_double_arrow_left:",
+            on_click=_set_slide_rail_expanded,
             args=(True,),
         )
 
@@ -584,7 +598,6 @@ def main() -> None:
     _normalize_widget_state()
     _inject_compact_ui_css()
     _render_sidebar_brand()
-    _render_left_rail_reopen()
 
     browser = _resolve_active_browser(
         workspace,
@@ -2590,14 +2603,6 @@ def _render_slide_selector(
         st.session_state["main_active_slide_id"] = active_slide_id
 
     if not st.session_state.get("main_slide_rail_expanded", True):
-        with st.container(key="main_slide_rail_reopen"):
-            st.button(
-                "«",
-                key="main_slide_rail_expand_button",
-                help="Open slides index",
-                on_click=_set_slide_rail_expanded,
-                args=(True,),
-            )
         return
 
     with st.container(key="main_slide_rail"):
@@ -2879,13 +2884,44 @@ def _render_header(
 ) -> None:
     """Render context, lifecycle, and study actions in the fixed top bar."""
     lifecycle = resources.study_review.lifecycle()
+    left_collapsed = not st.session_state.get(
+        "main_left_rail_expanded",
+        True,
+    )
+    right_collapsed = not st.session_state.get(
+        "main_slide_rail_expanded",
+        True,
+    )
+
+    column_specs: list[tuple[str, float]] = []
+    if left_collapsed:
+        column_specs.append(("left_reopen", 0.035))
+    column_specs.extend(
+        (
+            ("context", 0.34),
+            ("alert", 0.28),
+            ("status", 0.14),
+            ("pause", 0.09),
+            ("action", 0.15),
+        )
+    )
+    if right_collapsed:
+        column_specs.append(("right_reopen", 0.035))
+
     with st.container(key="main_topbar"):
-        context, alert, status, pause_slot, action = st.columns(
-            [0.34, 0.28, 0.14, 0.09, 0.15],
+        columns = st.columns(
+            [weight for _, weight in column_specs],
             gap="small",
             vertical_alignment="center",
         )
-        with context:
+        slots = {
+            name: column
+            for (name, _), column in zip(column_specs, columns)
+        }
+        if left_collapsed:
+            with slots["left_reopen"]:
+                _render_left_rail_reopen()
+        with slots["context"]:
             workspace_label = "REVIEW / WORKSPACE" if review else "STUDY / WORKSPACE"
             deck_context = (
                 '<span class="as-topbar-separator">•</span>'
@@ -2903,14 +2939,14 @@ def _render_header(
                 "</div>",
                 unsafe_allow_html=True,
             )
-        with alert:
+        with slots["alert"]:
             if review:
                 st.empty()
             else:
                 _render_learner_state_alert_periodic(resources)
-        with status:
+        with slots["status"]:
             _render_topbar_lifecycle_status(resources, review=review)
-        with pause_slot:
+        with slots["pause"]:
             if not review and lifecycle.status == "active":
                 st.button(
                     "PAUSE",
@@ -2929,7 +2965,7 @@ def _render_header(
                 )
             else:
                 st.empty()
-        with action:
+        with slots["action"]:
             if review:
                 st.button(
                     "BACK TO STUDY",
@@ -2965,6 +3001,9 @@ def _render_header(
                     on_click=_finish_study_review,
                     args=(resources, lifecycle.deck_id or ""),
                 )
+        if right_collapsed:
+            with slots["right_reopen"]:
+                _render_right_rail_reopen()
 
 
 def _learner_state_view(resources: MainLiveResources):

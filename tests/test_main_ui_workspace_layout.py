@@ -100,7 +100,9 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
         self.assertIn("SLIDES INDEX", selector)
         self.assertIn("SLIDES /", selector)
         self.assertIn("main_slide_rail_collapse_button", selector)
-        self.assertIn("main_slide_rail_expand_button", selector)
+        self.assertNotIn("main_slide_rail_expand_button", selector)
+        self.assertIn("_render_left_rail_reopen", header)
+        self.assertIn("_render_right_rail_reopen", header)
         self.assertIn("STUDY / WORKSPACE", header)
         self.assertIn("REVIEW / WORKSPACE", header)
         self.assertNotIn("type='primary'", header)
@@ -125,6 +127,31 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
         self.assertIn(".st-key-main_end_study_review button", self.css)
         self.assertIn(".as-topbar-status.is-review .as-status-dot", self.css)
         self.assertIn("position: fixed", self.css)
+
+    def test_topbar_owns_transparent_material_reopen_actions(self) -> None:
+        header = self.functions["_render_header"]
+        left = self.functions["_render_left_rail_reopen"]
+        right = self.functions["_render_right_rail_reopen"]
+        selector = self.functions["_render_slide_selector"]
+
+        self.assertIn("_render_left_rail_reopen", header)
+        self.assertIn("_render_right_rail_reopen", header)
+        self.assertIn(":material/keyboard_double_arrow_right:", left)
+        self.assertIn(":material/keyboard_double_arrow_left:", right)
+        self.assertIn("type='tertiary'", left)
+        self.assertIn("type='tertiary'", right)
+        self.assertNotIn("main_slide_rail_expand_button", selector)
+        for token in (
+            "background: transparent !important",
+            "border: 0 !important",
+            "box-shadow: none !important",
+            "height: 32px",
+            "width: 32px",
+            'font-size: 20px',
+            'body:has(.st-key-main_slide_rail_reopen) .st-key-main_topbar',
+            'body:has(.st-key-main_sidebar_reopen) .st-key-main_topbar',
+        ):
+            self.assertIn(token, self.css)
 
     def test_main_has_compact_two_column_shell_and_lower_answer(self) -> None:
         main = self.functions["main"]
