@@ -298,6 +298,7 @@ class StudyReviewSession:
     ended_at_epoch: float
     gaze_review: GazeReviewSession
     learner_state_summary: LearnerStateReviewSummary
+    paused_seconds: float = 0.0
 
     def __post_init__(self) -> None:
         if self.schema_version != STUDY_REVIEW_SCHEMA_VERSION:
@@ -312,6 +313,14 @@ class StudyReviewSession:
             or self.ended_at_epoch < self.started_at_epoch
         ):
             raise ValueError("Study Review timestamps are invalid")
+        paused_seconds = _finite_nonnegative(
+            self.paused_seconds, "paused seconds"
+        )
+        if (
+            paused_seconds
+            > self.ended_at_epoch - self.started_at_epoch + _TOLERANCE
+        ):
+            raise ValueError("paused seconds cannot exceed Study duration")
         if (
             self.gaze_review.session_id != self.session_id
             or self.gaze_review.deck_id != self.deck_id
@@ -320,6 +329,15 @@ class StudyReviewSession:
             or any(slide.deck_id != self.deck_id for slide in self.gaze_review.slides)
         ):
             raise ValueError("gaze review identity does not match Study Review")
+
+    @property
+    def active_seconds(self) -> float:
+        return max(
+            0.0,
+            self.ended_at_epoch
+            - self.started_at_epoch
+            - self.paused_seconds,
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -330,6 +348,7 @@ class StudyReviewSession:
             "ended_at_epoch": round(self.ended_at_epoch, 4),
             "gaze_review": self.gaze_review.to_dict(),
             "learner_state_summary": self.learner_state_summary.to_dict(),
+            "paused_seconds": round(self.paused_seconds, 4),
         }
 
     def to_json(self) -> str:
@@ -347,4 +366,5 @@ class StudyReviewSession:
             learner_state_summary=LearnerStateReviewSummary.from_dict(
                 payload.get("learner_state_summary", {"slides": []})
             ),
+            paused_seconds=float(payload.get("paused_seconds", 0.0)),
         )

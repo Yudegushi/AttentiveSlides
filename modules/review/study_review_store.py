@@ -74,14 +74,23 @@ class LearnerStateReviewAccumulator:
         self._context_started_at: float | None = None
         self._previous: _PreviousState | None = None
 
-    def set_context(self, deck_id: str, slide_id: int, now: float) -> None:
+    def set_context(
+        self,
+        deck_id: str,
+        slide_id: int,
+        now: float,
+        *,
+        accumulate: bool = True,
+    ) -> None:
         context = (str(deck_id), int(slide_id))
         if context == self._current_context:
             return
         self._close_study_time(now)
         self._close_observation(now)
         self._current_context = context
-        self._context_started_at = now if context[0] == self.deck_id else None
+        self._context_started_at = (
+            now if accumulate and context[0] == self.deck_id else None
+        )
         self._slides.setdefault(context[1], _MutableSlideState())
 
     def activate_context(
@@ -127,6 +136,19 @@ class LearnerStateReviewAccumulator:
         return True
 
     def pause(self, now: float) -> None:
+        self._close_observation(now)
+        self._close_study_time(now)
+        self._context_started_at = None
+
+    def resume(self, now: float) -> None:
+        if (
+            self._current_context is None
+            or self._current_context[0] != self.deck_id
+        ):
+            return
+        self._context_started_at = float(now)
+
+    def mark_observation_gap(self, now: float) -> None:
         self._close_observation(now)
 
     def finish(self, now: float) -> LearnerStateReviewSummary:
@@ -286,15 +308,21 @@ class _ActiveStudy:
     session_id: str
     deck_id: str
     started_at_epoch: float
+    started_received_at: float
     gaze: GazeHeatmapAccumulator
     learner: LearnerStateReviewAccumulator
+    paused_at_received: float | None = None
+    paused_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
 class StudyLifecycleSnapshot:
-    status: Literal["idle", "active", "finish_pending"]
+    status: Literal["idle", "active", "paused", "finish_pending"]
     deck_id: str | None = None
     session_id: str | None = None
+    active_seconds: float = 0.0
+    paused_seconds: float = 0.0
+    revision: int = 0
 
 
 class StudyReviewStore:
@@ -324,6 +352,7 @@ class StudyReviewStore:
         self._sessions: dict[str, StudyReviewSession] = {}
         self._warnings: list[str] = []
         self._legacy_session_id: str | None = None
+        self._lifecycle_revision = 0
         self._load_history()
         self._repair_latest_cache()
 
@@ -349,11 +378,19 @@ class StudyReviewStore:
                 return
             self._current_context = context
             if self._active is not None:
-                self._active.learner.set_context(context[0], context[1], now)
+                self._active.learner.set_context(
+                    context[0],
+                    context[1],
+                    now,
+                    accumulate=self._active.paused_at_received is None,
+                )
 
     def accept_gaze(self, sample: BrowserPointGazeSample) -> bool:
         with self._lock:
-            if self._active is None:
+            if (
+                self._active is None
+                or self._active.paused_at_received is not None
+            ):
                 return False
             geometry = sample.geometry.geometry if sample.geometry is not None else None
             if geometry is None:
@@ -381,7 +418,11 @@ class StudyReviewStore:
         received_at = self._checked_time(received_at, "learner-state")
         context = (str(deck_id), int(slide_id))
         with self._lock:
-            if self._active is None or context != self._current_context:
+            if (
+                self._active is None
+                or self._active.paused_at_received is not None
+                or context != self._current_context
+            ):
                 return False
             if self._active.deck_id != context[0]:
                 return False
@@ -398,7 +439,11 @@ class StudyReviewStore:
         if not checked_id:
             raise ValueError("interaction ID is required")
         with self._lock:
-            if self._active is None or context != self._current_context:
+            if (
+                self._active is None
+                or self._active.paused_at_received is not None
+                or context != self._current_context
+            ):
                 return False
             if self._active.deck_id != context[0]:
                 return False
@@ -407,9 +452,39 @@ class StudyReviewStore:
     def pause(self) -> None:
         now = self._checked_time(self._monotonic_clock(), "pause")
         with self._lock:
-            if self._active is not None:
-                self._active.gaze.pause()
-                self._active.learner.pause(now)
+            active = self._active
+            if active is None or active.paused_at_received is not None:
+                return
+            active.paused_at_received = now
+            active.gaze.pause()
+            active.learner.pause(now)
+            self._lifecycle_revision += 1
+
+    def resume(self) -> None:
+        now = self._checked_time(self._monotonic_clock(), "resume")
+        with self._lock:
+            active = self._active
+            if active is None or active.paused_at_received is None:
+                return
+            active.paused_seconds += max(
+                0.0, now - active.paused_at_received
+            )
+            active.paused_at_received = None
+            active.learner.resume(now)
+            self._lifecycle_revision += 1
+
+    def mark_observation_gap(
+        self, received_at: float | None = None
+    ) -> None:
+        now = self._checked_time(
+            self._monotonic_clock() if received_at is None else received_at,
+            "observation gap",
+        )
+        with self._lock:
+            if self._active is None:
+                return
+            self._active.gaze.pause()
+            self._active.learner.mark_observation_gap(now)
 
     def finish(self, *, deck_id: str) -> StudyReviewSession:
         checked_deck = str(deck_id)
@@ -429,6 +504,12 @@ class StudyReviewStore:
                     )
                 now_received = self._checked_time(self._monotonic_clock(), "finish")
                 now_epoch = self._checked_time(self._wall_clock(), "finish wall-clock")
+                if self._active.paused_at_received is not None:
+                    self._active.paused_seconds += max(
+                        0.0,
+                        now_received - self._active.paused_at_received,
+                    )
+                    self._active.paused_at_received = None
                 gaze = self._active.gaze.finish(
                     ended_received_at=now_received,
                     ended_at_epoch=now_epoch,
@@ -442,9 +523,11 @@ class StudyReviewStore:
                     ended_at_epoch=now_epoch,
                     gaze_review=gaze,
                     learner_state_summary=learner,
+                    paused_seconds=self._active.paused_seconds,
                 )
                 self._pending_finish = frozen
                 self._active = None
+                self._lifecycle_revision += 1
             self._migrate_legacy_before_finish()
             self._write_canonical(frozen)
             self._sessions[frozen.session_id] = frozen
@@ -466,6 +549,7 @@ class StudyReviewStore:
             now_received = self._checked_time(self._monotonic_clock(), "start")
             now_epoch = self._checked_time(self._wall_clock(), "start wall-clock")
             self._active = self._new_active(checked_deck, now_received, now_epoch)
+            self._lifecycle_revision += 1
             return self._active.session_id
 
     def lifecycle(self) -> StudyLifecycleSnapshot:
@@ -475,14 +559,45 @@ class StudyReviewStore:
                     status="finish_pending",
                     deck_id=self._pending_finish.deck_id,
                     session_id=self._pending_finish.session_id,
+                    active_seconds=self._pending_finish.active_seconds,
+                    paused_seconds=self._pending_finish.paused_seconds,
+                    revision=self._lifecycle_revision,
                 )
             if self._active is not None:
-                return StudyLifecycleSnapshot(
-                    status="active",
-                    deck_id=self._active.deck_id,
-                    session_id=self._active.session_id,
+                now = self._checked_time(
+                    self._monotonic_clock(), "lifecycle"
                 )
-            return StudyLifecycleSnapshot(status="idle")
+                active = self._active
+                paused_seconds = active.paused_seconds
+                if active.paused_at_received is None:
+                    active_seconds = max(
+                        0.0,
+                        now - active.started_received_at - paused_seconds,
+                    )
+                    status = "active"
+                else:
+                    open_pause = max(
+                        0.0, now - active.paused_at_received
+                    )
+                    paused_seconds += open_pause
+                    active_seconds = max(
+                        0.0,
+                        active.paused_at_received
+                        - active.started_received_at
+                        - active.paused_seconds,
+                    )
+                    status = "paused"
+                return StudyLifecycleSnapshot(
+                    status=status,
+                    deck_id=active.deck_id,
+                    session_id=active.session_id,
+                    active_seconds=active_seconds,
+                    paused_seconds=paused_seconds,
+                    revision=self._lifecycle_revision,
+                )
+            return StudyLifecycleSnapshot(
+                status="idle", revision=self._lifecycle_revision
+            )
 
     def has_active(self) -> bool:
         with self._lock:
@@ -572,7 +687,14 @@ class StudyReviewStore:
             gaze.register_slide(registered_deck, slide_id, aois)
         learner = LearnerStateReviewAccumulator(deck_id=deck_id)
         learner.activate_context(self._current_context, received_at)
-        return _ActiveStudy(session_id, deck_id, started_at_epoch, gaze, learner)
+        return _ActiveStudy(
+            session_id=session_id,
+            deck_id=deck_id,
+            started_at_epoch=started_at_epoch,
+            started_received_at=received_at,
+            gaze=gaze,
+            learner=learner,
+        )
 
     def _sorted_sessions(self) -> tuple[StudyReviewSession, ...]:
         return tuple(

@@ -245,7 +245,7 @@ class SinglePortTransportTest(unittest.TestCase):
         self.assertFalse(self.source.is_running)
         self.assertTrue(self.source.video_queue.empty())
 
-    def test_study_review_receives_samples_and_pauses_on_stop(self):
+    def test_study_review_receives_samples_and_marks_gap_on_stop(self):
         review = MagicMock()
         ingress = FallbackMediaIngress(
             self.source,
@@ -260,7 +260,8 @@ class SinglePortTransportTest(unittest.TestCase):
         ingress.stop("session-a")
 
         review.accept_gaze.assert_called_once_with(sample)
-        review.pause.assert_called()
+        review.mark_observation_gap.assert_called()
+        review.pause.assert_not_called()
 
     def test_stop_waits_for_study_review_forwarding_under_ingress_lock(self):
         review = MagicMock()
@@ -291,7 +292,9 @@ class SinglePortTransportTest(unittest.TestCase):
             return sample
 
         review.accept_gaze.side_effect = lambda sample: call_order.append("review accepted")
-        review.pause.side_effect = lambda: call_order.append("paused")
+        review.mark_observation_gap.side_effect = (
+            lambda: call_order.append("observation gap")
+        )
 
         def accept_gaze():
             try:
@@ -327,7 +330,28 @@ class SinglePortTransportTest(unittest.TestCase):
         self.assertFalse(gaze_thread.is_alive())
         self.assertFalse(stop_thread.is_alive())
         self.assertEqual(failures, [])
-        self.assertEqual(call_order, ["gaze parsed", "review accepted", "paused"])
+        self.assertEqual(
+            call_order,
+            ["gaze parsed", "review accepted", "observation gap"],
+        )
+
+    def test_replacement_readiness_and_disconnect_use_technical_gap_only(self):
+        review = MagicMock()
+        ingress = FallbackMediaIngress(
+            self.source,
+            observations=self.ingress.observations,
+            study_review=review,
+            clock=self.clock,
+        )
+        ingress.start("session-a")
+        review.reset_mock()
+
+        self.assertTrue(ingress.reset_active_readiness(reason="device reset"))
+        ingress.start("session-b")
+        ingress.stop("session-b", reason="browser disconnected")
+
+        self.assertEqual(review.mark_observation_gap.call_count, 3)
+        review.pause.assert_not_called()
 
     def test_stats_include_browser_observation_fields(self):
         self.ingress.accept_geometry_json(geometry_payload())

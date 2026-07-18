@@ -96,10 +96,7 @@ def build_review_view(review: StudyReviewSession) -> ReviewSessionView:
     gaze_by_id = {slide.slide_id: slide for slide in review.gaze_review.slides}
     slide_ids = sorted(set(learner_by_id) | set(gaze_by_id))
 
-    study_seconds = max(
-        0.0,
-        float(review.ended_at_epoch) - float(review.started_at_epoch),
-    )
+    study_seconds = review.active_seconds
     learner_available = bool(learner_summary.slides)
     observed_seconds = sum(
         slide.observed_seconds for slide in learner_summary.slides

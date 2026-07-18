@@ -82,6 +82,8 @@ def gaze_slide(
 def review_session(
     learner_slides: tuple[SlideLearnerStateSummary, ...],
     gaze_slides: tuple[SlideHeatmapSnapshot, ...],
+    *,
+    paused: float = 0.0,
 ) -> StudyReviewSession:
     gaze = GazeReviewSession(
         schema_version=1,
@@ -99,6 +101,7 @@ def review_session(
         ended_at_epoch=130.0,
         gaze_review=gaze,
         learner_state_summary=LearnerStateReviewSummary(learner_slides),
+        paused_seconds=paused,
     )
 
 
@@ -140,6 +143,21 @@ class ReviewViewTests(unittest.TestCase):
         self.assertEqual(summary["Mean fatigue"], "34%")
         self.assertEqual(summary["Learner coverage"], "50%")
         self.assertIn("·", summary["Top emotion"])
+
+    def test_session_summary_and_coverage_exclude_paused_time(self) -> None:
+        paused_review = review_session(
+            self.review.learner_state_summary.slides,
+            self.review.gaze_review.slides,
+            paused=10.0,
+        )
+        summary = {
+            metric.label: metric.value
+            for metric in build_review_view(paused_review).summary
+        }
+
+        self.assertEqual(paused_review.active_seconds, 20.0)
+        self.assertEqual(summary["Study duration"], "00:20")
+        self.assertEqual(summary["Learner coverage"], "75%")
 
     def test_all_eight_emotions_keep_official_order_and_values(self) -> None:
         view = build_review_view(self.review)

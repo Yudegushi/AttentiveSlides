@@ -133,7 +133,9 @@ class StudyReviewStoreTest(unittest.TestCase):
             self.assertEqual(session_id, "review-1")
             self.assertEqual(
                 store.lifecycle(),
-                StudyLifecycleSnapshot("active", "deck-a", "review-1"),
+                StudyLifecycleSnapshot(
+                    "active", "deck-a", "review-1", revision=1
+                ),
             )
             self.assertEqual(store.active_deck_id(), "deck-a")
             with self.assertRaisesRegex(RuntimeError, "already active"):
@@ -159,13 +161,119 @@ class StudyReviewStoreTest(unittest.TestCase):
             self.assertEqual(session.started_at_epoch, session.gaze_review.started_at_epoch)
             self.assertEqual(session.ended_at_epoch, session.gaze_review.ended_at_epoch)
 
-    def test_study_time_follows_context_even_when_models_are_unavailable(self):
+    def test_pause_freezes_lifecycle_rejects_evidence_and_resume_preserves_context(self):
+        with TemporaryDirectory() as root:
+            store = self.make_store(root)
+            store.register_slide("deck-a", 1, AOIS)
+            store.set_context("deck-a", 1, received_at=0.0)
+            store.start("deck-a")
+            store.accept_learner_state(
+                "deck-a", 1, state_snapshot(0.0), 0.0
+            )
+            self.monotonic.value = 2.0
+            self.assertEqual(store.lifecycle().active_seconds, 2.0)
+
+            store.pause()
+            first_paused = store.lifecycle()
+            self.assertEqual(first_paused.status, "paused")
+            self.assertEqual(first_paused.active_seconds, 2.0)
+            self.assertEqual(first_paused.revision, 2)
+            store.pause()
+            self.monotonic.value = 7.0
+            later_paused = store.lifecycle()
+            self.assertEqual(later_paused.active_seconds, 2.0)
+            self.assertEqual(later_paused.paused_seconds, 5.0)
+            self.assertEqual(later_paused.revision, 2)
+            self.assertFalse(store.accept_gaze(make_sample(received_at=7.0)))
+            self.assertFalse(store.accept_learner_state(
+                "deck-a", 1, state_snapshot(7.0), 7.0
+            ))
+            self.assertFalse(store.record_completed_interaction(
+                "paused-turn", "deck-a", 1
+            ))
+
+            store.resume()
+            store.resume()
+            resumed = store.lifecycle()
+            self.assertEqual(resumed.status, "active")
+            self.assertEqual(resumed.session_id, "review-1")
+            self.assertEqual(resumed.revision, 3)
+            self.assertTrue(store.accept_learner_state(
+                "deck-a", 1, state_snapshot(7.0), 7.0
+            ))
+            self.assertTrue(store.record_completed_interaction(
+                "resumed-turn", "deck-a", 1
+            ))
+            self.monotonic.value = 9.0
+            self.wall.value = 109.0
+            session = store.finish(deck_id="deck-a")
+
+            self.assertEqual(session.paused_seconds, 5.0)
+            self.assertEqual(session.active_seconds, 4.0)
+            self.assertEqual(
+                session.learner_state_summary.slides[0].study_seconds, 4.0
+            )
+            self.assertEqual(
+                session.learner_state_summary.interaction_count, 1
+            )
+            self.assertEqual(store.lifecycle().revision, 4)
+
+    def test_context_changed_while_paused_starts_only_after_resume(self):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
             store.set_context("deck-a", 1, received_at=0.0)
             store.start("deck-a")
             self.monotonic.value = 1.0
             store.pause()
+            store.set_context("deck-a", 2, received_at=3.0)
+            self.assertEqual(
+                store.active_slide_summary("deck-a", 2, now=4.0).study_seconds,
+                0.0,
+            )
+            self.monotonic.value = 5.0
+            store.resume()
+            self.monotonic.value = 7.0
+            self.wall.value = 107.0
+            session = store.finish(deck_id="deck-a")
+            slides = {
+                slide.slide_id: slide
+                for slide in session.learner_state_summary.slides
+            }
+
+            self.assertEqual(slides[1].study_seconds, 1.0)
+            self.assertEqual(slides[2].study_seconds, 2.0)
+            self.assertEqual(session.paused_seconds, 4.0)
+
+    def test_observation_gap_preserves_active_lifecycle_and_study_time(self):
+        with TemporaryDirectory() as root:
+            store = self.make_store(root)
+            store.set_context("deck-a", 1, received_at=0.0)
+            store.start("deck-a")
+            store.accept_learner_state(
+                "deck-a", 1, state_snapshot(0.0), 0.0
+            )
+            self.monotonic.value = 1.0
+            store.mark_observation_gap()
+            gap = store.lifecycle()
+            self.assertEqual(gap.status, "active")
+            self.assertEqual(gap.active_seconds, 1.0)
+            self.assertEqual(gap.revision, 1)
+            self.monotonic.value = 4.0
+            self.wall.value = 104.0
+            session = store.finish(deck_id="deck-a")
+
+            slide = session.learner_state_summary.slides[0]
+            self.assertEqual(slide.study_seconds, 4.0)
+            self.assertEqual(slide.observed_seconds, 1.0)
+            self.assertEqual(session.paused_seconds, 0.0)
+
+    def test_study_time_follows_context_even_when_models_are_unavailable(self):
+        with TemporaryDirectory() as root:
+            store = self.make_store(root)
+            store.set_context("deck-a", 1, received_at=0.0)
+            store.start("deck-a")
+            self.monotonic.value = 1.0
+            store.mark_observation_gap()
             store.set_context("deck-a", 2, received_at=2.0)
             store.accept_learner_state(
                 "deck-a",
@@ -266,7 +374,7 @@ class StudyReviewStoreTest(unittest.TestCase):
             store.set_context("deck-a", 1, received_at=0.0)
             store.start("deck-a")
             first = store.finish(deck_id="deck-a")
-            self.assertEqual(store.lifecycle(), StudyLifecycleSnapshot(status="idle"))
+            self.assertEqual(store.lifecycle().status, "idle")
             with self.assertRaisesRegex(RuntimeError, "Start a study"):
                 store.finish(deck_id="deck-a")
             store.start("deck-a")
@@ -323,6 +431,10 @@ class StudyReviewStoreTest(unittest.TestCase):
         with TemporaryDirectory() as root:
             store = self.make_store(root)
             self.activate_with_state(store)
+            self.monotonic.value = 1.0
+            store.pause()
+            self.monotonic.value = 4.0
+            self.wall.value = 104.0
             original_write = store._write_canonical
             with patch.object(store, "_write_canonical", side_effect=OSError("disk full")):
                 with self.assertRaisesRegex(OSError, "disk full"):
@@ -330,7 +442,14 @@ class StudyReviewStoreTest(unittest.TestCase):
             pending = store._pending_finish
             self.assertEqual(
                 store.lifecycle(),
-                StudyLifecycleSnapshot("finish_pending", "deck-a", pending.session_id),
+                StudyLifecycleSnapshot(
+                    "finish_pending",
+                    "deck-a",
+                    pending.session_id,
+                    active_seconds=1.0,
+                    paused_seconds=3.0,
+                    revision=3,
+                ),
             )
             with self.assertRaisesRegex(RuntimeError, "frozen Study Review"):
                 store.start("deck-a")
@@ -343,6 +462,7 @@ class StudyReviewStoreTest(unittest.TestCase):
             self.assertEqual(completed.session_id, pending.session_id)
             self.assertEqual(completed.started_at_epoch, pending.started_at_epoch)
             self.assertEqual(completed.ended_at_epoch, pending.ended_at_epoch)
+            self.assertEqual(completed.paused_seconds, 3.0)
             self.assertEqual(completed.to_dict(), pending.to_dict())
             self.assertEqual(len(store.list_sessions()), 1)
             self.assertEqual(store.lifecycle().status, "idle")
@@ -436,6 +556,26 @@ class StudyReviewStoreTest(unittest.TestCase):
                 "raw_gaze",
             ):
                 self.assertNotIn(forbidden, serialized)
+
+    def test_pause_field_is_backward_compatible_and_validated(self):
+        with TemporaryDirectory() as root:
+            store = self.make_store(root)
+            store.start("deck-a")
+            self.wall.value = 110.0
+            session = store.finish(deck_id="deck-a")
+            legacy_payload = session.to_dict()
+            legacy_payload.pop("paused_seconds")
+
+            self.assertEqual(
+                StudyReviewSession.from_dict(legacy_payload).paused_seconds,
+                0.0,
+            )
+            for invalid in (-1.0, float("nan"), 10.1):
+                payload = session.to_dict()
+                payload["paused_seconds"] = invalid
+                with self.subTest(invalid=invalid):
+                    with self.assertRaises(ValueError):
+                        StudyReviewSession.from_dict(payload)
 
 
 if __name__ == "__main__":

@@ -147,7 +147,7 @@ class FallbackMediaIngress:
             if session_id in {self._active_session_id, self._pending_session_id}:
                 return
             if self.study_review is not None:
-                self.study_review.pause()
+                self.study_review.mark_observation_gap()
             self.observations.clear_gaze()
             replacing_session = self._active_session_id is not None or self._pending_session_id is not None
             if replacing_session:
@@ -207,7 +207,7 @@ class FallbackMediaIngress:
             if self._active_session_id is None:
                 return False
             if self.study_review is not None:
-                self.study_review.pause()
+                self.study_review.mark_observation_gap()
             self._last_video_received_at = None
             self._last_audio_received_at = None
             self._last_fatigue_received_at = None
@@ -433,7 +433,7 @@ class FallbackMediaIngress:
         self.source.stop(reason=reason)
         self.observations.clear_gaze()
         if self.study_review is not None:
-            self.study_review.pause()
+            self.study_review.mark_observation_gap()
         self._active_session_id = None
         self._active_generation = None
         self._pending_session_id = None

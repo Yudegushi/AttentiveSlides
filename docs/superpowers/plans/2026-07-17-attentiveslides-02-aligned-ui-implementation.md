@@ -86,7 +86,7 @@ Update this table in the plan while executing. One row per checkpoint is enough.
 | 1. Typography and 02 tokens | completed | 15 passed in 0.003s; both font families resolved | this checkpoint commit | Checkpoint 2 |
 | 2. Shell, top bar, rails, slide stage | completed | 38 passed in 0.041s | this checkpoint commit | Checkpoint 3 |
 | 3. Control and Tutor output | completed | 25 passed in 0.068s; 2048×1050 visual accepted | this checkpoint commit | Checkpoint 4 |
-| 4. Pause persistence and timing | pending | — | — | — |
+| 4. Pause persistence and timing | completed | 54 passed in 0.706s | this checkpoint commit | Checkpoint 5 |
 | 5. Pause runtime integration | pending | — | — | — |
 | 6. Review visual alignment | pending | — | — | — |
 | 7. Whole-change review and final verification | pending | — | — | — |
