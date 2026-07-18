@@ -458,10 +458,20 @@ class TestStreamlitAttentiveSlides(
         main_source = self.function_source("main")
         self.assertLess(
             main_source.index(
-                "_render_slide_selector(browser, disabled=not mutations_enabled)"
+                "active_slide=view.active_slide"
             ),
             main_source.index("_render_slide_workspace("),
         )
+
+    def test_review_detail_uses_one_centered_navigation_frame(self) -> None:
+        review = self.function_source("_render_review_workspace")
+        self.assertIn('key="main_review_slide_frame"', review)
+        self.assertIn("active_slide=view.active_slide", review)
+        self.assertEqual(review.count("with _centered_slide_width()"), 1)
+        frame = review.index('key="main_review_slide_frame"')
+        self.assertLess(frame, review.index("_render_navigation", frame))
+        self.assertLess(frame, review.index("_render_review_text_fallback", frame))
+        self.assertLess(frame, review.index("st.image", frame))
 
     def test_slide_workspace_heading_removed(
         self,

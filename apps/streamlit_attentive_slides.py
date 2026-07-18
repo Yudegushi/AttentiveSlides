@@ -1925,30 +1925,36 @@ def _render_review_workspace(
                     on_click=_fit_slide_width,
                 )
         with st.container(key="main_review_slide_stage"):
-            _render_navigation(
-                browser,
-                view,
-                slide_ids=review_slide_ids,
-            )
-            if image_path is None:
-                _render_review_text_fallback(view.active_slide)
-            else:
-                try:
-                    if slide_review is not None and slide_review.valid_gaze_seconds > 0.0:
-                        rendered = render_review_slide(
-                            image_path,
-                            slide_review,
-                            show_heatmap=show_heatmap,
-                        )
+            with _centered_slide_width():
+                with st.container(key="main_review_slide_frame"):
+                    _render_navigation(
+                        browser,
+                        view,
+                        slide_ids=review_slide_ids,
+                    )
+                    if image_path is None:
+                        _render_review_text_fallback(view.active_slide)
                     else:
-                        rendered = _load_slide_image(image_path)
-                    try:
-                        with _centered_slide_width():
-                            st.image(rendered, width="stretch")
-                    finally:
-                        rendered.close()
-                except (OSError, ValueError):
-                    st.warning("The slide image or heatmap is unavailable.")
+                        try:
+                            if (
+                                slide_review is not None
+                                and slide_review.valid_gaze_seconds > 0.0
+                            ):
+                                rendered = render_review_slide(
+                                    image_path,
+                                    slide_review,
+                                    show_heatmap=show_heatmap,
+                                )
+                            else:
+                                rendered = _load_slide_image(image_path)
+                            try:
+                                st.image(rendered, width="stretch")
+                            finally:
+                                rendered.close()
+                        except (OSError, ValueError):
+                            st.warning(
+                                "The slide image or heatmap is unavailable."
+                            )
 
         if slide_review is None or slide_review.valid_gaze_seconds <= 0.0:
             st.info("No valid gaze captured")

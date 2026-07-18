@@ -506,6 +506,10 @@ footer {
   box-shadow: 0 8px 18px rgba(38, 55, 52, 0.09);
 }
 
+.st-key-main_review_slide_frame {
+  position: relative;
+}
+
 .st-key-main_review_selected_slide_metrics .as-review-metric-band {
   border-left: 3px solid var(--as-slide-accent);
   display: grid;

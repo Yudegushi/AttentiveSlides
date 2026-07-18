@@ -73,6 +73,7 @@ class MainUIReviewLayoutTests(unittest.TestCase):
     def test_review_uses_compact_instrument_toolbar_not_wide_slider(self) -> None:
         self.assertIn("main_review_slide_toolbar", self.review)
         self.assertIn("main_review_slide_stage", self.review)
+        self.assertIn("main_review_slide_frame", self.review)
         self.assertIn("main_review_slide_scale_down", self.review)
         self.assertIn("main_review_slide_scale_up", self.review)
         self.assertIn("main_review_slide_scale_fit", self.review)
@@ -80,6 +81,22 @@ class MainUIReviewLayoutTests(unittest.TestCase):
         self.assertIn(".as-review-table-head", self.css)
         self.assertIn("grid-template-columns", self.css)
         self.assertIn("border-left: 3px solid var(--as-slide-accent)", self.css)
+
+    def test_review_navigation_is_anchored_to_the_centered_slide_frame(self) -> None:
+        centered = self.review.index("_centered_slide_width")
+        frame = self.review.index("main_review_slide_frame")
+        self.assertLess(centered, frame)
+        frame_segment = self.review[frame:self.review.index(
+            "if slide_review is None", frame
+        )]
+        self.assertIn("_render_navigation", frame_segment)
+        self.assertIn("_render_review_text_fallback", frame_segment)
+        self.assertIn("st.image", frame_segment)
+        self.assertEqual(self.review.count("_centered_slide_width"), 1)
+        self.assertIn(
+            ".st-key-main_review_slide_frame {\n  position: relative;\n}",
+            self.css,
+        )
 
     def test_summary_band_separates_primary_and_learner_evidence(self) -> None:
         for label in (
