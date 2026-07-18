@@ -182,8 +182,8 @@ from modules.ui.review_view import UNAVAILABLE, ReviewMetric, build_review_view
 BUILT_IN_MANIFEST_PATH = (
     REPOSITORY_ROOT
     / "data"
-    / "mock_deck"
-    / "mock_aoi_manifest.json"
+    / "attentiveslides_deck"
+    / "manifest.json"
 )
 
 FLOW_ENGINE = {
@@ -510,15 +510,52 @@ def _main_interaction_logger() -> InteractionLogger:
     return InteractionLogger(MAIN_INTERACTION_LOG_PATH)
 
 
+def _has_uploaded_deck() -> bool:
+    """Return whether the learner has loaded a real PDF deck."""
+    return bool(st.session_state.get("main_uploaded_deck_id"))
+
+
+def _set_left_rail_expanded(expanded: bool) -> None:
+    st.session_state["main_left_rail_expanded"] = bool(expanded)
+
+
 def _render_sidebar_brand() -> None:
     """Render the fixed product identity cell before sidebar controls."""
     with st.sidebar.container(key="main_sidebar_brand"):
-        st.markdown(
-            '<div class="as-brand-cell">'
-            '<span class="as-brand-mark" aria-hidden="true">A</span>'
-            '<span class="as-brand-name">AttentiveSlides</span>'
-            "</div>",
-            unsafe_allow_html=True,
+        brand, collapse = st.columns(
+            [0.84, 0.16],
+            gap=None,
+            vertical_alignment="center",
+        )
+        with brand:
+            st.markdown(
+                '<div class="as-brand-cell">'
+                '<span class="as-brand-mark" aria-hidden="true">A</span>'
+                '<span class="as-brand-name">AttentiveSlides</span>'
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        with collapse:
+            st.button(
+                "×",
+                key="main_sidebar_collapse_button",
+                help="Collapse settings",
+                on_click=_set_left_rail_expanded,
+                args=(False,),
+            )
+
+
+def _render_left_rail_reopen() -> None:
+    """Render the small left-edge trigger while settings are collapsed."""
+    if st.session_state.get("main_left_rail_expanded", True):
+        return
+    with st.container(key="main_sidebar_reopen"):
+        st.button(
+            "»",
+            key="main_sidebar_expand_button",
+            help="Open settings",
+            on_click=_set_left_rail_expanded,
+            args=(True,),
         )
 
 
@@ -547,6 +584,7 @@ def main() -> None:
     _normalize_widget_state()
     _inject_compact_ui_css()
     _render_sidebar_brand()
+    _render_left_rail_reopen()
 
     browser = _resolve_active_browser(
         workspace,
@@ -610,6 +648,8 @@ def main() -> None:
             )
         return
 
+    mutations_enabled = _study_mutations_enabled(live_resources)
+    _render_upload_controls(workspace, disabled=not mutations_enabled)
     _render_header(view, resources=live_resources)
     _render_live_controls(
         live_resources,
@@ -620,8 +660,6 @@ def main() -> None:
         view,
         live_resources,
     )
-    mutations_enabled = _study_mutations_enabled(live_resources)
-    _render_upload_controls(workspace, disabled=not mutations_enabled)
 
     _render_slide_selector(browser, disabled=not mutations_enabled)
     with st.container(key="main_study_shell"):
@@ -1314,11 +1352,16 @@ def _render_live_controls(
     """Render the compact Study settings rail and reconcile media."""
     lifecycle = resources.study_review.lifecycle()
     mutations_enabled = lifecycle.status in {"idle", "active"}
+    if _has_uploaded_deck():
+        lesson_identity = (
+            f'<span class="as-eyebrow">LESSON / {view.active_slide_index + 1:02d}</span>'
+            f'<h2 class="as-rail-title">{html.escape(view.deck_title)}</h2>'
+        )
+    else:
+        lesson_identity = '<h2 class="as-rail-title">AttentiveSlides Deck</h2>'
     st.sidebar.markdown(
         '<section class="as-rail-lesson">'
-        f'<span class="as-eyebrow">LESSON / {view.active_slide_index + 1:02d}</span>'
-        f'<h2 class="as-rail-title">{html.escape(view.deck_title)}</h2>'
-        f'<span class="as-rail-copy">{html.escape(view.deck_id)}</span>'
+        f"{lesson_identity}"
         "</section>"
         '<div class="as-sidebar-rule"></div>'
         '<div class="as-eyebrow">RUNTIME CONFIGURATION</div>',
@@ -1875,7 +1918,7 @@ def _render_review_workspace(
                     else:
                         rendered = _load_slide_image(image_path)
                     try:
-                        with _left_aligned_slide_width():
+                        with _centered_slide_width():
                             st.image(rendered, width="stretch")
                     finally:
                         rendered.close()
@@ -2012,7 +2055,7 @@ def _render_upload_controls(
     *,
     disabled: bool = False,
 ) -> None:
-    panel = st.sidebar.expander("DECK", expanded=False)
+    panel = st.sidebar.expander("DECK", expanded=not _has_uploaded_deck())
 
     uploaded_file = (
         panel.file_uploader(
@@ -2405,9 +2448,12 @@ def _render_sidebar_status(
             '<div class="as-field-label">Active deck</div>',
             unsafe_allow_html=True,
         )
-        st.caption(
-            f"{browser.title} · {view.total_slides} slides · {browser.deck_id}"
-        )
+        if _has_uploaded_deck():
+            st.caption(
+                f"{browser.title} · {view.total_slides} slides · {browser.deck_id}"
+            )
+        else:
+            st.caption("No PDF loaded")
 
 
 @st.cache_data(show_spinner=False)
@@ -2537,9 +2583,9 @@ def _render_slide_selector(
     if not st.session_state.get("main_slide_rail_expanded", True):
         with st.container(key="main_slide_rail_reopen"):
             st.button(
-                "DECK",
+                "«",
                 key="main_slide_rail_expand_button",
-                help="Open slide deck",
+                help="Open slides index",
                 on_click=_set_slide_rail_expanded,
                 args=(True,),
             )
@@ -2549,7 +2595,7 @@ def _render_slide_selector(
         active_position = slide_ids.index(active_slide_id) + 1
         st.markdown(
             '<div class="as-deck-index-header">'
-            '<span>DECK INDEX</span>'
+            '<span>SLIDES INDEX</span>'
             f'<span>{active_position:02d} / {len(slide_ids):02d}</span>'
             "</div>",
             unsafe_allow_html=True,
@@ -2561,7 +2607,7 @@ def _render_slide_selector(
         )
         with title_column:
             st.markdown(
-                f'<div class="as-deck-count">DECK / {len(slide_ids):02d}</div>',
+                f'<div class="as-deck-count">SLIDES / {len(slide_ids):02d}</div>',
                 unsafe_allow_html=True,
             )
         with close_column:
@@ -2824,23 +2870,34 @@ def _render_header(
     """Render context, lifecycle, and study actions in the fixed top bar."""
     lifecycle = resources.study_review.lifecycle()
     with st.container(key="main_topbar"):
-        context, status, pause_slot, action = st.columns(
-            [0.52, 0.17, 0.12, 0.19],
+        context, alert, status, pause_slot, action = st.columns(
+            [0.34, 0.28, 0.14, 0.09, 0.15],
             gap="small",
             vertical_alignment="center",
         )
         with context:
             workspace_label = "REVIEW / WORKSPACE" if review else "STUDY / WORKSPACE"
+            deck_context = (
+                '<span class="as-topbar-separator">•</span>'
+                f'<span title="{html.escape(view.deck_title)}">'
+                f"{html.escape(view.deck_title)}</span>"
+                if review or _has_uploaded_deck()
+                else ""
+            )
             st.markdown(
                 '<div class="as-topbar-context-line">'
                 f'<span class="as-topbar-workspace">{workspace_label}</span>'
-                '<span class="as-topbar-separator">•</span>'
-                f'<span>{html.escape(view.deck_title)}</span>'
+                f"{deck_context}"
                 '<span class="as-topbar-separator">•</span>'
                 f'<span>{view.active_slide_index + 1:02d}—{view.total_slides:02d}</span>'
                 "</div>",
                 unsafe_allow_html=True,
             )
+        with alert:
+            if review:
+                st.empty()
+            else:
+                _render_learner_state_alert_periodic(resources)
         with status:
             _render_topbar_lifecycle_status(resources, review=review)
         with pause_slot:
@@ -2875,7 +2932,10 @@ def _render_header(
                 st.button(
                     "START STUDY",
                     key="main_start_study",
-                    disabled=resources.bound_deck_id is None,
+                    disabled=(
+                        resources.bound_deck_id is None
+                        or not _has_uploaded_deck()
+                    ),
                     width="stretch",
                     on_click=_start_study_review,
                     args=(resources, resources.bound_deck_id or ""),
@@ -3283,8 +3343,6 @@ def _render_slide_workspace(
                 width="stretch",
             ):
                 _render_learner_state_contents_periodic(live_resources)
-            with st.container(key="main_learner_state_reminder_slot"):
-                _render_learner_state_alert_periodic(live_resources)
         with scale_column:
             minus, percent, plus, fit = st.columns(
                 [0.2, 0.28, 0.2, 0.32],
@@ -3324,7 +3382,10 @@ def _render_slide_workspace(
 
     with st.container(key="main_slide_stage"):
         _render_navigation(browser, view, disabled=not mutations_enabled)
-        if view.deck_id == "mock_deck" and not view.active_slide.image_available:
+        if (
+            view.deck_id == "attentiveslides_deck"
+            and not view.active_slide.image_available
+        ):
             _render_builtin_slide_placeholder()
             return
         payload = render_slide_viewport(
@@ -3435,22 +3496,22 @@ def _render_slide_workspace(
 
 
 @contextmanager
-def _left_aligned_slide_width():
+def _centered_slide_width():
     width_percent = int(st.session_state["main_slide_width_percent"])
     if width_percent >= 100:
         yield
         return
-    slide_column, remainder = st.columns(
-        [width_percent, 100 - width_percent],
+    gutter = (100 - width_percent) / 2
+    _, slide_column, _ = st.columns(
+        [gutter, width_percent, gutter],
         gap=None,
     )
-    del remainder
     with slide_column:
         yield
 
 
 def _render_builtin_slide_placeholder() -> None:
-    with _left_aligned_slide_width():
+    with _centered_slide_width():
         st.markdown(
             """
             <div class="attentive-built-in-stage">
@@ -3524,7 +3585,7 @@ def _render_static_slide(
                     ),
                 )
 
-            with _left_aligned_slide_width():
+            with _centered_slide_width():
                 st.image(
                     display_image,
                     width="stretch",
@@ -3537,7 +3598,7 @@ def _render_static_slide(
             base_image.close()
 
     else:
-        with _left_aligned_slide_width():
+        with _centered_slide_width():
             with st.container(border=True):
                 st.markdown(f"### Slide {slide.slide_id}")
                 st.write(slide.slide_text or "Slide image unavailable.")
@@ -4560,10 +4621,6 @@ def _render_tutor_result(
     """Render the answer, meaningful follow-up, and one metadata line."""
     result = st.session_state["main_tutor_result"]
     if result is None:
-        st.markdown(
-            '<div class="as-empty-output">Ask a question to receive a grounded explanation.</div>',
-            unsafe_allow_html=True,
-        )
         return
 
     st.markdown(result["answer"])
@@ -5375,7 +5432,6 @@ def _render_unified_interaction(
 ) -> None:
     """Render one stable learner-facing Control panel for every voice mode."""
     panel = _current_voice_panel_view(resources)
-    badge = panel.state.replace("_", " ").upper()
     target_label = panel.target_label
     if target_label in {"whole_slide", "whole-slide"}:
         target_label = "Whole slide"
@@ -5388,7 +5444,6 @@ def _render_unified_interaction(
         'aria-label="Attention and voice controls">'
         '<span class="as-panel-index">1</span>'
         '<h2>CONTROL</h2>'
-        f'<span class="as-status-badge">{html.escape(badge)}</span>'
         "</div>",
         unsafe_allow_html=True,
     )

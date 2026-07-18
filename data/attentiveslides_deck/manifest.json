@@ -1,0 +1,20 @@
+{
+  "deck_id": "attentiveslides_deck",
+  "title": "AttentiveSlides Deck",
+  "slides": [
+    {
+      "slide_id": 1,
+      "ocr_text": "",
+      "neighbor_slide_text": "",
+      "aois": [
+        {
+          "aoi_id": "whole_slide",
+          "bbox": [0.0, 0.0, 1.0, 1.0],
+          "type": "slide",
+          "name": "Whole slide",
+          "text": ""
+        }
+      ]
+    }
+  ]
+}
