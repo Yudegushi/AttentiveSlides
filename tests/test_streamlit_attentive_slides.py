@@ -932,6 +932,15 @@ class TestStreamlitAttentiveSlides(
         self.assertIn('slide_id=int(interaction["slide_id"])', record)
         self.assertNotIn("uuid", record)
 
+    def test_omni_completed_turns_are_forwarded_to_study_review(self) -> None:
+        builder = self.function_source("build_main_live_resources")
+        self.assertIn("def record_omni_turn", builder)
+        self.assertIn("study_review.record_completed_interaction(", builder)
+        self.assertIn("interaction_id=result.turn_id", builder)
+        self.assertIn("deck_id=target.deck_id", builder)
+        self.assertIn("slide_id=target.slide_id", builder)
+        self.assertIn("on_turn_completed=record_omni_turn", builder)
+
     def test_finish_and_start_preserve_lifecycle_guards(self) -> None:
         finish = self.function_source("_finish_study_review")
         start = self.function_source("_start_study_review")

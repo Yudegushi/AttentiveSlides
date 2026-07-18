@@ -125,6 +125,17 @@ class VoiceControlComponentContractTests(unittest.TestCase):
         self.assertNotIn("Omni realtime", self.component)
         self.assertNotIn("innerHTML", self.component)
 
+    def test_frame_height_is_fixed_once_without_layout_measurement(self) -> None:
+        self.assertIn("const FRAME_HEIGHT = 150", self.component)
+        self.assertIn("let frameHeightSent = false", self.component)
+        self.assertIn("if (frameHeightSent) return", self.component)
+        self.assertIn("height: FRAME_HEIGHT", self.component)
+        self.assertEqual(
+            self.component.count('send("streamlit:setFrameHeight"'),
+            1,
+        )
+        self.assertNotIn("getBoundingClientRect", self.component)
+
     def test_complete_whitelisted_palette_map_is_applied_to_iframe_root(self) -> None:
         self.assertIn("palette_tokens=safe_tokens", self.wrapper)
         self.assertIn("palette_tokens must contain every semantic token", self.wrapper)
@@ -142,10 +153,20 @@ class VoiceControlComponentContractTests(unittest.TestCase):
         self.assertIn("clearPlayback", self.component)
         self.assertIn("textContent", self.component)
 
+    def test_playback_is_automatic_without_a_visible_enable_button(self) -> None:
+        self.assertNotIn('id="playback"', self.component)
+        self.assertNotIn("Enable playback", self.component)
+        self.assertNotIn("Playback enabled", self.component)
+        self.assertIn("function onPlaybackGesture()", self.component)
+        self.assertIn(
+            'shortcutDocument.addEventListener("pointerdown", onPlaybackGesture',
+            self.component,
+        )
+        self.assertIn("void ensureAudioContext().catch(() => {})", self.component)
+
     def test_capture_fatigue_contract_is_unchanged(self) -> None:
         self.assertIn("const FATIGUE_INTERVAL_MS = 250", self.capture)
-        self.assertIn("fatigueCanvas.width = 224", self.capture)
-        self.assertIn("fatigueCanvas.height = 224", self.capture)
+        self.assertIn("ensureCanvasSize(fatigueCanvas, 224, 224)", self.capture)
         self.assertIn('}, "image/jpeg", 0.80)', self.capture)
         self.assertIn('fetch("/attentive-media/fatigue"', self.capture)
 

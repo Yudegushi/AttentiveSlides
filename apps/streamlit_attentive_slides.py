@@ -161,6 +161,7 @@ from modules.system.voice_orchestrator import (
     VoiceOrchestrator,
 )
 from modules.system.uploaded_deck_service import (
+    UploadedDeckBrowser,
     UploadedDeckWorkspace,
 )
 from modules.ui.slide_viewport_component import render_slide_viewport
@@ -415,6 +416,13 @@ def build_main_live_resources(
         else:
             controller.pause_audio_turns()
 
+    def record_omni_turn(result, target: TargetBinding) -> None:
+        study_review.record_completed_interaction(
+            interaction_id=result.turn_id,
+            deck_id=target.deck_id,
+            slide_id=target.slide_id,
+        )
+
     omni_runtime = OmniVoiceRuntime(
         events=voice_events,
         target_switching=target_switching,
@@ -423,6 +431,7 @@ def build_main_live_resources(
         resolve_gaze_window=resolve_omni_gaze_window,
         on_fallback=fallback_voice,
         on_target_confirmed=adopt_omni_target,
+        on_turn_completed=record_omni_turn,
         build_instructions=build_omni_instructions,
     )
     single_turn_ptt = SingleTurnPTTRuntime(
@@ -644,6 +653,9 @@ def main() -> None:
         st.exception(exc)
         st.stop()
 
+    if isinstance(browser, UploadedDeckBrowser):
+        workspace.ensure_preview_generation(browser.deck_id)
+
     _sync_active_aoi_signature(view)
 
     live_resources = build_main_live_resources(
@@ -842,7 +854,7 @@ def _normalize_widget_state() -> None:
         "main_show_aoi_overlay": True,
         "main_manual_region_active": False,
         "main_live_master_enabled": False,
-        "main_slide_rail_expanded": True,
+        "main_slide_rail_expanded": False,
     }
 
     for key, default in boolean_defaults.items():
@@ -2590,6 +2602,67 @@ def _slide_selector_scroll_html(
     """
 
 
+def _slide_preview_hydration_html(
+    deck_id: str,
+    slide_ids: Sequence[int],
+) -> str:
+    safe_deck_id = json.dumps(deck_id)
+    expected_slide_ids = json.dumps([int(slide_id) for slide_id in slide_ids])
+    return f"""
+    <script>
+    (() => {{
+      const doc = window.parent.document;
+      const deckId = {safe_deck_id};
+      const expected = {expected_slide_ids};
+      let stopped = false;
+
+      const reveal = (slideId) => {{
+        const root = doc.querySelector(
+          `.as-slide-preview-progressive[data-slide-id="${{slideId}}"]`
+        );
+        if (!root || root.dataset.ready === 'true') return;
+        const image = root.querySelector('img');
+        if (!image || image.dataset.loading === 'true') return;
+        image.dataset.loading = 'true';
+        image.addEventListener('load', () => {{
+          root.dataset.ready = 'true';
+          root.classList.add('is-ready');
+          delete image.dataset.loading;
+        }}, {{ once: true }});
+        image.addEventListener('error', () => {{
+          delete image.dataset.loading;
+        }}, {{ once: true }});
+        image.src = `/attentive-previews/${{deckId}}/${{slideId}}.png`;
+      }};
+
+      const poll = async () => {{
+        if (stopped) return;
+        try {{
+          const response = await fetch(
+            `/attentive-previews/${{deckId}}/status.json`,
+            {{ cache: 'no-store' }}
+          );
+          if (response.ok) {{
+            const payload = await response.json();
+            const ready = new Set(payload.ready || []);
+            expected.forEach((slideId) => {{
+              if (ready.has(slideId)) reveal(slideId);
+            }});
+            if (payload.complete) return;
+          }}
+        }} catch (_error) {{
+          // The preview endpoint may still be starting; retry without rerunning Streamlit.
+        }}
+        window.setTimeout(poll, 700);
+      }};
+
+      window.addEventListener('pagehide', () => {{ stopped = true; }});
+      window.setTimeout(poll, 40);
+    }})();
+    </script>
+    """
+
+
 def _set_slide_rail_expanded(expanded: bool) -> None:
     st.session_state["main_slide_rail_expanded"] = bool(expanded)
 
@@ -2612,8 +2685,15 @@ def _render_slide_selector(
         active_slide_id = slide_ids[0]
         st.session_state["main_active_slide_id"] = active_slide_id
 
-    if not st.session_state.get("main_slide_rail_expanded", True):
+    if not st.session_state.get("main_slide_rail_expanded", False):
         return
+
+    progressive_deck_id = (
+        browser.deck_id
+        if isinstance(browser, UploadedDeckBrowser)
+        else None
+    )
+    progressive_slide_ids: list[int] = []
 
     with st.container(key="main_slide_rail"):
         active_position = slide_ids.index(active_slide_id) + 1
@@ -2677,10 +2757,21 @@ def _render_slide_selector(
                             width="stretch",
                         )
                     else:
-                        st.markdown(
-                            '<div class="as-slide-preview-empty">Preview</div>',
-                            unsafe_allow_html=True,
-                        )
+                        if progressive_deck_id is not None:
+                            progressive_slide_ids.append(slide_id)
+                            st.markdown(
+                                '<div class="as-slide-preview-progressive" '
+                                f'data-slide-id="{slide_id}">'
+                                f'<img alt="Slide {slide_id} preview" decoding="async">'
+                                '<div class="as-slide-preview-empty">Preview</div>'
+                                '</div>',
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown(
+                                '<div class="as-slide-preview-empty">Preview</div>',
+                                unsafe_allow_html=True,
+                            )
 
                     st.button(
                         f"Slide {slide_id}",
@@ -2694,6 +2785,16 @@ def _render_slide_selector(
                         args=(slide_id,),
                         help=f"Open slide {slide_id}",
                     )
+
+        if progressive_deck_id is not None and progressive_slide_ids:
+            components.html(
+                _slide_preview_hydration_html(
+                    progressive_deck_id,
+                    progressive_slide_ids,
+                ),
+                height=0,
+                width=0,
+            )
 
 
 def _render_compact_target_summary(
@@ -2731,12 +2832,20 @@ def _render_target_column(
     target_options = ["Whole slide", "Manual region"]
     if st.session_state.get("main_voice_engine") == "omni":
         target_options.insert(0, "Gaze AOI")
+    canonical_scope = str(
+        st.session_state.get("main_target_scope", target_options[0])
+    )
+    if canonical_scope not in target_options:
+        canonical_scope = target_options[0]
+        st.session_state["main_target_scope"] = canonical_scope
+    if st.session_state.get("main_target_scope_control") != canonical_scope:
+        st.session_state["main_target_scope_control"] = canonical_scope
     st.radio(
         "Target scope",
         options=target_options,
         format_func=_target_scope_label,
         horizontal=True,
-        key="main_target_scope",
+        key="main_target_scope_control",
         on_change=_on_target_scope_change,
         label_visibility="collapsed",
     )
@@ -2900,7 +3009,7 @@ def _render_header(
     )
     right_collapsed = not st.session_state.get(
         "main_slide_rail_expanded",
-        True,
+        False,
     )
 
     column_specs: list[tuple[str, float]] = []
@@ -3173,6 +3282,9 @@ def _reset_turn_state() -> None:
     st.session_state[
         "main_selection_error"
     ] = None
+    st.session_state[
+        "main_conversation_error"
+    ] = None
 
 
 def _invalidate_confirmation() -> None:
@@ -3204,6 +3316,9 @@ def _invalidate_confirmation() -> None:
 
     st.session_state[
         "main_last_generated_interaction_id"
+    ] = None
+    st.session_state[
+        "main_last_generation_attempted_interaction_id"
     ] = None
     st.session_state[
         "main_tutor_error"
@@ -3268,6 +3383,9 @@ def _clear_manual_region() -> None:
 
 
 def _on_target_scope_change() -> None:
+    selected = st.session_state.get("main_target_scope_control")
+    if selected in {"Whole slide", "Manual region", "Gaze AOI"}:
+        st.session_state["main_target_scope"] = selected
     st.session_state["main_target_scope_explicit"] = True
     _clear_manual_region()
 
@@ -3574,9 +3692,26 @@ def _render_builtin_slide_placeholder() -> None:
         st.markdown(
             """
             <div class="attentive-built-in-stage">
-                <div class="attentive-built-in-title">AttentiveSlides</div>
-                <div class="attentive-built-in-tagline">
-                    Select a slide region, state your learning goal, and receive a grounded tutor response.
+                <div class="attentive-built-in-title">Attentive Slides</div>
+                <div class="attentive-built-in-rule" aria-hidden="true"></div>
+                <div class="attentive-built-in-grid">
+                    <div class="attentive-built-in-tagline">
+                        Select a slide region, state your learning goal, and receive a grounded tutor response.
+                    </div>
+                    <div class="attentive-attention-visual" aria-hidden="true">
+                        <div class="attentive-rings">
+                            <i class="attentive-ring attentive-ring-1"></i>
+                            <i class="attentive-ring attentive-ring-2"></i>
+                            <i class="attentive-ring attentive-ring-3"></i>
+                            <span class="attentive-focus-word">focus</span>
+                        </div>
+                        <i class="attentive-noise attentive-noise-1"></i>
+                        <i class="attentive-noise attentive-noise-2"></i>
+                        <i class="attentive-noise attentive-noise-3"></i>
+                        <i class="attentive-noise attentive-noise-4"></i>
+                        <i class="attentive-noise attentive-noise-5"></i>
+                        <div class="attentive-aoi-marker"></div>
+                    </div>
                 </div>
             </div>
             """,
@@ -4654,7 +4789,11 @@ def _render_generation_status(
         cloud_text_allowed=st.session_state["main_cloud_text_allowed"],
         api_configured=bool(os.environ.get("DASHSCOPE_API_KEY")),
     )
-    _maybe_generate_confirmed_turn(view, resources)
+    if not isinstance(
+        st.session_state.get("main_live_proposal"),
+        LiveInteractionProposal,
+    ):
+        _maybe_generate_confirmed_turn(view, resources)
     if st.session_state["main_tutor_error"]:
         st.error(st.session_state["main_tutor_error"])
         st.button(
@@ -5545,32 +5684,44 @@ def _render_unified_interaction(
         on_change=_on_typed_command_change,
         label_visibility="collapsed",
     )
+    interaction_id = _confirmed_interaction_id()
+    submission_started = bool(
+        interaction_id
+        and interaction_id
+        in {
+            st.session_state.get("main_last_generation_attempted_interaction_id"),
+            st.session_state.get("main_last_generated_interaction_id"),
+        }
+    )
     confirm_clicked = st.button(
-        "CONFIRM TARGET",
+        "ASK TUTOR",
         type="primary",
         disabled=(
             selected is None
             or not st.session_state["main_typed_command"].strip()
-            or st.session_state["main_confirmed"]
+            or submission_started
         ),
         width="stretch",
         key="main_live_confirm_button",
     )
     if confirm_clicked and selected is not None:
         try:
-            _store_live_confirmation(
-                resources,
-                view,
-                proposal,
-                selected_option=selected,
-                automatic=False,
-            )
+            if not st.session_state["main_confirmed"]:
+                _store_live_confirmation(
+                    resources,
+                    view,
+                    proposal,
+                    selected_option=selected,
+                    automatic=False,
+                )
             _maybe_generate_confirmed_turn(view, resources)
         except Exception as exc:
             _invalidate_confirmation()
             st.session_state["main_confirmation_error"] = (
                 f"{type(exc).__name__}: {exc}"
             )
+        finally:
+            st.session_state["main_live_full_rerun_requested"] = True
     if st.session_state["main_confirmation_error"]:
         st.error(st.session_state["main_confirmation_error"])
 
@@ -5585,7 +5736,6 @@ def _render_live_periodic(
         return
     try:
         _consume_live_proposal(resources, view)
-        _maybe_generate_confirmed_turn(view, resources)
     except Exception as exc:
         st.error(
             "Live proposal processing failed: "

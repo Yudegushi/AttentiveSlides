@@ -8,6 +8,7 @@ import asyncio
 from contextlib import suppress
 import os
 from pathlib import Path
+import re
 import signal
 import socket
 import subprocess
@@ -27,6 +28,18 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+
+DECK_ID_PATTERN = re.compile(r"^[a-f0-9]{12}$")
+
+
+def configured_runtime_data_dir() -> Path:
+    return Path(
+        os.environ.get(
+            "ATTENTIVE_RUNTIME_DATA_DIR",
+            Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+            / "attentive_slides",
+        )
+    ).resolve()
 
 
 def build_streamlit_command(app: str, host: str, port: int) -> list[str]:
@@ -136,7 +149,65 @@ async def _proxy_websocket(request: web.Request, target: str) -> web.WebSocketRe
         return downstream
 
 
-def build_proxy_app(streamlit_origin: str, ingress_origin: str) -> web.Application:
+def build_proxy_app(
+    streamlit_origin: str,
+    ingress_origin: str,
+    preview_root: str | Path | None = None,
+) -> web.Application:
+    resolved_preview_root = Path(
+        preview_root
+        if preview_root is not None
+        else configured_runtime_data_dir() / "slide_previews"
+    ).resolve()
+
+    def preview_directory(request: web.Request) -> Path:
+        deck_id = request.match_info["deck_id"]
+        if DECK_ID_PATTERN.fullmatch(deck_id) is None:
+            raise web.HTTPNotFound()
+        return resolved_preview_root / deck_id
+
+    async def preview_status(request: web.Request) -> web.Response:
+        directory = preview_directory(request)
+        ready: list[int] = []
+        if directory.is_dir():
+            for candidate in directory.glob("slide_*.png"):
+                try:
+                    raw_slide_id = candidate.stem.removeprefix("slide_")
+                    if not raw_slide_id.isdigit():
+                        continue
+                    slide_id = int(raw_slide_id)
+                    file_size = candidate.stat().st_size
+                except OSError:
+                    continue
+                if candidate.is_file() and file_size > 0:
+                    ready.append(slide_id)
+        return web.json_response(
+            {
+                "ready": sorted(ready),
+                "complete": (directory / ".complete.json").is_file(),
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    async def preview_image(request: web.Request) -> web.StreamResponse:
+        directory = preview_directory(request)
+        try:
+            slide_id = int(request.match_info["slide_id"])
+        except ValueError as exc:
+            raise web.HTTPNotFound() from exc
+        if slide_id <= 0:
+            raise web.HTTPNotFound()
+        image_path = directory / f"slide_{slide_id:03d}.png"
+        if not image_path.is_file() or image_path.stat().st_size <= 0:
+            raise web.HTTPNotFound()
+        return web.FileResponse(
+            image_path,
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     async def proxy(request: web.Request) -> web.StreamResponse:
         origin = select_origin(request.path, streamlit_origin, ingress_origin)
         target = f"{origin}{request.rel_url}"
@@ -169,6 +240,14 @@ def build_proxy_app(streamlit_origin: str, ingress_origin: str) -> web.Applicati
             raise
 
     app = web.Application(client_max_size=1024**3)
+    app.router.add_get(
+        "/attentive-previews/{deck_id}/status.json",
+        preview_status,
+    )
+    app.router.add_get(
+        "/attentive-previews/{deck_id}/{slide_id}.png",
+        preview_image,
+    )
     app.router.add_route("*", "/{path:.*}", proxy)
     return app
 
@@ -219,7 +298,13 @@ async def run(args: argparse.Namespace, child: subprocess.Popen) -> None:
     streamlit_origin = f"http://{args.streamlit_host}:{args.streamlit_port}"
     ingress_origin = f"http://{args.ingress_host}:{args.ingress_port}"
     await wait_for_streamlit(streamlit_origin, child)
-    runner = web.AppRunner(build_proxy_app(streamlit_origin, ingress_origin))
+    runner = web.AppRunner(
+        build_proxy_app(
+            streamlit_origin,
+            ingress_origin,
+            configured_runtime_data_dir() / "slide_previews",
+        )
+    )
     await runner.setup()
     site = web.TCPSite(runner, args.host, args.port)
     await site.start()

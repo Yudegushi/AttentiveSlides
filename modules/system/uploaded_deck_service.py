@@ -351,6 +351,107 @@ class UploadedDeckWorkspace:
             summary,
         )
 
+    def ensure_preview_generation(
+        self,
+        deck_id: str,
+    ) -> bool:
+        """Start one non-blocking preview worker for an uploaded deck."""
+        deck_info = self.slide_parser.get_deck_info(deck_id)
+        if deck_info is None:
+            return False
+
+        preview_dir = self.data_dir / "slide_previews" / deck_id
+        preview_dir.mkdir(parents=True, exist_ok=True)
+
+        if (preview_dir / ".complete.json").is_file():
+            return False
+
+        job_path = preview_dir / ".worker.json"
+        if self._preview_worker_is_running(job_path):
+            return False
+
+        worker_path = REPOSITORY_ROOT / "scripts" / "pdf_native_worker.py"
+        if not worker_path.is_file():
+            return False
+
+        result_path = preview_dir / ".worker-result.json"
+        command = [
+            sys.executable,
+            str(worker_path),
+            "--output",
+            str(result_path),
+            "prepare-previews",
+            "--data-dir",
+            str(self.data_dir),
+            "--deck-id",
+            deck_id,
+            "--max-width",
+            "220",
+            "--max-height",
+            "124",
+        ]
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "OMP_NUM_THREADS": "1",
+                "MKL_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+                "NUMEXPR_NUM_THREADS": "1",
+                "PYTHONFAULTHANDLER": "1",
+            }
+        )
+
+        log_path = preview_dir / ".worker.log"
+        try:
+            with log_path.open("ab") as log_file:
+                process = subprocess.Popen(
+                    command,
+                    cwd=REPOSITORY_ROOT,
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    close_fds=True,
+                )
+        except OSError:
+            return False
+
+        temporary_job_path = job_path.with_suffix(".json.tmp")
+        temporary_job_path.write_text(
+            json.dumps(
+                {
+                    "pid": process.pid,
+                    "deck_id": deck_id,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        temporary_job_path.replace(job_path)
+        return True
+
+    @staticmethod
+    def _preview_worker_is_running(job_path: Path) -> bool:
+        if not job_path.is_file():
+            return False
+        try:
+            payload = json.loads(job_path.read_text(encoding="utf-8"))
+            pid = int(payload["pid"])
+            if pid <= 0:
+                return False
+            try:
+                finished_pid, _status = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                finished_pid = 0
+            if finished_pid == pid:
+                return False
+            os.kill(pid, 0)
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            return False
+        return True
+
     def prepare_llm_aoi(
         self,
         deck_id: str,

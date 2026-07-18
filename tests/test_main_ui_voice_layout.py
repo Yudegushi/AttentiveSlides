@@ -110,7 +110,7 @@ class MainUIVoiceLayoutTests(unittest.TestCase):
             if isinstance(node, ast.FunctionDef)
         }
 
-    def test_generate_button_is_removed_and_confirmation_auto_continues(self) -> None:
+    def test_live_voice_waits_for_explicit_ask_tutor_submission(self) -> None:
         self.assertNotIn("Generate grounded answer", self.source)
         self.assertNotIn("main_generate_answer_button", self.source)
         maybe = self.functions["_maybe_generate_confirmed_turn"]
@@ -118,6 +118,29 @@ class MainUIVoiceLayoutTests(unittest.TestCase):
         self.assertIn("main_last_generated_interaction_id", maybe)
         self.assertIn("main_last_generation_attempted_interaction_id", maybe)
         self.assertIn("_generate_confirmed_turn", maybe)
+
+        unified = self.functions["_render_unified_interaction"]
+        periodic = self.functions["_render_live_periodic"]
+        status = self.functions["_render_generation_status"]
+        self.assertIn("ASK TUTOR", unified)
+        self.assertNotIn("CONFIRM TARGET", unified)
+        self.assertIn("submission_started", unified)
+        self.assertIn("_maybe_generate_confirmed_turn", unified)
+        self.assertIn("main_live_full_rerun_requested", unified)
+        self.assertNotIn("_maybe_generate_confirmed_turn", periodic)
+        self.assertIn("LiveInteractionProposal", status)
+
+    def test_target_scope_business_state_is_not_a_widget_key(self) -> None:
+        target = self.functions["_render_target_column"]
+        callback = self.functions["_on_target_scope_change"]
+        self.assertIn("main_target_scope_control", target)
+        self.assertIn("main_target_scope", target)
+        self.assertIn("main_target_scope_control", callback)
+        self.assertIn("main_target_scope", callback)
+
+    def test_reset_turn_clears_stale_recording_errors(self) -> None:
+        reset = self.functions["_reset_turn_state"]
+        self.assertIn("main_conversation_error", reset)
 
     def test_dialogue_alone_supplies_bounded_history(self) -> None:
         generation = self.functions["_generate_confirmed_turn"]

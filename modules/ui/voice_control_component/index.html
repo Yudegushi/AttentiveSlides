@@ -105,7 +105,6 @@
       <button id="ptt" type="button" hidden>Hold to speak <kbd>V</kbd></button>
       <button id="cancel" type="button" hidden>Cancel</button>
       <button id="handsfree" type="button" hidden>Pause listening</button>
-      <button id="playback" type="button">Enable playback</button>
       <button id="retry" type="button" hidden>Retry</button>
     </div>
     <div id="switch" hidden>
@@ -117,19 +116,18 @@
   <script>
     (() => {
       const MEDIA_SESSION_KEY = "attentive-media-session";
+      const FRAME_HEIGHT = 150;
       const SEMANTIC_KEYS = [
         "canvas", "workspace", "topbar", "rail", "surface", "ink", "muted",
         "muted-2", "border", "border-strong", "primary", "primary-on",
         "primary-soft", "segment", "slide-accent", "slide-accent-soft",
       ];
-      const root = document.getElementById("root");
       const statusTitle = document.getElementById("status-title");
       const statusDetail = document.getElementById("status-detail");
       const meterFill = document.getElementById("meter-fill");
       const ptt = document.getElementById("ptt");
       const cancel = document.getElementById("cancel");
       const handsfree = document.getElementById("handsfree");
-      const playback = document.getElementById("playback");
       const retry = document.getElementById("retry");
       const switchBox = document.getElementById("switch");
       const switchMessage = document.getElementById("switch-message");
@@ -154,6 +152,7 @@
       let playbackCursor = 0;
       let reconnectTimer = null;
       let tornDown = false;
+      let frameHeightSent = false;
       const scheduledNodes = new Set();
 
       const shortcutDocuments = new Set([document]);
@@ -170,8 +169,10 @@
       }
 
       function setFrameHeight() {
+        if (frameHeightSent) return;
+        frameHeightSent = true;
         send("streamlit:setFrameHeight", {
-          height: Math.ceil(root.getBoundingClientRect().height),
+          height: FRAME_HEIGHT,
         });
       }
 
@@ -217,9 +218,10 @@
           audioContext = new AudioContextClass({ sampleRate: 24000 });
         }
         await audioContext.resume();
-        playback.textContent = audioContext.state === "running"
-          ? "Playback enabled"
-          : "Enable playback";
+      }
+
+      function onPlaybackGesture() {
+        void ensureAudioContext().catch(() => {});
       }
 
       function clearPlayback() {
@@ -521,7 +523,6 @@
       });
       cancel.addEventListener("click", (event) => void stopPtt(event));
       handsfree.addEventListener("click", () => void setContinuousPaused(!continuousPaused));
-      playback.addEventListener("click", () => void ensureAudioContext());
       retry.addEventListener("click", () => {
         ensureSocket();
         if (args.speech_mode === "continuous" && continuousPaused) {
@@ -543,6 +544,7 @@
       });
 
       for (const shortcutDocument of shortcutDocuments) {
+        shortcutDocument.addEventListener("pointerdown", onPlaybackGesture, { passive: true });
         shortcutDocument.addEventListener("keydown", onShortcutKeydown);
         shortcutDocument.addEventListener("keyup", onShortcutKeyup);
         shortcutDocument.addEventListener("visibilitychange", onVisibilityChange);
@@ -557,6 +559,7 @@
         const wasStudyPaused = Boolean(args.study_paused);
         args = nextArgs;
         applyPalette(args.palette_tokens);
+        void ensureAudioContext().catch(() => {});
         ptt.hidden = args.speech_mode !== "push_to_talk";
         cancel.hidden = !pttActive;
         handsfree.hidden = args.speech_mode !== "continuous";
@@ -609,6 +612,7 @@
         if (tornDown) return;
         tornDown = true;
         for (const shortcutDocument of shortcutDocuments) {
+          shortcutDocument.removeEventListener("pointerdown", onPlaybackGesture);
           shortcutDocument.removeEventListener("keydown", onShortcutKeydown);
           shortcutDocument.removeEventListener("keyup", onShortcutKeyup);
           shortcutDocument.removeEventListener("visibilitychange", onVisibilityChange);

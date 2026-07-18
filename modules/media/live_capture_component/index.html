@@ -75,6 +75,7 @@
   let lastGazeUploadAt = -Infinity;
   let fatigueInFlight = false;
   let lastFatigueUploadAt = -Infinity;
+  const FACE_MESH_INTERVAL_MS = 100;
   const FATIGUE_INTERVAL_MS = 250;
   const TRANSPORT_FAILURE_GRACE_MS = 8000;
   const energyVadThreshold = 250;
@@ -118,6 +119,13 @@
 
   function setGazeStatus(message) {
     gazeStatus.textContent = message;
+  }
+
+  function ensureCanvasSize(target, width, height) {
+    const nextWidth = Math.max(1, Math.round(width));
+    const nextHeight = Math.max(1, Math.round(height));
+    if (target.width !== nextWidth) target.width = nextWidth;
+    if (target.height !== nextHeight) target.height = nextHeight;
   }
 
   function noteTransportSuccess(channel) {
@@ -373,8 +381,7 @@
     const sourceX = Math.max(0, Math.min(sourceWidth - side, centerX - side / 2));
     const sourceY = Math.max(0, Math.min(sourceHeight - side, centerY - side / 2));
 
-    fatigueCanvas.width = 224;
-    fatigueCanvas.height = 224;
+    ensureCanvasSize(fatigueCanvas, 224, 224);
     fatigueContext.drawImage(
       eyeTheiaCanvas,
       sourceX,
@@ -420,8 +427,7 @@
         || preview.videoWidth === 0
         || !checkEyeTheiaViewport()
       ) return;
-      eyeTheiaCanvas.width = preview.videoWidth;
-      eyeTheiaCanvas.height = preview.videoHeight;
+      ensureCanvasSize(eyeTheiaCanvas, preview.videoWidth, preview.videoHeight);
       eyeTheiaContext.drawImage(preview, 0, 0, eyeTheiaCanvas.width, eyeTheiaCanvas.height);
       faceMeshInFlight = true;
       eyeTheiaFrameBusy = true;
@@ -430,7 +436,7 @@
         eyeTheiaFrameBusy = false;
         handleLocalGazeFailure("Face Mesh failed: " + error.message);
       });
-    }, 100);
+    }, FACE_MESH_INTERVAL_MS);
   }
 
   function startLocalGaze() {
@@ -547,8 +553,11 @@
   function startVideoPump() {
     videoTimer = window.setInterval(() => {
       if (!running || videoInFlight || preview.videoWidth === 0) return;
-      canvas.width = 320;
-      canvas.height = Math.max(1, Math.round(preview.videoHeight * 320 / preview.videoWidth));
+      ensureCanvasSize(
+        canvas,
+        320,
+        Math.max(1, Math.round(preview.videoHeight * 320 / preview.videoWidth)),
+      );
       context.drawImage(preview, 0, 0, canvas.width, canvas.height);
       videoInFlight = true;
       canvas.toBlob(async (blob) => {

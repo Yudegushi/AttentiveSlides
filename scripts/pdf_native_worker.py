@@ -134,6 +134,72 @@ def prepare_slide(
     }
 
 
+def prepare_previews(
+    *,
+    data_dir: Path,
+    deck_id: str,
+    max_width: int,
+    max_height: int,
+) -> dict[str, Any]:
+    """Render lightweight rail previews in one sequential PDF pass."""
+    import pymupdf
+
+    from modules.slide.slide_parser import SlideParser
+
+    if max_width <= 0 or max_height <= 0:
+        raise ValueError("Preview dimensions must be positive.")
+
+    parser = SlideParser(str(data_dir))
+    deck_info = parser.get_deck_info(deck_id)
+    if deck_info is None:
+        raise ValueError(f"Unknown deck_id: {deck_id}")
+
+    pdf_path = Path(str(deck_info["pdf_path"]))
+    if not pdf_path.is_file():
+        raise FileNotFoundError(f"Stored PDF is missing: {pdf_path}")
+
+    preview_dir = data_dir / "slide_previews" / deck_id
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    rendered_slide_ids: list[int] = []
+
+    with pymupdf.open(str(pdf_path)) as document:
+        page_count = int(document.page_count)
+        for page_index in range(page_count):
+            slide_id = page_index + 1
+            target_path = preview_dir / f"slide_{slide_id:03d}.png"
+            if target_path.is_file() and target_path.stat().st_size > 0:
+                rendered_slide_ids.append(slide_id)
+                continue
+
+            page = document.load_page(page_index)
+            page_width = max(float(page.rect.width), 1.0)
+            page_height = max(float(page.rect.height), 1.0)
+            scale = min(max_width / page_width, max_height / page_height)
+            pixmap = page.get_pixmap(
+                matrix=pymupdf.Matrix(scale, scale),
+                alpha=False,
+            )
+            temporary_path = preview_dir / f"slide_{slide_id:03d}.tmp.png"
+            temporary_path.write_bytes(pixmap.tobytes("png"))
+            temporary_path.replace(target_path)
+            rendered_slide_ids.append(slide_id)
+
+    completion_path = preview_dir / ".complete.json"
+    write_payload(
+        completion_path,
+        {
+            "deck_id": deck_id,
+            "page_count": page_count,
+            "ready": rendered_slide_ids,
+        },
+    )
+    return {
+        "deck_id": deck_id,
+        "page_count": page_count,
+        "preview_dir": str(preview_dir),
+    }
+
+
 def prepare_llm_aoi(
     *,
     data_dir: Path,
@@ -216,6 +282,28 @@ def main() -> None:
         action="store_true",
     )
 
+    preview_parser = subparsers.add_parser(
+        "prepare-previews"
+    )
+    preview_parser.add_argument(
+        "--data-dir",
+        required=True,
+    )
+    preview_parser.add_argument(
+        "--deck-id",
+        required=True,
+    )
+    preview_parser.add_argument(
+        "--max-width",
+        default=220,
+        type=int,
+    )
+    preview_parser.add_argument(
+        "--max-height",
+        default=124,
+        type=int,
+    )
+
     llm_parser = subparsers.add_parser("prepare-llm-aoi")
     llm_parser.add_argument("--data-dir", required=True)
     llm_parser.add_argument("--deck-id", required=True)
@@ -259,6 +347,14 @@ def main() -> None:
                 dpi=arguments.dpi,
                 enable_ocr=arguments.enable_ocr,
                 force=arguments.force,
+            )
+
+        elif arguments.action == "prepare-previews":
+            result = prepare_previews(
+                data_dir=Path(arguments.data_dir).resolve(),
+                deck_id=arguments.deck_id,
+                max_width=arguments.max_width,
+                max_height=arguments.max_height,
             )
 
         else:

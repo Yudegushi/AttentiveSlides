@@ -158,7 +158,7 @@ def build_main_live_defaults() -> dict[str, Any]:
         "main_answer_audio_enabled": True,
         "main_ui_palette": "ivory-study-desk",
         "main_left_rail_expanded": True,
-        "main_slide_rail_expanded": True,
+        "main_slide_rail_expanded": False,
         "main_voice_status_message": None,
         "main_live_proposal": None,
         "main_live_proposal_token": None,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
@@ -25,6 +26,9 @@ from modules.system.target_switching import SwitchIntent, TargetSwitchController
 from modules.system.voice_event_hub import VoiceEventHub
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 class OmniVoiceRuntime:
     """Keep one provider socket alive across turns for one confirmed target."""
 
@@ -38,6 +42,7 @@ class OmniVoiceRuntime:
         resolve_gaze_window: Callable[[object, float, TargetBinding], TargetBinding | None],
         on_fallback: Callable[[str, str | None], Awaitable[None]],
         on_target_confirmed: Callable[[TargetBinding], None] | None = None,
+        on_turn_completed: Callable[[OmniTurnResult, TargetBinding], None] | None = None,
         build_instructions: Callable[[TargetBinding], str] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -48,6 +53,9 @@ class OmniVoiceRuntime:
         self._resolve_gaze_window = resolve_gaze_window
         self._on_fallback = on_fallback
         self._on_target_confirmed = on_target_confirmed or (lambda target: None)
+        self._on_turn_completed = on_turn_completed or (
+            lambda result, target: None
+        )
         self._build_instructions = build_instructions or self._default_instructions
         self._clock = clock
         self._snapshot_lock = RLock()
@@ -419,6 +427,12 @@ class OmniVoiceRuntime:
             elapsed_ms=elapsed_ms,
         )
         await self._events.publish_json("turn.done", asdict(result))
+        target = self._target
+        if target is not None:
+            try:
+                self._on_turn_completed(result, target)
+            except Exception:
+                LOGGER.exception("Failed to record completed Omni interaction")
         self._last_transcript = result.user_transcript
         self._last_answer_text = result.answer_text
         self._reset_turn(clear_last=False)

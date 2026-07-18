@@ -68,6 +68,7 @@ class OmniVoiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.gaze_starts = []
         self.gaze_candidate = None
         self.confirmed_targets = []
+        self.completed_turns = []
 
         def factory():
             client = FakeClient()
@@ -94,6 +95,9 @@ class OmniVoiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             resolve_gaze_window=resolve,
             on_fallback=fallback,
             on_target_confirmed=self.confirmed_targets.append,
+            on_turn_completed=lambda result, target: self.completed_turns.append(
+                (result, target)
+            ),
         )
         self.a = make_target("a")
         self.addAsyncCleanup(self.runtime.stop_session, "test_cleanup")
@@ -218,6 +222,25 @@ class OmniVoiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.runtime.snapshot()["user_transcript"], "question")
         self.assertEqual(self.runtime.snapshot()["answer_text"], "answer")
         self.assertEqual(client.closed, 0)
+
+    async def test_response_done_reports_one_completed_turn_for_review(self) -> None:
+        await self.runtime.start_session(target=self.a, speech_mode=SpeechMode.CONTINUOUS)
+        client = self.clients[0]
+        await client.emit(
+            "conversation.item.input_audio_transcription.completed",
+            transcript="question",
+        )
+        await client.emit("response.text.done", text="answer")
+        await client.emit("response.done")
+        await client.emit("response.done")
+        await self.drain()
+
+        self.assertEqual(len(self.completed_turns), 1)
+        result, target = self.completed_turns[0]
+        self.assertEqual(result.user_transcript, "question")
+        self.assertEqual(result.answer_text, "answer")
+        self.assertTrue(result.turn_id.startswith("turn_"))
+        self.assertEqual(target, self.a)
 
     async def test_provider_error_falls_back_once_with_final_transcript(self) -> None:
         await self.runtime.start_session(target=self.a, speech_mode=SpeechMode.CONTINUOUS)

@@ -66,7 +66,7 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
         self.assertEqual(defaults["main_confirmation_policy"], "Confidence-based auto")
         self.assertEqual(defaults["main_auto_confirm_threshold"], 0.80)
         self.assertEqual(defaults["main_ui_palette"], "ivory-study-desk")
-        self.assertTrue(defaults["main_slide_rail_expanded"])
+        self.assertFalse(defaults["main_slide_rail_expanded"])
         controls = self.functions["_render_live_controls"]
         self.assertIn("Palette is locked", Path(
             "modules/ui/palette_control_component/index.html"
