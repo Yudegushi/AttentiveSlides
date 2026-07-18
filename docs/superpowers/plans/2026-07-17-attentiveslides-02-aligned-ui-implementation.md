@@ -89,7 +89,7 @@ Update this table in the plan while executing. One row per checkpoint is enough.
 | 4. Pause persistence and timing | completed | 54 passed in 0.706s | this checkpoint commit | Checkpoint 5 |
 | 5. Pause runtime integration | completed | 68 passed in 0.111s | this checkpoint commit | Checkpoint 6 |
 | 6. Review visual alignment | completed | 7 passed in 0.029s; 1600×1000 visual accepted | this checkpoint commit | Checkpoint 7 |
-| 7. Whole-change review and final verification | pending | — | — | — |
+| 7. Whole-change review and final verification | verification incomplete | 2 Important findings fixed; final full-suite rerun: 865 tests in 17.207s with 3 stale-contract failures, then affected 17 passed in 0.075s | this checkpoint commit | Extra full-suite run requires explicit override of the one-rerun budget |
 
 ## Planned File Map
 

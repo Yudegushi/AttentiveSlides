@@ -651,12 +651,26 @@ body:has(.st-key-main_slide_rail_reopen) .st-key-main_topbar {
   box-shadow: 0 0 0 3px color-mix(in srgb, #b47835 18%, transparent);
 }
 
+.as-topbar-status.is-review .as-status-dot {
+  display: none;
+}
+
 .st-key-main_topbar button {
   font-size: 10px;
   font-weight: 700;
   min-height: 32px;
   padding: 4px 9px;
   white-space: nowrap;
+}
+
+.st-key-main_end_study_review button {
+  background: var(--as-topbar) !important;
+  border-color: var(--as-slide-accent) !important;
+  color: var(--as-slide-accent) !important;
+}
+
+.st-key-main_end_study_review button:hover {
+  background: var(--as-slide-accent-soft) !important;
 }
 
 .st-key-main_study_shell {

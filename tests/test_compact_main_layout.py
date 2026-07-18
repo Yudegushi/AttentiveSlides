@@ -186,13 +186,13 @@ class TestCompactMainLayout(
     def test_learner_state_stays_in_the_primary_slide_actions(self) -> None:
         workspace = self.source_of("_render_slide_workspace")
         self.assertLess(
-            workspace.index('with st.popover(\n                "Learner state"'),
+            workspace.index('with st.popover(\n                "Learner State"'),
             workspace.index("_render_learner_state_alert_periodic"),
         )
         self.assertIn('key="main_learner_state_reminder_slot"', workspace)
         self.assertLess(
             workspace.index('key="main_learner_state_reminder_slot"'),
-            workspace.index('key="main_slide_scale"'),
+            workspace.index('key="main_slide_scale_down"'),
         )
 
     def test_built_in_missing_image_uses_centered_16_by_9_placeholder(self) -> None:
@@ -250,7 +250,7 @@ class TestCompactMainLayout(
                     for item in argument.elts
                     if isinstance(item, ast.Constant)
                 ]
-                if values == [1.0, 0.42]:
+                if values == [1.0, 0.33]:
                     matches.append(call.lineno)
 
         self.assertTrue(
@@ -278,51 +278,21 @@ class TestCompactMainLayout(
             )
         ]
 
-        self.assertEqual(
-            len(slider_calls),
-            1,
+        self.assertEqual(len(slider_calls), 0)
+        workspace = self.source_of("_render_slide_workspace")
+        for key in (
+            "main_slide_scale_down",
+            "main_slide_scale_up",
+            "main_slide_scale_fit",
+        ):
+            self.assertIn(key, workspace)
+        self.assertIn("_adjust_slide_width", workspace)
+        self.assertIn("_fit_slide_width", workspace)
+        self.assertLess(
+            workspace.index('key="main_slide_toolbar"'),
+            workspace.index('key="main_slide_stage"'),
         )
-        slider = slider_calls[0]
-        self.assertEqual(slider.args[0].value, "Slide size")
-        keywords = {
-            keyword.arg: keyword.value.value
-            for keyword in slider.keywords
-            if (
-                keyword.arg is not None
-                and isinstance(keyword.value, ast.Constant)
-            )
-        }
-        self.assertEqual(keywords["min_value"], 50)
-        self.assertEqual(keywords["max_value"], 100)
-        self.assertEqual(keywords["step"], 5)
-        self.assertEqual(keywords["key"], "main_slide_width_percent")
-
-        statement_calls = [
-            {
-                dotted_name(node.func).split(".")[-1]
-                for node in ast.walk(statement)
-                if isinstance(node, ast.Call)
-            }
-            for statement in function.body
-        ]
-        slider_statement = next(
-            index
-            for index, names in enumerate(statement_calls)
-            if "slider" in names
-        )
-        render_statement = next(
-            index
-            for index, names in enumerate(statement_calls)
-            if "render_slide_viewport" in names
-        )
-        self.assertEqual(render_statement, slider_statement + 1)
-
-        self.assertIn(
-            "render_slide_viewport",
-            self.source_of(
-                "_render_slide_workspace"
-            ),
-        )
+        self.assertIn("render_slide_viewport", workspace)
         self.assertNotIn("st_canvas", self.source)
 
     def test_xai_drawer_is_collapsed(

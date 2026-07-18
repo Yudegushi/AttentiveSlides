@@ -89,7 +89,7 @@ class TestSidebarLayout(
             filename=str(APP_PATH),
         )
 
-    def test_privacy_expander_is_collapsed(
+    def test_system_and_privacy_expander_is_collapsed(
         self,
     ) -> None:
         matches = []
@@ -119,7 +119,7 @@ class TestSidebarLayout(
                     ast.Constant,
                 )
                 and title.value
-                == "Privacy Status"
+                == "SYSTEM & PRIVACY"
             ):
                 continue
 
@@ -267,7 +267,7 @@ class TestSidebarLayout(
             and node.name == "_render_live_controls"
         )
         source = ast.get_source_segment(self.app_source, controls) or ""
-        self.assertIn("Participant & calibration", source)
+        self.assertIn("Participant &amp; calibration", source)
         self.assertIn("Media ", source)
         self.assertIn("runtime {runtime_state}", source)
         self.assertNotIn("st.sidebar.columns", source)

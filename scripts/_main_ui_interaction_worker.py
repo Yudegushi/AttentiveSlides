@@ -313,7 +313,7 @@ def run_sidebar_scenario() -> dict[str, Any]:
     for index in range(2):
         flow = require_widget(
             app.sidebar,
-            "radio",
+            "segmented_control",
             "main_interaction_flow",
         )
         flow.set_value("dialogue")
@@ -323,7 +323,7 @@ def run_sidebar_scenario() -> dict[str, Any]:
 
         flow = require_widget(
             app.sidebar,
-            "radio",
+            "segmented_control",
             "main_interaction_flow",
         )
         flow.set_value("one_turn")

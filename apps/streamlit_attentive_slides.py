@@ -2783,17 +2783,33 @@ def _render_topbar_lifecycle_status(
     review: bool,
 ) -> None:
     lifecycle = resources.study_review.lifecycle()
-    status_label = (
-        "COMPLETED"
-        if review
-        else lifecycle.status.replace("_", " ").upper()
-    )
-    elapsed = _format_review_duration(lifecycle.active_seconds)
-    status_class = " is-paused" if lifecycle.status == "paused" else ""
+    if review:
+        session_id = st.session_state.get("main_review_session")
+        selected_review = (
+            resources.study_review.get(str(session_id))
+            if session_id
+            else None
+        )
+        if selected_review is None:
+            selected_review = resources.study_review.latest()
+        elapsed = _format_review_duration(
+            selected_review.active_seconds if selected_review is not None else 0.0
+        )
+        status_copy = f"REVIEW · {elapsed} STUDIED"
+        status_class = " is-review"
+    else:
+        status_label = (
+            "READY"
+            if lifecycle.status == "idle"
+            else lifecycle.status.replace("_", " ").upper()
+        )
+        elapsed = _format_review_duration(lifecycle.active_seconds)
+        status_copy = f"{status_label} {elapsed}"
+        status_class = " is-paused" if lifecycle.status == "paused" else ""
     st.markdown(
         f'<div class="as-topbar-status{status_class}">'
         '<span class="as-status-dot" aria-hidden="true"></span>'
-        f"{status_label} {elapsed}"
+        f"{status_copy}"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -2872,7 +2888,6 @@ def _render_header(
                         else "END & REVIEW"
                     ),
                     key="main_end_study_review",
-                    type="primary",
                     disabled=lifecycle.status not in {
                         "active", "paused", "finish_pending"
                     },

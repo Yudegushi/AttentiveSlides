@@ -28,6 +28,9 @@ class TestSlidePreviewCanvas(unittest.TestCase):
         cls.viewport_wrapper = Path(
             "modules/ui/slide_viewport_component/__init__.py"
         ).read_text(encoding="utf-8")
+        cls.voice_panel = Path("modules/ui/voice_panel.py").read_text(
+            encoding="utf-8"
+        )
         cls.tree = ast.parse(cls.source, filename=str(APP_PATH))
         cls.functions = {
             node.name: node
@@ -144,7 +147,7 @@ class TestSlidePreviewCanvas(unittest.TestCase):
             "Target locked",
             "Target needs confirmation",
         ):
-            self.assertIn(copy, self.source)
+            self.assertIn(copy, self.voice_panel)
 
 
 if __name__ == "__main__":

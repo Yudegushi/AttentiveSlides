@@ -212,20 +212,22 @@ class MainLearnerStateUIContractTest(unittest.TestCase):
         workspace_start = self.source.index("def _render_slide_workspace")
         workspace = self.source[workspace_start:]
         enhance = workspace.index("_render_current_slide_llm_aoi_action")
-        popover = workspace.index('with st.popover(\n                "Learner state"')
+        popover = workspace.index('with st.popover(\n                "Learner State"')
         reminder = workspace.index("_render_learner_state_alert_periodic")
-        slide_scale = workspace.index('key="main_slide_scale"')
+        slide_scale = workspace.index('key="main_slide_scale_down"')
         self.assertLess(enhance, popover)
         self.assertLess(popover, reminder)
         self.assertLess(reminder, slide_scale)
         self.assertIn('key="main_learner_state_popover"', workspace)
         self.assertIn('key="main_learner_state_reminder_slot"', workspace)
-        self.assertIn("[0.62, 0.38]", workspace)
+        self.assertIn("[0.42, 0.16, 0.2, 0.22]", workspace)
         main_start = self.source.index("def main()")
         main_end = self.source.index("def _load_manifest_browser", main_start)
         main_source = self.source[main_start:main_end]
         self.assertLess(
-            main_source.index("_render_slide_selector(browser)"),
+            main_source.index(
+                "_render_slide_selector(browser, disabled=not mutations_enabled)"
+            ),
             main_source.index("_render_slide_workspace("),
         )
 

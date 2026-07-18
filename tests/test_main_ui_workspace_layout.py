@@ -103,6 +103,7 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
         self.assertIn("main_slide_rail_expand_button", selector)
         self.assertIn("STUDY / WORKSPACE", header)
         self.assertIn("REVIEW / WORKSPACE", header)
+        self.assertNotIn("type='primary'", header)
         self.assertNotIn("AttentiveSlides", header)
         self.assertIn("AttentiveSlides", brand)
         for key in (
@@ -121,6 +122,8 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
         self.assertIn("--as-right-rail-width: 190px", self.css)
         self.assertIn(".st-key-main_sidebar_brand", self.css)
         self.assertIn(".st-key-main_topbar", self.css)
+        self.assertIn(".st-key-main_end_study_review button", self.css)
+        self.assertIn(".as-topbar-status.is-review .as-status-dot", self.css)
         self.assertIn("position: fixed", self.css)
 
     def test_main_has_compact_two_column_shell_and_lower_answer(self) -> None:
@@ -136,7 +139,7 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
         self.assertIn("_render_manual_interaction", main)
         lower = self.functions["_render_lower_workspace"]
         self.assertIn("main_tutor_answer", lower)
-        self.assertIn("Tutor explanation", lower)
+        self.assertIn("TUTOR OUTPUT", lower)
 
 if __name__ == "__main__":
     unittest.main()

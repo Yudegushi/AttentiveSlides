@@ -302,6 +302,9 @@ class MainUIPauseBehaviorTests(unittest.TestCase):
         self.assertNotIn("main_study_started_monotonic", source)
         for token in (
             "lifecycle.active_seconds",
+            "selected_review.active_seconds",
+            '"READY"',
+            '"REVIEW · {elapsed} STUDIED"',
             '"PAUSE"',
             '"RESUME"',
             '"END & REVIEW"',
