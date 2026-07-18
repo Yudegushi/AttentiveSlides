@@ -70,6 +70,20 @@ class TestSlidePreviewCanvas(unittest.TestCase):
         self.assertIn("main_slide_rail_collapse_button", selector)
         self.assertIn("main_slide_rail_expand_button", selector)
         self.assertIn("Collapse slide deck", selector)
+        self.assertIn("DECK INDEX", selector)
+        self.assertIn("DECK /", selector)
+
+    def test_slide_scale_is_one_compact_toolbar_not_a_slider(self) -> None:
+        rendered = ast.unparse(self.functions["_render_slide_workspace"])
+        self.assertIn("main_slide_toolbar", rendered)
+        self.assertIn("CANVAS / SLIDE", rendered)
+        self.assertIn("main_slide_scale_down", rendered)
+        self.assertIn("main_slide_scale_up", rendered)
+        self.assertIn("main_slide_scale_fit", rendered)
+        self.assertIn("Learner State", rendered)
+        self.assertNotIn("st.slider", rendered)
+        self.assertNotIn("main_slide_scale'", rendered)
+        self.assertIn("display_width_percent", rendered)
 
     def test_viewport_component_replaces_region_sliders(self) -> None:
         workspace = self.functions["_render_slide_workspace"]

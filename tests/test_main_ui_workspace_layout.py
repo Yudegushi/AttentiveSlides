@@ -79,34 +79,63 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
     def test_visible_shell_uses_flow_speaking_and_advanced_sections(self) -> None:
         controls = self.functions["_render_live_controls"]
         for label in (
-            "One-turn",
+            "1 turn",
             "Dialogue",
             "Realtime",
-            "Hold to speak",
+            "Hold",
             "Hands-free",
             "Advanced voice settings",
         ):
             self.assertIn(label, controls)
         self.assertNotIn('key="main_voice_engine"', controls)
+        self.assertIn("segmented_control", controls)
+        self.assertIn("RUNTIME CONFIGURATION", controls)
 
-    def test_slide_selector_is_fixed_collapsible_rail_not_popover(self) -> None:
+    def test_shell_header_and_slide_selector_use_fixed_02_contract(self) -> None:
         selector = self.functions["_render_slide_selector"]
+        header = self.functions["_render_header"]
+        brand = self.functions["_render_sidebar_brand"]
         self.assertNotIn("st.popover", selector)
+        self.assertIn("DECK INDEX", selector)
+        self.assertIn("DECK /", selector)
         self.assertIn("main_slide_rail_collapse_button", selector)
         self.assertIn("main_slide_rail_expand_button", selector)
+        self.assertIn("STUDY / WORKSPACE", header)
+        self.assertIn("REVIEW / WORKSPACE", header)
+        self.assertNotIn("AttentiveSlides", header)
+        self.assertIn("AttentiveSlides", brand)
+        for key in (
+            "main_sidebar_brand",
+            "main_topbar",
+            "main_study_shell",
+            "main_slide_toolbar",
+            "main_slide_stage",
+            "main_interaction_workspace",
+            "main_tutor_answer",
+            "main_slide_rail",
+            "main_slide_rail_reopen",
+        ):
+            self.assertIn(key, self.source)
+        self.assertIn("--as-left-rail-width: 226px", self.css)
+        self.assertIn("--as-right-rail-width: 190px", self.css)
+        self.assertIn(".st-key-main_sidebar_brand", self.css)
+        self.assertIn(".st-key-main_topbar", self.css)
         self.assertIn("position: fixed", self.css)
-        self.assertIn("--as-right-rail-width: 194px", self.css)
 
-    def test_main_has_two_column_working_row_and_lower_answer(self) -> None:
+    def test_main_has_compact_two_column_shell_and_lower_answer(self) -> None:
         main = self.functions["main"]
-        self.assertIn("st.columns([1.0, 0.42]", main)
-        self.assertIn("_render_slide_workspace", main)
+        self.assertIn("st.container(key='main_study_shell')", main)
+        self.assertIn("st.columns([1.0, 0.33]", main)
+        self.assertIn("gap='small'", main)
+        slide_block = main.split("with slide_column:", 1)[1].split(
+            "with interaction_column:", 1
+        )[0]
+        self.assertIn("_render_slide_workspace", slide_block)
+        self.assertIn("_render_lower_workspace", slide_block)
         self.assertIn("_render_manual_interaction", main)
-        self.assertIn("_render_lower_workspace", main)
         lower = self.functions["_render_lower_workspace"]
         self.assertIn("main_tutor_answer", lower)
         self.assertIn("Tutor explanation", lower)
-
 
 if __name__ == "__main__":
     unittest.main()

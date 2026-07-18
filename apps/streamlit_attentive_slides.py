@@ -510,6 +510,18 @@ def _main_interaction_logger() -> InteractionLogger:
     return InteractionLogger(MAIN_INTERACTION_LOG_PATH)
 
 
+def _render_sidebar_brand() -> None:
+    """Render the fixed product identity cell before sidebar controls."""
+    with st.sidebar.container(key="main_sidebar_brand"):
+        st.markdown(
+            '<div class="as-brand-cell">'
+            '<span class="as-brand-mark" aria-hidden="true">A</span>'
+            '<span class="as-brand-name">AttentiveSlides</span>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+
 
 def main() -> None:
     st.set_page_config(
@@ -534,11 +546,7 @@ def main() -> None:
     _initialize_global_state()
     _normalize_widget_state()
     _inject_compact_ui_css()
-
-    if st.session_state["main_workspace_mode"] == "study":
-        _render_upload_controls(
-            workspace
-        )
+    _render_sidebar_brand()
 
     browser = _resolve_active_browser(
         workspace,
@@ -592,8 +600,8 @@ def main() -> None:
         view=view,
     )
     if st.session_state["main_workspace_mode"] == "review":
-        _render_review_sidebar(live_resources)
         _render_header(view, resources=live_resources, review=True)
+        _render_review_sidebar(live_resources)
         _render_review_workspace(
             view,
             browser=browser,
@@ -601,36 +609,38 @@ def main() -> None:
         )
         return
 
+    _render_header(view, resources=live_resources)
     _render_live_controls(
-        live_resources
+        live_resources,
+        view=view,
     )
-
     _render_sidebar_status(
         browser,
         view,
     )
+    _render_upload_controls(workspace)
 
-    _render_header(view, resources=live_resources)
     _render_slide_selector(browser)
-    slide_column, interaction_column = st.columns(
-        [1.0, 0.42],
-        gap="medium",
-        vertical_alignment="top",
-    )
-    with slide_column:
-        _render_slide_workspace(
-            view,
-            browser=browser,
-            workspace=workspace,
-            live_resources=live_resources,
+    with st.container(key="main_study_shell"):
+        slide_column, interaction_column = st.columns(
+            [1.0, 0.33],
+            gap="small",
+            vertical_alignment="top",
         )
-    with interaction_column:
-        with st.container(key="main_interaction_workspace"):
-            _render_manual_interaction(
+        with slide_column:
+            _render_slide_workspace(
                 view,
+                browser=browser,
+                workspace=workspace,
                 live_resources=live_resources,
             )
-    _render_lower_workspace(view, live_resources)
+            _render_lower_workspace(view, live_resources)
+        with interaction_column:
+            with st.container(key="main_interaction_workspace"):
+                _render_manual_interaction(
+                    view,
+                    live_resources=live_resources,
+                )
 
 
 
@@ -1189,41 +1199,59 @@ def _on_review_option_change(source: str | None = None) -> None:
 
 def _render_live_controls(
     resources: MainLiveResources,
+    *,
+    view: MainUIViewModel,
 ) -> None:
-    """Render the stable Study settings rail and reconcile media."""
-    st.sidebar.markdown("### Lesson")
-    st.sidebar.caption(resources.bound_deck_id or "Preparing lesson")
+    """Render the compact Study settings rail and reconcile media."""
+    st.sidebar.markdown(
+        '<section class="as-rail-lesson">'
+        f'<span class="as-eyebrow">LESSON / {view.active_slide_index + 1:02d}</span>'
+        f'<h2 class="as-rail-title">{html.escape(view.deck_title)}</h2>'
+        f'<span class="as-rail-copy">{html.escape(view.deck_id)}</span>'
+        "</section>"
+        '<div class="as-sidebar-rule"></div>'
+        '<div class="as-eyebrow">RUNTIME CONFIGURATION</div>',
+        unsafe_allow_html=True,
+    )
 
-    st.sidebar.markdown("### Conversation flow")
-    st.sidebar.radio(
+    st.sidebar.markdown(
+        '<div class="as-field-label">Conversation flow</div>',
+        unsafe_allow_html=True,
+    )
+    st.sidebar.segmented_control(
         "Conversation flow",
         options=["one_turn", "dialogue", "realtime"],
         format_func=lambda value: {
-            "one_turn": "One-turn",
+            "one_turn": "1 turn",
             "dialogue": "Dialogue",
             "realtime": "Realtime",
         }[value],
         key="main_interaction_flow",
         on_change=_on_interaction_flow_change,
         label_visibility="collapsed",
-    )
-    st.sidebar.caption(
-        "One grounded turn, bounded dialogue history, or persistent realtime."
+        width="stretch",
     )
 
-    st.sidebar.markdown("### Speaking control")
-    st.sidebar.radio(
+    st.sidebar.markdown(
+        '<div class="as-field-label">Speaking control</div>',
+        unsafe_allow_html=True,
+    )
+    st.sidebar.segmented_control(
         "Speaking control",
         options=["push_to_talk", "continuous"],
         format_func=lambda value: (
-            "Hold to speak" if value == "push_to_talk" else "Hands-free"
+            "Hold" if value == "push_to_talk" else "Hands-free"
         ),
         key="main_speech_mode",
         on_change=_on_live_preference_change,
         label_visibility="collapsed",
+        width="stretch",
     )
 
-    st.sidebar.markdown("### Attention & answers")
+    st.sidebar.markdown(
+        '<div class="as-field-label">Attention &amp; answers</div>',
+        unsafe_allow_html=True,
+    )
     st.sidebar.checkbox(
         "Enable camera and microphone",
         key="main_live_master_enabled",
@@ -1245,7 +1273,10 @@ def _render_live_controls(
     )
 
     lifecycle = resources.study_review.lifecycle()
-    st.sidebar.markdown("### Palette")
+    st.sidebar.markdown(
+        '<div class="as-field-label">Palette</div>',
+        unsafe_allow_html=True,
+    )
     with st.sidebar:
         selected_palette = str(st.session_state["main_ui_palette"])
         palette_value = render_palette_control(
@@ -1272,7 +1303,10 @@ def _render_live_controls(
 
     runtime_state = resources.runtime.controller.state.value
     session = resources.ingress.session_snapshot()
-    st.sidebar.markdown("### Participant & calibration")
+    st.sidebar.markdown(
+        '<div class="as-field-label">Participant &amp; calibration</div>',
+        unsafe_allow_html=True,
+    )
     st.sidebar.caption(
         f"Media {'ready' if session.video_fresh and session.audio_fresh else 'waiting'} · "
         f"runtime {runtime_state}"
@@ -1760,13 +1794,10 @@ def _activate_manual_region() -> None:
 def _render_upload_controls(
     workspace: UploadedDeckWorkspace,
 ) -> None:
-
-    st.sidebar.markdown(
-        "### Deck"
-    )
+    panel = st.sidebar.expander("DECK", expanded=False)
 
     uploaded_file = (
-        st.sidebar.file_uploader(
+        panel.file_uploader(
             "Upload a PDF slide deck",
             type=["pdf"],
             key="main_pdf_upload",
@@ -1789,7 +1820,7 @@ def _render_upload_controls(
         and st.session_state.get("main_uploaded_deck_id")
     )
     if loaded:
-        st.sidebar.button(
+        panel.button(
             "Loaded PDF",
             disabled=True,
             width="stretch",
@@ -1797,7 +1828,7 @@ def _render_upload_controls(
         )
         load_clicked = False
     else:
-        load_clicked = st.sidebar.button(
+        load_clicked = panel.button(
             "Load PDF",
             disabled=uploaded_file is None,
             width="stretch",
@@ -1842,7 +1873,7 @@ def _render_upload_controls(
     if st.session_state[
         "main_upload_error"
     ]:
-        st.sidebar.error(
+        panel.error(
             st.session_state[
                 "main_upload_error"
             ]
@@ -2091,139 +2122,70 @@ def _render_sidebar_status(
     browser: Any,
     view: MainUIViewModel,
 ) -> None:
+    """Keep secondary runtime and privacy details behind one disclosure."""
     live_enabled = _media_runtime_requested()
-    with st.sidebar.expander(
-        "Privacy Status",
-        expanded=False,
-    ):
-        st.markdown(
-            "**Camera**"
-        )
-
-        st.caption(
-            "On for coarse 3×3 viewport gaze targeting."
-            if live_enabled
-            else "Off. No camera frames are collected."
-        )
-
-        st.markdown(
-            "**Microphone**"
-        )
-
-        st.caption(
-            "On for local VAD and speech transcription."
-            if live_enabled
-            else "Off. No audio is collected."
-        )
-
-        st.checkbox(
-            (
-                "Permit selected slide text "
-                "to be sent to the cloud tutor"
-            ),
-            key="main_cloud_text_allowed",
-            help=(
-                "Only confirmed slide context and "
-                "sanitized conversation history "
-                "may be transmitted."
-            ),
-            on_change=(
-                _on_cloud_permission_change
-            ),
-        )
-    st.sidebar.markdown("### Conversation context")
-
-    st.session_state[
-        "main_history_max_items"
-    ] = 4
-
-    st.sidebar.caption(
-        "Dialogue uses the latest 4 sanitized turns. "
-        "One-turn does not send prior turns; Realtime history is provider-owned."
-    )
-
-    st.sidebar.caption(
-        "Stored in this session: "
-        f"{len(st.session_state['main_conversation_turns'])} "
-        "turn(s)."
-    )
-
-    st.sidebar.markdown(
-        "### System Status"
-    )
-
-    sidebar_status_row_1 = (
-        st.sidebar.columns(2)
-    )
-
-    with sidebar_status_row_1[0]:
-        with st.container(
-            border=True
-        ):
-            st.caption("FLOW")
-            st.markdown(
-                f"**{str(st.session_state['main_interaction_flow']).replace('_', ' ').title()}**"
-            )
-
-    with sidebar_status_row_1[1]:
-        with st.container(
-            border=True
-        ):
-            st.caption("CAMERA")
-            st.markdown(
-                f"**{'On' if live_enabled else 'Off'}**"
-            )
-
-    sidebar_status_row_2 = (
-        st.sidebar.columns(2)
-    )
-
-    with sidebar_status_row_2[0]:
-        with st.container(
-            border=True
-        ):
-            st.caption("MICROPHONE")
-            st.markdown(
-                f"**{'On' if live_enabled else 'Off'}**"
-            )
-
-    cloud_api_configured = bool(
-        os.environ.get(
-            "DASHSCOPE_API_KEY"
-        )
-    )
-
-    if not st.session_state[
-        "main_cloud_text_allowed"
-    ]:
+    st.session_state["main_history_max_items"] = 4
+    cloud_api_configured = bool(os.environ.get("DASHSCOPE_API_KEY"))
+    if not st.session_state["main_cloud_text_allowed"]:
         cloud_tutor_status = "Blocked"
-
     elif cloud_api_configured:
         cloud_tutor_status = "Ready"
-
     else:
         cloud_tutor_status = "No API key"
 
-    with sidebar_status_row_2[1]:
-        with st.container(
-            border=True
-        ):
-            st.caption("CLOUD TUTOR")
-            st.markdown(
-                f"**{cloud_tutor_status}**"
-            )
-    st.sidebar.markdown(
-        "### Active deck"
-    )
-    st.sidebar.caption(
-        f"Deck: {browser.title}"
-    )
-    st.sidebar.caption(
-        f"Slides: {view.total_slides}"
-    )
-    st.sidebar.caption(
-        f"Deck ID: {browser.deck_id}"
-    )
+    with st.sidebar.expander("SYSTEM & PRIVACY", expanded=False):
+        st.markdown(
+            '<div class="as-field-label">Privacy</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Camera: on for coarse 3×3 viewport gaze targeting."
+            if live_enabled
+            else "Camera: off; no frames are collected."
+        )
+        st.caption(
+            "Microphone: on for local VAD and speech transcription."
+            if live_enabled
+            else "Microphone: off; no audio is collected."
+        )
+        st.checkbox(
+            "Permit selected slide text to reach the cloud tutor",
+            key="main_cloud_text_allowed",
+            help=(
+                "Only confirmed slide context and sanitized conversation "
+                "history may be transmitted."
+            ),
+            on_change=_on_cloud_permission_change,
+        )
+        st.markdown(
+            '<div class="as-field-label">Context</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Dialogue keeps the latest 4 sanitized turns; one-turn sends no "
+            "history and Realtime history stays provider-owned."
+        )
+        st.caption(
+            "Stored this session: "
+            f"{len(st.session_state['main_conversation_turns'])} turn(s)."
+        )
+        st.markdown(
+            '<div class="as-field-label">Runtime</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            f"Flow {str(st.session_state['main_interaction_flow']).replace('_', ' ').title()} · "
+            f"camera {'on' if live_enabled else 'off'} · "
+            f"microphone {'on' if live_enabled else 'off'} · "
+            f"cloud tutor {cloud_tutor_status.lower()}"
+        )
+        st.markdown(
+            '<div class="as-field-label">Active deck</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            f"{browser.title} · {view.total_slides} slides · {browser.deck_id}"
+        )
 
 
 @st.cache_data(show_spinner=False)
@@ -2339,7 +2301,7 @@ def _render_slide_selector(
     *,
     slide_ids: Sequence[int] | None = None,
 ) -> None:
-    """Render the one persistent, independently scrolling slide rail."""
+    """Render the fixed, independently scrolling 02-style deck rail."""
     slide_ids = list(browser.slide_ids if slide_ids is None else slide_ids)
     if not slide_ids:
         return
@@ -2352,7 +2314,7 @@ def _render_slide_selector(
     if not st.session_state.get("main_slide_rail_expanded", True):
         with st.container(key="main_slide_rail_reopen"):
             st.button(
-                "Slides",
+                "DECK",
                 key="main_slide_rail_expand_button",
                 help="Open slide deck",
                 on_click=_set_slide_rail_expanded,
@@ -2361,14 +2323,24 @@ def _render_slide_selector(
         return
 
     with st.container(key="main_slide_rail"):
+        active_position = slide_ids.index(active_slide_id) + 1
+        st.markdown(
+            '<div class="as-deck-index-header">'
+            '<span>DECK INDEX</span>'
+            f'<span>{active_position:02d} / {len(slide_ids):02d}</span>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
         title_column, close_column = st.columns(
-            [0.78, 0.22],
+            [0.8, 0.2],
             gap="small",
             vertical_alignment="center",
         )
         with title_column:
-            st.markdown("**Slides**")
-            st.caption(f"{len(slide_ids)} slides")
+            st.markdown(
+                f'<div class="as-deck-count">DECK / {len(slide_ids):02d}</div>',
+                unsafe_allow_html=True,
+            )
         with close_column:
             st.button(
                 "×",
@@ -2383,7 +2355,7 @@ def _render_slide_selector(
             width=0,
         )
         with st.container(
-            height=850,
+            height=900,
             border=False,
             key="main_slide_preview_scroll",
         ):
@@ -2427,7 +2399,6 @@ def _render_slide_selector(
                         args=(slide_id,),
                         help=f"Open slide {slide_id}",
                     )
-
 
 
 def _render_compact_target_summary(
@@ -2660,54 +2631,70 @@ def _render_header(
     resources: MainLiveResources,
     review: bool = False,
 ) -> None:
+    """Render context, lifecycle, and study actions in the fixed top bar."""
     lifecycle = resources.study_review.lifecycle()
     with st.container(key="main_topbar"):
-        identity, context, action = st.columns(
-            [0.28, 0.48, 0.24],
-            gap="medium",
+        context, status, pause_slot, action = st.columns(
+            [0.52, 0.17, 0.12, 0.19],
+            gap="small",
             vertical_alignment="center",
         )
-        with identity:
+        with context:
+            workspace_label = "REVIEW / WORKSPACE" if review else "STUDY / WORKSPACE"
             st.markdown(
-                '<div class="as-topbar__identity">AttentiveSlides</div>'
-                f'<div class="as-topbar__context">{"Review Workspace" if review else "Study Workspace"}</div>',
+                '<div class="as-topbar-context-line">'
+                f'<span class="as-topbar-workspace">{workspace_label}</span>'
+                '<span class="as-topbar-separator">•</span>'
+                f'<span>{html.escape(view.deck_title)}</span>'
+                '<span class="as-topbar-separator">•</span>'
+                f'<span>{view.active_slide_index + 1:02d}—{view.total_slides:02d}</span>'
+                "</div>",
                 unsafe_allow_html=True,
             )
-        with context:
-            st.markdown(f"**{view.deck_title}**")
-            st.caption(
-                f"Slide {view.active_slide_index + 1:02d} of {view.total_slides:02d}"
+        with status:
+            started = st.session_state.get("main_study_started_monotonic")
+            elapsed = (
+                _format_review_duration(time.monotonic() - float(started))
+                if lifecycle.status == "active" and started is not None
+                else "00:00"
             )
+            status_label = (
+                "COMPLETED"
+                if review
+                else lifecycle.status.replace("_", " ").upper()
+            )
+            st.markdown(
+                '<div class="as-topbar-status">'
+                '<span class="as-status-dot" aria-hidden="true"></span>'
+                f"{status_label} {elapsed}"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        with pause_slot:
+            # Pause/Resume is wired only after the lifecycle supports it.
+            st.empty()
         with action:
             if review:
-                st.caption("Completed Study Review")
-            else:
-                started = st.session_state.get("main_study_started_monotonic")
-                elapsed = (
-                    _format_review_duration(time.monotonic() - float(started))
-                    if lifecycle.status == "active" and started is not None
-                    else "00:00"
+                st.empty()
+            elif lifecycle.status == "idle":
+                st.button(
+                    "START STUDY",
+                    key="main_start_study",
+                    disabled=resources.bound_deck_id is None,
+                    width="stretch",
+                    on_click=_start_study_review,
+                    args=(resources, resources.bound_deck_id or ""),
                 )
-                st.caption(f"{lifecycle.status.replace('_', ' ').title()} · {elapsed}")
-                if lifecycle.status == "idle":
-                    st.button(
-                        "Start study",
-                        key="main_start_study",
-                        disabled=resources.bound_deck_id is None,
-                        width="stretch",
-                        on_click=_start_study_review,
-                        args=(resources, resources.bound_deck_id or ""),
-                    )
-                else:
-                    st.button(
-                        "End study & review",
-                        key="main_end_study_review",
-                        type="primary",
-                        disabled=lifecycle.status not in {"active", "finish_pending"},
-                        width="stretch",
-                        on_click=_finish_study_review,
-                        args=(resources, lifecycle.deck_id or ""),
-                    )
+            else:
+                st.button(
+                    "END & REVIEW",
+                    key="main_end_study_review",
+                    type="primary",
+                    disabled=lifecycle.status not in {"active", "finish_pending"},
+                    width="stretch",
+                    on_click=_finish_study_review,
+                    args=(resources, lifecycle.deck_id or ""),
+                )
 
 
 def _learner_state_view(resources: MainLiveResources):
@@ -3038,6 +3025,19 @@ def _render_current_slide_llm_aoi_action(
         st.error(message)
 
 
+def _adjust_slide_width(delta: int) -> None:
+    """Move the displayed slide scale by one normalized toolbar step."""
+    current = st.session_state.get("main_slide_width_percent", 70)
+    st.session_state["main_slide_width_percent"] = normalize_main_slide_width_percent(
+        int(current) + int(delta)
+    )
+
+
+def _fit_slide_width() -> None:
+    """Fit the slide to the available stage without resize polling."""
+    st.session_state["main_slide_width_percent"] = 100
+
+
 def _render_slide_workspace(
     view: MainUIViewModel,
     *,
@@ -3052,33 +3052,66 @@ def _render_slide_workspace(
     if not drawing_enabled:
         _set_whole_slide_target(view)
 
-    with st.container(key="main_primary_actions"):
-        llm_column, status_column = st.columns(
-            [0.62, 0.38],
+    scale = int(st.session_state["main_slide_width_percent"])
+    with st.container(key="main_slide_toolbar"):
+        label_column, tools_column, status_column, scale_column = st.columns(
+            [0.42, 0.16, 0.2, 0.22],
             gap="small",
             vertical_alignment="center",
         )
-        with llm_column:
-            _render_current_slide_llm_aoi_action(view, workspace)
+        with label_column:
+            st.markdown(
+                f'<div class="as-slide-toolbar-label">CANVAS / SLIDE {view.active_slide_id:02d}</div>',
+                unsafe_allow_html=True,
+            )
+        with tools_column:
+            with st.popover("Slide tools", key="main_slide_tools_popover"):
+                _render_current_slide_llm_aoi_action(view, workspace)
         with status_column:
             with st.popover(
-                "Learner state",
+                "Learner State",
                 key="main_learner_state_popover",
                 width="stretch",
             ):
                 _render_learner_state_contents_periodic(live_resources)
             with st.container(key="main_learner_state_reminder_slot"):
                 _render_learner_state_alert_periodic(live_resources)
-
-    with st.container(key="main_slide_scale"):
-        st.slider(
-            "Slide size",
-            min_value=50,
-            max_value=100,
-            step=5,
-            key="main_slide_width_percent",
-            label_visibility="collapsed",
-        )
+        with scale_column:
+            minus, percent, plus, fit = st.columns(
+                [0.2, 0.28, 0.2, 0.32],
+                gap="small",
+                vertical_alignment="center",
+            )
+            with minus:
+                st.button(
+                    "−",
+                    key="main_slide_scale_down",
+                    help="Reduce slide size",
+                    disabled=scale <= 50,
+                    on_click=_adjust_slide_width,
+                    args=(-5,),
+                )
+            with percent:
+                st.markdown(
+                    f'<div class="as-slide-scale-value">{scale}%</div>',
+                    unsafe_allow_html=True,
+                )
+            with plus:
+                st.button(
+                    "+",
+                    key="main_slide_scale_up",
+                    help="Increase slide size",
+                    disabled=scale >= 100,
+                    on_click=_adjust_slide_width,
+                    args=(5,),
+                )
+            with fit:
+                st.button(
+                    "FIT",
+                    key="main_slide_scale_fit",
+                    help="Fit slide to the available stage",
+                    on_click=_fit_slide_width,
+                )
 
     with st.container(key="main_slide_stage"):
         _render_navigation(browser, view)
