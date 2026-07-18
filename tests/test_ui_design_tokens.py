@@ -31,6 +31,7 @@ class DesignTokenTests(unittest.TestCase):
             "--as-right-rail-width: 190px;",
             "--as-control-width: 292px;",
             "--as-topbar-height: 52px;",
+            "--as-content-top-gap: 10px;",
         )
         for token in expected:
             self.assertIn(token, self.workspace_css)
@@ -114,4 +115,3 @@ class DesignTokenTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

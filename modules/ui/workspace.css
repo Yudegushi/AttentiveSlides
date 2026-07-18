@@ -8,6 +8,7 @@
   --as-right-rail-width: 190px;
   --as-control-width: 292px;
   --as-topbar-height: 52px;
+  --as-content-top-gap: 10px;
   --as-compact-status-height: 22px;
 }
 
@@ -44,7 +45,8 @@ footer {
 }
 
 [data-testid="stSidebarUserContent"] {
-  padding: calc(var(--as-topbar-height) + 12px) 12px 18px;
+  padding: calc(var(--as-topbar-height) + var(--as-content-top-gap))
+    12px 18px;
 }
 
 .st-key-main_sidebar_brand {
@@ -57,7 +59,7 @@ footer {
   height: var(--as-topbar-height);
   left: 0;
   margin: 0;
-  padding: 0 10px 0 20px;
+  padding: 4px 10px 4px 20px;
   position: fixed;
   top: 0;
   width: var(--as-left-rail-width);
@@ -584,7 +586,7 @@ textarea:focus-visible,
 
 .block-container {
   max-width: none;
-  padding: calc(var(--as-topbar-height) + 16px)
+  padding: calc(var(--as-topbar-height) + var(--as-content-top-gap))
     calc(var(--as-right-rail-width) + 16px) 24px 16px;
 }
 
@@ -739,15 +741,19 @@ body:has(.st-key-main_sidebar_reopen) .st-key-main_topbar {
   display: none;
 }
 
-.st-key-main_topbar button {
+.st-key-main_topbar button,
+.st-key-main_reset_turn_button button {
   font-family: var(--as-font-ui);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.05em;
-  min-height: 32px;
-  padding: 4px 9px;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.st-key-main_topbar button {
+  min-height: 32px;
+  padding: 4px 9px;
 }
 
 .st-key-main_topbar .attentive-learner-alert-anchor {
@@ -949,13 +955,10 @@ body:has(.st-key-main_sidebar_reopen) .st-key-main_topbar {
 }
 
 .st-key-main_reset_turn_button button {
-  font-weight: 700;
   height: var(--as-compact-status-height);
-  letter-spacing: 0.05em;
   line-height: 1;
   min-height: var(--as-compact-status-height);
   padding: 0 7px;
-  text-transform: uppercase;
 }
 
 .as-empty-output {

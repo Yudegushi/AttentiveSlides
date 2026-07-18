@@ -545,6 +545,16 @@ def _render_sidebar_brand() -> None:
             )
 
 
+def _render_sidebar_deck_identity() -> None:
+    """Render the stable product-level deck identity in the settings rail."""
+    st.sidebar.markdown(
+        '<section class="as-rail-lesson">'
+        '<h2 class="as-rail-title">AttentiveSlides Deck</h2>'
+        "</section>",
+        unsafe_allow_html=True,
+    )
+
+
 def _render_left_rail_reopen() -> None:
     """Render the settings reopen action inside the fixed top bar."""
     with st.container(key="main_sidebar_reopen"):
@@ -662,8 +672,12 @@ def main() -> None:
         return
 
     mutations_enabled = _study_mutations_enabled(live_resources)
-    _render_upload_controls(workspace, disabled=not mutations_enabled)
     _render_header(view, resources=live_resources)
+    _render_sidebar_deck_identity()
+    _render_upload_controls(
+        workspace,
+        disabled=not mutations_enabled,
+    )
     _render_live_controls(
         live_resources,
         view=view,
@@ -1369,17 +1383,7 @@ def _render_live_controls(
     """Render the compact Study settings rail and reconcile media."""
     lifecycle = resources.study_review.lifecycle()
     mutations_enabled = lifecycle.status in {"idle", "active"}
-    if _has_uploaded_deck():
-        lesson_identity = (
-            f'<span class="as-eyebrow">LESSON / {view.active_slide_index + 1:02d}</span>'
-            f'<h2 class="as-rail-title">{html.escape(view.deck_title)}</h2>'
-        )
-    else:
-        lesson_identity = '<h2 class="as-rail-title">AttentiveSlides Deck</h2>'
     st.sidebar.markdown(
-        '<section class="as-rail-lesson">'
-        f"{lesson_identity}"
-        "</section>"
         '<div class="as-sidebar-rule"></div>'
         '<div class="as-eyebrow">RUNTIME CONFIGURATION</div>',
         unsafe_allow_html=True,

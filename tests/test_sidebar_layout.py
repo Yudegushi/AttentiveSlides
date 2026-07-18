@@ -353,6 +353,28 @@ class TestSidebarLayout(
         self.assertIn('"Advanced voice settings"', source)
         self.assertNotIn("live_mode", source)
 
+    def test_deck_identity_precedes_upload_and_runtime_controls(self) -> None:
+        functions = {
+            node.name: ast.get_source_segment(self.app_source, node) or ""
+            for node in self.tree.body
+            if isinstance(node, ast.FunctionDef)
+        }
+        main = functions["main"]
+        identity = functions["_render_sidebar_deck_identity"]
+        controls = functions["_render_live_controls"]
+
+        self.assertLess(
+            main.index("_render_sidebar_deck_identity"),
+            main.index("_render_upload_controls"),
+        )
+        self.assertLess(
+            main.index("_render_upload_controls"),
+            main.index("_render_live_controls"),
+        )
+        self.assertIn("AttentiveSlides Deck", identity)
+        self.assertNotIn("LESSON /", controls)
+        self.assertNotIn("view.deck_title", controls.split("RUNTIME CONFIGURATION", 1)[0])
+
 
 if __name__ == "__main__":
     unittest.main()

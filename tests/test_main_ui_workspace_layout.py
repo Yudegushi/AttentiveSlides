@@ -153,6 +153,37 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
         ):
             self.assertIn(token, self.css)
 
+    def test_sidebar_identity_order_and_compact_typography_are_stable(self) -> None:
+        main = self.functions["main"]
+        identity = self.functions["_render_sidebar_deck_identity"]
+        controls = self.functions["_render_live_controls"]
+
+        self.assertLess(
+            main.index("_render_sidebar_deck_identity"),
+            main.index("_render_upload_controls"),
+        )
+        self.assertLess(
+            main.index("_render_upload_controls"),
+            main.index("_render_live_controls"),
+        )
+        self.assertIn("AttentiveSlides Deck", identity)
+        self.assertNotIn("LESSON /", controls)
+        self.assertNotIn("lesson_identity", controls)
+        self.assertIn("--as-content-top-gap: 10px", self.css)
+        self.assertIn(
+            ".st-key-main_topbar button,\n"
+            ".st-key-main_reset_turn_button button",
+            self.css,
+        )
+        self.assertIn("font-size: 10px", self.css)
+        self.assertIn("font-weight: 700", self.css)
+        self.assertIn("letter-spacing: 0.05em", self.css)
+        self.assertIn("--as-compact-status-height: 22px", self.css)
+        self.assertIn(
+            "min-height: var(--as-compact-status-height)",
+            self.css,
+        )
+
     def test_main_has_compact_two_column_shell_and_lower_answer(self) -> None:
         main = self.functions["main"]
         self.assertIn("st.container(key='main_study_shell')", main)
