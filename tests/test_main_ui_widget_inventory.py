@@ -234,7 +234,6 @@ class TestMainUIWidgetInventory(
             "main_review_download_json",
             "main_review_palette_control",
             "main_learner_state_popover",
-            "main_learner_state_reminder_slot",
             "main_dismiss_distraction",
         }
 

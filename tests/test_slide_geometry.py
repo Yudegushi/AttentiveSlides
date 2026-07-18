@@ -163,7 +163,7 @@ class SlideViewportComponentContractTest(unittest.TestCase):
     def test_static_component_uses_parent_viewport_protocol(self):
         component = self.component_source()
 
-        self.assertIn("margin-inline: 0 auto", component)
+        self.assertIn("margin-inline: auto", component)
         self.assertIn("display_width_percent", component)
         self.assertIn("slide.style.width", component)
         self.assertIn("image.getBoundingClientRect()", component)

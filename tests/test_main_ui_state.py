@@ -246,6 +246,7 @@ class TestMainUIState(unittest.TestCase):
                 "main_speech_mode": "push_to_talk",
                 "main_answer_audio_enabled": True,
                 "main_ui_palette": "ivory-study-desk",
+                "main_left_rail_expanded": True,
                 "main_slide_rail_expanded": True,
                 "main_voice_status_message": None,
                 "main_live_proposal": None,

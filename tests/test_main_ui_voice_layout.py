@@ -152,7 +152,7 @@ class MainUIVoiceLayoutTests(unittest.TestCase):
         self.assertIn("Attention and voice controls", unified)
         self.assertIn("as-panel-index", unified)
         self.assertIn("CONTROL", unified)
-        self.assertIn("as-status-badge", unified)
+        self.assertNotIn("as-status-badge", unified)
         self.assertEqual(unified.count("as-voice-state"), 1)
         self.assertIn("Target source", target)
         self.assertIn("Quick prompts", intent)
