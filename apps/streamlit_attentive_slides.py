@@ -661,7 +661,11 @@ def main() -> None:
         live_resources,
     )
 
-    _render_slide_selector(browser, disabled=not mutations_enabled)
+    _render_slide_selector(
+        browser,
+        active_slide=view.active_slide,
+        disabled=not mutations_enabled,
+    )
     with st.container(key="main_study_shell"):
         slide_column, interaction_column = st.columns(
             [1.0, 0.33],
@@ -1824,7 +1828,11 @@ def _render_review_workspace(
         st.session_state["main_active_slide_id"] = review_slide_ids[0]
         st.rerun()
 
-    _render_slide_selector(browser, slide_ids=review_slide_ids)
+    _render_slide_selector(
+        browser,
+        active_slide=view.active_slide,
+        slide_ids=review_slide_ids,
+    )
     detail = review_view.slide_details[view.active_slide_id]
     gaze_by_id = {
         slide.slide_id: slide
@@ -2567,10 +2575,11 @@ def _set_slide_rail_expanded(expanded: bool) -> None:
 def _render_slide_selector(
     browser: Any,
     *,
+    active_slide: MainUISlide,
     slide_ids: Sequence[int] | None = None,
     disabled: bool = False,
 ) -> None:
-    """Render the fixed, independently scrolling 02-style deck rail."""
+    """Render the fixed, independently scrolling 02-style slides rail."""
     slide_ids = list(browser.slide_ids if slide_ids is None else slide_ids)
     if not slide_ids:
         return
@@ -2633,10 +2642,11 @@ def _render_slide_selector(
                     border=True,
                     key=f"main_slide_thumb_{slide_id}",
                 ):
-                    try:
-                        preview_slide = browser.get_slide(slide_id)
-                    except Exception:
-                        preview_slide = None
+                    preview_slide = (
+                        active_slide
+                        if slide_id == active_slide_id
+                        else None
+                    )
 
                     if (
                         preview_slide is not None

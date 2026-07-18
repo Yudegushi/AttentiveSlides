@@ -187,26 +187,22 @@ class TestCompactMainLayout(
         workspace = self.source_of("_render_slide_workspace")
         self.assertLess(
             workspace.index('with st.popover(\n                "Learner State"'),
-            workspace.index("_render_learner_state_alert_periodic"),
-        )
-        self.assertIn('key="main_learner_state_reminder_slot"', workspace)
-        self.assertLess(
-            workspace.index('key="main_learner_state_reminder_slot"'),
             workspace.index('key="main_slide_scale_down"'),
         )
+        self.assertIn("_render_learner_state_contents_periodic", workspace)
 
     def test_built_in_missing_image_uses_centered_16_by_9_placeholder(self) -> None:
         workspace = self.source_of("_render_slide_workspace")
         placeholder = self.source_of("_render_builtin_slide_placeholder")
-        self.assertIn('view.deck_id == "mock_deck"', workspace)
+        self.assertIn('view.deck_id == "attentiveslides_deck"', workspace)
         self.assertIn("not view.active_slide.image_available", workspace)
         self.assertLess(
             workspace.index("_render_builtin_slide_placeholder()"),
             workspace.index("render_slide_viewport("),
         )
-        width_helper = self.source_of("_left_aligned_slide_width")
+        width_helper = self.source_of("_centered_slide_width")
         self.assertIn('st.session_state["main_slide_width_percent"]', width_helper)
-        self.assertIn("[width_percent, 100 - width_percent]", width_helper)
+        self.assertIn("[gutter, width_percent, gutter]", width_helper)
         self.assertIn("attentive-built-in-stage", placeholder)
         self.assertIn("AttentiveSlides", placeholder)
         self.assertIn(

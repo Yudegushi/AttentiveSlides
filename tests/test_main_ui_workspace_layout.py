@@ -97,8 +97,8 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
         header = self.functions["_render_header"]
         brand = self.functions["_render_sidebar_brand"]
         self.assertNotIn("st.popover", selector)
-        self.assertIn("DECK INDEX", selector)
-        self.assertIn("DECK /", selector)
+        self.assertIn("SLIDES INDEX", selector)
+        self.assertIn("SLIDES /", selector)
         self.assertIn("main_slide_rail_collapse_button", selector)
         self.assertIn("main_slide_rail_expand_button", selector)
         self.assertIn("STUDY / WORKSPACE", header)

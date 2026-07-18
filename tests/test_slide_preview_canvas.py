@@ -73,8 +73,14 @@ class TestSlidePreviewCanvas(unittest.TestCase):
         self.assertIn("main_slide_rail_collapse_button", selector)
         self.assertIn("main_slide_rail_expand_button", selector)
         self.assertIn("Collapse slide deck", selector)
-        self.assertIn("DECK INDEX", selector)
-        self.assertIn("DECK /", selector)
+        self.assertIn("SLIDES INDEX", selector)
+        self.assertIn("SLIDES /", selector)
+
+    def test_selector_reuses_only_the_already_prepared_active_slide(self) -> None:
+        selector = ast.unparse(self.functions["_render_slide_selector"])
+        self.assertIn("active_slide", selector)
+        self.assertNotIn("browser.get_slide", selector)
+        self.assertIn("slide_id == active_slide_id", selector)
 
     def test_slide_scale_is_one_compact_toolbar_not_a_slider(self) -> None:
         rendered = ast.unparse(self.functions["_render_slide_workspace"])
