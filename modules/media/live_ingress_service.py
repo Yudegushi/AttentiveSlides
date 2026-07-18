@@ -79,6 +79,38 @@ class LiveIngressService:
             else:
                 self.ingress.disarm(reason="master switch off")
 
+    def quiesce(self, reason: str) -> None:
+        """Synchronously close voice/media gates and stop live work."""
+        checked_reason = str(reason).strip() or "live service quiesced"
+        if self.voice_transport is not None:
+            self.voice_transport.set_suspended(True, checked_reason)
+        self.set_master_enabled(False)
+        stop_error: Exception | None = None
+        try:
+            self._stop_voice_from_sync(checked_reason)
+        except Exception as exc:
+            stop_error = exc
+        finally:
+            self._reconcile_core()
+        if stop_error is not None:
+            raise RuntimeError(
+                f"Unable to stop voice while quiescing: {stop_error}"
+            ) from stop_error
+
+    def resume_from_quiesce(self, *, master_enabled: bool) -> None:
+        """Reopen the command gate, then restore the explicit media preference."""
+        try:
+            if self.voice_transport is not None:
+                self.voice_transport.set_suspended(False, "study resumed")
+            self.set_master_enabled(bool(master_enabled))
+            self._reconcile_core()
+        except Exception as exc:
+            if self.voice_transport is not None:
+                self.voice_transport.set_suspended(True, "resume failed")
+            self.set_master_enabled(False)
+            self._reconcile_core()
+            raise RuntimeError(f"Unable to resume live service: {exc}") from exc
+
     def reconcile_once(self) -> None:
         reason = self._voice_stop_reason()
         if reason is not None:
@@ -169,9 +201,8 @@ class LiveIngressService:
                 raise RuntimeError(f"live media ingress health returned {response.status}")
 
     def shutdown(self) -> None:
-        self.set_master_enabled(False)
-        self.reconcile_once()
-        self._stop_voice_from_sync("service shutdown")
+        with suppress(RuntimeError):
+            self.quiesce("service shutdown")
         with self._lock:
             loop = self._server_loop
             thread = self._server_thread

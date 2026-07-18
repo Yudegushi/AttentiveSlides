@@ -617,10 +617,12 @@ def main() -> None:
     _render_sidebar_status(
         browser,
         view,
+        live_resources,
     )
-    _render_upload_controls(workspace)
+    mutations_enabled = _study_mutations_enabled(live_resources)
+    _render_upload_controls(workspace, disabled=not mutations_enabled)
 
-    _render_slide_selector(browser)
+    _render_slide_selector(browser, disabled=not mutations_enabled)
     with st.container(key="main_study_shell"):
         slide_column, interaction_column = st.columns(
             [1.0, 0.33],
@@ -1000,8 +1002,30 @@ def _on_interaction_flow_change() -> None:
     _on_voice_engine_change()
 
 
-def _media_runtime_requested() -> bool:
-    return bool(st.session_state.get("main_live_master_enabled", False))
+def _study_mutations_enabled(resources: MainLiveResources) -> bool:
+    return resources.study_review.lifecycle().status in {"idle", "active"}
+
+
+def _media_runtime_requested(resources: MainLiveResources) -> bool:
+    return bool(
+        _study_mutations_enabled(resources)
+        and st.session_state.get("main_live_master_enabled", False)
+    )
+
+
+def _lifecycle_token(resources: MainLiveResources) -> tuple[str | None, int]:
+    lifecycle = resources.study_review.lifecycle()
+    return lifecycle.session_id, lifecycle.revision
+
+
+def _lifecycle_token_matches(
+    resources: MainLiveResources,
+    token: tuple[str | None, int] | list[object] | None,
+) -> bool:
+    if token is None or len(token) != 2:
+        return False
+    current = _lifecycle_token(resources)
+    return current == (token[0], int(token[1]))
 
 
 def _on_voice_engine_change() -> None:
@@ -1116,6 +1140,20 @@ def _bind_main_live_resources(
 
 
 def _finish_study_review(resources: MainLiveResources, deck_id: str) -> None:
+    lifecycle = resources.study_review.lifecycle()
+    if lifecycle.status == "active":
+        resources.study_review.pause()
+    if resources.study_review.lifecycle().status not in {
+        "paused",
+        "finish_pending",
+    }:
+        return
+    _clear_incomplete_study_work(resources)
+    try:
+        resources.service.quiesce("study finished")
+    except RuntimeError as exc:
+        st.session_state["main_review_error"] = f"Unable to stop live input: {exc}"
+        return
     try:
         review = resources.study_review.finish(deck_id=deck_id)
     except (OSError, RuntimeError) as exc:
@@ -1123,17 +1161,21 @@ def _finish_study_review(resources: MainLiveResources, deck_id: str) -> None:
         return
     st.session_state["main_workspace_mode"] = "review"
     st.session_state["main_review_error"] = None
-    st.session_state["main_study_started_monotonic"] = None
     st.session_state["main_review_session"] = review.session_id
     if review.gaze_review.slides:
         st.session_state["main_active_slide_id"] = review.gaze_review.slides[0].slide_id
 
 
 def _open_latest_review(resources: MainLiveResources) -> None:
-    if resources.study_review.lifecycle().status in {"active", "finish_pending"}:
+    if resources.study_review.lifecycle().status != "idle":
         st.session_state["main_review_error"] = (
             "Finish the active Study before opening a saved review."
         )
+        return
+    try:
+        resources.service.quiesce("saved review opened")
+    except RuntimeError as exc:
+        st.session_state["main_review_error"] = f"Unable to open review safely: {exc}"
         return
     review = resources.study_review.latest()
     if review is None:
@@ -1150,8 +1192,75 @@ def _open_latest_review(resources: MainLiveResources) -> None:
         st.session_state["main_active_slide_id"] = review.gaze_review.slides[0].slide_id
 
 
-def _back_to_study_workspace() -> None:
+def _back_to_study_workspace(resources: MainLiveResources) -> None:
+    try:
+        resources.service.resume_from_quiesce(
+            master_enabled=bool(
+                st.session_state.get("main_live_master_enabled", False)
+            )
+        )
+    except RuntimeError as exc:
+        st.session_state["main_review_error"] = f"Unable to resume Study: {exc}"
+        return
     st.session_state["main_workspace_mode"] = "study"
+    st.session_state["main_review_error"] = None
+
+
+def _clear_incomplete_study_work(resources: MainLiveResources) -> None:
+    preserved = {
+        key: st.session_state.get(key)
+        for key in (
+            "main_tutor_result",
+            "main_tutor_context",
+            "main_xai_result",
+            "main_last_generated_interaction_id",
+            "main_tutor_result_token",
+        )
+    }
+    reset_main_live_turn_state(st.session_state)
+    st.session_state.update(preserved)
+    st.session_state["main_live_full_rerun_requested"] = False
+    resources.inbox.clear()
+    resources.snapshots.clear()
+
+
+def _pause_study_review(resources: MainLiveResources) -> None:
+    if resources.study_review.lifecycle().status != "active":
+        return
+    resources.study_review.pause()
+    _clear_incomplete_study_work(resources)
+    try:
+        resources.service.quiesce("study paused")
+    except RuntimeError as exc:
+        st.session_state["main_review_error"] = f"Live input remains paused: {exc}"
+        return
+    st.session_state["main_review_error"] = None
+
+
+def _resume_study_review(
+    resources: MainLiveResources,
+    view: MainUIViewModel,
+) -> None:
+    if resources.study_review.lifecycle().status != "paused":
+        return
+    try:
+        resources.service.resume_from_quiesce(
+            master_enabled=bool(
+                st.session_state.get("main_live_master_enabled", False)
+            )
+        )
+    except RuntimeError as exc:
+        st.session_state["main_review_error"] = f"Unable to resume live input: {exc}"
+        return
+    resources.study_review.resume()
+    resources.study_review.set_context(view.deck_id, view.active_slide_id)
+    resources.study_review.register_slide(
+        view.deck_id,
+        view.active_slide_id,
+        view.active_slide.aois,
+    )
+    _sync_main_live_voice_resources(resources, view)
+    st.session_state["main_review_error"] = None
 
 
 def _start_study_review(resources: MainLiveResources, deck_id: str) -> None:
@@ -1166,7 +1275,6 @@ def _start_study_review(resources: MainLiveResources, deck_id: str) -> None:
     st.session_state["main_review_show_heatmap"] = True
     st.session_state["main_review_delete_confirm"] = False
     st.session_state["main_review_error"] = None
-    st.session_state["main_study_started_monotonic"] = time.monotonic()
 
 
 def _delete_selected_study_review(resources: MainLiveResources) -> None:
@@ -1203,6 +1311,8 @@ def _render_live_controls(
     view: MainUIViewModel,
 ) -> None:
     """Render the compact Study settings rail and reconcile media."""
+    lifecycle = resources.study_review.lifecycle()
+    mutations_enabled = lifecycle.status in {"idle", "active"}
     st.sidebar.markdown(
         '<section class="as-rail-lesson">'
         f'<span class="as-eyebrow">LESSON / {view.active_slide_index + 1:02d}</span>'
@@ -1228,6 +1338,7 @@ def _render_live_controls(
         }[value],
         key="main_interaction_flow",
         on_change=_on_interaction_flow_change,
+        disabled=not mutations_enabled,
         label_visibility="collapsed",
         width="stretch",
     )
@@ -1244,6 +1355,7 @@ def _render_live_controls(
         ),
         key="main_speech_mode",
         on_change=_on_live_preference_change,
+        disabled=not mutations_enabled,
         label_visibility="collapsed",
         width="stretch",
     )
@@ -1256,6 +1368,7 @@ def _render_live_controls(
         "Enable camera and microphone",
         key="main_live_master_enabled",
         on_change=_on_live_preference_change,
+        disabled=not mutations_enabled,
         help=(
             "Media remains local to the runtime; only confirmed text may be "
             "sent to the cloud tutor. Typed input remains available when off."
@@ -1265,14 +1378,15 @@ def _render_live_controls(
         "Show attention regions",
         key="main_show_aoi_overlay",
         on_change=_on_overlay_change,
+        disabled=not mutations_enabled,
     )
     st.sidebar.checkbox(
         "Answer audio",
         key="main_answer_audio_enabled",
         on_change=_on_live_preference_change,
+        disabled=not mutations_enabled,
     )
 
-    lifecycle = resources.study_review.lifecycle()
     st.sidebar.markdown(
         '<div class="as-field-label">Palette</div>',
         unsafe_allow_html=True,
@@ -1282,7 +1396,7 @@ def _render_live_controls(
         palette_value = render_palette_control(
             selected=selected_palette,
             palette_tokens=palette_semantic(selected_palette),
-            locked=lifecycle.status in {"active", "finish_pending"},
+            locked=lifecycle.status in {"active", "paused", "finish_pending"},
             key="main_palette_control",
         )
     if (
@@ -1293,13 +1407,12 @@ def _render_live_controls(
         st.session_state["main_ui_palette"] = normalize_palette_id(palette_value)
         st.rerun()
 
-    enabled = _media_runtime_requested()
-    if enabled and resources.ingress_start_allowed:
-        resources.service.ensure_started()
-    resources.service.set_master_enabled(enabled)
-    resources.service.reconcile_once()
-    if not enabled and resources.service.server_thread is not None:
-        resources.service.shutdown()
+    enabled = _media_runtime_requested(resources)
+    if mutations_enabled:
+        if enabled and resources.ingress_start_allowed:
+            resources.service.ensure_started()
+        resources.service.set_master_enabled(enabled)
+        resources.service.reconcile_once()
 
     runtime_state = resources.runtime.controller.state.value
     session = resources.ingress.session_snapshot()
@@ -1331,6 +1444,7 @@ def _render_live_controls(
             ],
             key="main_confirmation_policy",
             on_change=_on_live_preference_change,
+            disabled=not mutations_enabled,
         )
         if (
             st.session_state["main_confirmation_policy"]
@@ -1343,6 +1457,7 @@ def _render_live_controls(
                 step=0.01,
                 key="main_auto_confirm_threshold",
                 on_change=_on_live_preference_change,
+                disabled=not mutations_enabled,
             )
 
     deck_id = resources.bound_deck_id
@@ -1369,7 +1484,7 @@ def _render_live_controls(
             ),
             key="main_open_latest_review",
             width="stretch",
-            disabled=lifecycle.status in {"active", "finish_pending"},
+            disabled=lifecycle.status != "idle",
             on_click=_open_latest_review,
             args=(resources,),
         )
@@ -1378,7 +1493,7 @@ def _render_live_controls(
     if st.session_state.get("main_voice_status_message"):
         st.sidebar.warning(st.session_state["main_voice_status_message"])
 
-    if enabled:
+    if enabled and mutations_enabled:
         with st.sidebar.expander(
             "Camera and microphone preview",
             expanded=False,
@@ -1399,9 +1514,7 @@ def _format_review_session_option(review: Any | None) -> str:
         "%Y-%m-%d %H:%M",
         time.localtime(review.ended_at_epoch),
     )
-    duration = _format_review_duration(
-        review.ended_at_epoch - review.started_at_epoch
-    )
+    duration = _format_review_duration(review.active_seconds)
     return f"{completed} · {review.deck_id} · {duration}"
 
 
@@ -1435,7 +1548,7 @@ def _review_session_caption(review: Any) -> str:
         else f"{summary.top_emotion} {summary.top_emotion_probability:.0%}"
     )
     return (
-        f"Study {_format_review_duration(review.ended_at_epoch - review.started_at_epoch)} · "
+        f"Study {_format_review_duration(review.active_seconds)} · "
         f"{summary.interaction_count if learner_available else UNAVAILABLE} interactions · "
         f"Engaged {engagement} · "
         f"Top emotion {emotion} · Fatigue {fatigue}"
@@ -1444,12 +1557,6 @@ def _review_session_caption(review: Any) -> str:
 
 def _render_review_sidebar(resources: MainLiveResources) -> None:
     st.sidebar.markdown("### Study review")
-    st.sidebar.button(
-        "Back to Study Workspace",
-        key="main_review_back",
-        width="stretch",
-        on_click=_back_to_study_workspace,
-    )
     sessions = resources.study_review.list_sessions()
     session_ids = tuple(review.session_id for review in sessions)
     selected_id = st.session_state.get("main_review_session")
@@ -1488,7 +1595,7 @@ def _render_review_sidebar(resources: MainLiveResources) -> None:
         palette_value = render_palette_control(
             selected=selected_palette,
             palette_tokens=palette_semantic(selected_palette),
-            locked=lifecycle.status in {"active", "finish_pending"},
+            locked=lifecycle.status in {"active", "paused", "finish_pending"},
             key="main_review_palette_control",
         )
     if (
@@ -1799,6 +1906,8 @@ def _activate_manual_region() -> None:
 
 def _render_upload_controls(
     workspace: UploadedDeckWorkspace,
+    *,
+    disabled: bool = False,
 ) -> None:
     panel = st.sidebar.expander("DECK", expanded=False)
 
@@ -1807,6 +1916,7 @@ def _render_upload_controls(
             "Upload a PDF slide deck",
             type=["pdf"],
             key="main_pdf_upload",
+            disabled=disabled,
             help=(
                 "The PDF is stored in the "
                 "project runtime directory, "
@@ -1836,7 +1946,7 @@ def _render_upload_controls(
     else:
         load_clicked = panel.button(
             "Load PDF",
-            disabled=uploaded_file is None,
+            disabled=disabled or uploaded_file is None,
             width="stretch",
             key="main_load_pdf_button",
         )
@@ -2127,9 +2237,11 @@ def _ensure_deck_state(
 def _render_sidebar_status(
     browser: Any,
     view: MainUIViewModel,
+    resources: MainLiveResources,
 ) -> None:
     """Keep secondary runtime and privacy details behind one disclosure."""
-    live_enabled = _media_runtime_requested()
+    live_enabled = _media_runtime_requested(resources)
+    mutations_enabled = _study_mutations_enabled(resources)
     st.session_state["main_history_max_items"] = 4
     cloud_api_configured = bool(os.environ.get("DASHSCOPE_API_KEY"))
     if not st.session_state["main_cloud_text_allowed"]:
@@ -2162,6 +2274,7 @@ def _render_sidebar_status(
                 "history may be transmitted."
             ),
             on_change=_on_cloud_permission_change,
+            disabled=not mutations_enabled,
         )
         st.markdown(
             '<div class="as-field-label">Context</div>',
@@ -2306,6 +2419,7 @@ def _render_slide_selector(
     browser: Any,
     *,
     slide_ids: Sequence[int] | None = None,
+    disabled: bool = False,
 ) -> None:
     """Render the fixed, independently scrolling 02-style deck rail."""
     slide_ids = list(browser.slide_ids if slide_ids is None else slide_ids)
@@ -2396,6 +2510,7 @@ def _render_slide_selector(
 
                     st.button(
                         f"Slide {slide_id}",
+                        disabled=disabled,
                         key=f"main_slide_preview_{slide_id}",
                         type=(
                             "primary" if slide_id == active_slide_id else "secondary"
@@ -2554,8 +2669,31 @@ def _render_unified_answer(
     if realtime_answer:
         st.markdown(realtime_answer)
     else:
-        _render_tutor_result(resources.single_turn_tts)
+        _render_tutor_result(resources)
     _render_xai_drawer()
+
+
+@st.fragment(run_every=1.0)
+def _render_topbar_lifecycle_status(
+    resources: MainLiveResources,
+    *,
+    review: bool,
+) -> None:
+    lifecycle = resources.study_review.lifecycle()
+    status_label = (
+        "COMPLETED"
+        if review
+        else lifecycle.status.replace("_", " ").upper()
+    )
+    elapsed = _format_review_duration(lifecycle.active_seconds)
+    status_class = " is-paused" if lifecycle.status == "paused" else ""
+    st.markdown(
+        f'<div class="as-topbar-status{status_class}">'
+        '<span class="as-status-dot" aria-hidden="true"></span>'
+        f"{status_label} {elapsed}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def _render_header(
@@ -2585,30 +2723,35 @@ def _render_header(
                 unsafe_allow_html=True,
             )
         with status:
-            started = st.session_state.get("main_study_started_monotonic")
-            elapsed = (
-                _format_review_duration(time.monotonic() - float(started))
-                if lifecycle.status == "active" and started is not None
-                else "00:00"
-            )
-            status_label = (
-                "COMPLETED"
-                if review
-                else lifecycle.status.replace("_", " ").upper()
-            )
-            st.markdown(
-                '<div class="as-topbar-status">'
-                '<span class="as-status-dot" aria-hidden="true"></span>'
-                f"{status_label} {elapsed}"
-                "</div>",
-                unsafe_allow_html=True,
-            )
+            _render_topbar_lifecycle_status(resources, review=review)
         with pause_slot:
-            # Pause/Resume is wired only after the lifecycle supports it.
-            st.empty()
+            if not review and lifecycle.status == "active":
+                st.button(
+                    "PAUSE",
+                    key="main_pause_study",
+                    width="stretch",
+                    on_click=_pause_study_review,
+                    args=(resources,),
+                )
+            elif not review and lifecycle.status == "paused":
+                st.button(
+                    "RESUME",
+                    key="main_resume_study",
+                    width="stretch",
+                    on_click=_resume_study_review,
+                    args=(resources, view),
+                )
+            else:
+                st.empty()
         with action:
             if review:
-                st.empty()
+                st.button(
+                    "BACK TO STUDY",
+                    key="main_review_back",
+                    width="stretch",
+                    on_click=_back_to_study_workspace,
+                    args=(resources,),
+                )
             elif lifecycle.status == "idle":
                 st.button(
                     "START STUDY",
@@ -2620,10 +2763,16 @@ def _render_header(
                 )
             else:
                 st.button(
-                    "END & REVIEW",
+                    (
+                        "RETRY REVIEW"
+                        if lifecycle.status == "finish_pending"
+                        else "END & REVIEW"
+                    ),
                     key="main_end_study_review",
                     type="primary",
-                    disabled=lifecycle.status not in {"active", "finish_pending"},
+                    disabled=lifecycle.status not in {
+                        "active", "paused", "finish_pending"
+                    },
                     width="stretch",
                     on_click=_finish_study_review,
                     args=(resources, lifecycle.deck_id or ""),
@@ -2631,7 +2780,7 @@ def _render_header(
 
 
 def _learner_state_view(resources: MainLiveResources):
-    live_enabled = _media_runtime_requested()
+    live_enabled = _media_runtime_requested(resources)
     deck_id = resources.bound_deck_id or ""
     slide_id = resources.bound_slide_id or 1
     snapshot = resources.learner_state_store.snapshot()
@@ -2676,6 +2825,7 @@ def _render_learner_state_contents_periodic(
             "Dismiss distraction reminder",
             key="main_dismiss_distraction",
             width="stretch",
+            disabled=not _study_mutations_enabled(resources),
             on_click=resources.learner_state_worker.dismiss_distraction,
         )
 
@@ -2703,6 +2853,7 @@ def _render_navigation(
     view: MainUIViewModel,
     *,
     slide_ids: Sequence[int] | None = None,
+    disabled: bool = False,
 ) -> None:
     if slide_ids is None:
         previous_id = (
@@ -2727,7 +2878,7 @@ def _render_navigation(
 
     st.button(
         "❮",
-        disabled=previous_id is None,
+        disabled=disabled or previous_id is None,
         key="main_previous_slide_button",
         help="Previous slide",
         on_click=_navigate_to_slide,
@@ -2736,7 +2887,7 @@ def _render_navigation(
 
     st.button(
         "❯",
-        disabled=next_id is None,
+        disabled=disabled or next_id is None,
         key="main_next_slide_button",
         help="Next slide",
         on_click=_navigate_to_slide,
@@ -2887,6 +3038,8 @@ def _on_target_scope_change() -> None:
 def _render_current_slide_llm_aoi_action(
     view: MainUIViewModel,
     workspace: UploadedDeckWorkspace,
+    *,
+    disabled: bool = False,
 ) -> None:
     if (
         not st.session_state.get("main_uploaded_deck_id")
@@ -2924,7 +3077,7 @@ def _render_current_slide_llm_aoi_action(
     clicked = st.button(
         label,
         key="main_process_current_llm_aoi",
-        disabled=not configured,
+        disabled=disabled or not configured,
     )
     if not configured:
         st.caption("LLM AOI is not configured")
@@ -2978,7 +3131,8 @@ def _render_slide_workspace(
     workspace: UploadedDeckWorkspace,
     live_resources: MainLiveResources,
 ) -> None:
-    drawing_enabled = (
+    mutations_enabled = _study_mutations_enabled(live_resources)
+    drawing_enabled = mutations_enabled and (
         st.session_state["main_target_scope"]
         == "Manual region"
     )
@@ -2999,7 +3153,11 @@ def _render_slide_workspace(
             )
         with tools_column:
             with st.popover("Slide tools", key="main_slide_tools_popover"):
-                _render_current_slide_llm_aoi_action(view, workspace)
+                _render_current_slide_llm_aoi_action(
+                    view,
+                    workspace,
+                    disabled=not mutations_enabled,
+                )
         with status_column:
             with st.popover(
                 "Learner State",
@@ -3047,7 +3205,7 @@ def _render_slide_workspace(
                 )
 
     with st.container(key="main_slide_stage"):
-        _render_navigation(browser, view)
+        _render_navigation(browser, view, disabled=not mutations_enabled)
         if view.deck_id == "mock_deck" and not view.active_slide.image_available:
             _render_builtin_slide_placeholder()
             return
@@ -3818,8 +3976,11 @@ def _record_completed_turn(
     resources: MainLiveResources,
     tutor_payload: dict[str, Any],
     llm_xai_payload: dict[str, Any],
+    lifecycle_token: tuple[str | None, int],
 ) -> None:
     """Upsert one successful, sanitized tutoring turn."""
+    if not _lifecycle_token_matches(resources, lifecycle_token):
+        return
     confirmed = st.session_state.get(
         "main_confirmed_interaction"
     )
@@ -3884,8 +4045,13 @@ def _record_completed_turn(
     )
 
 
-def _log_completed_interaction_once() -> None:
+def _log_completed_interaction_once(
+    resources: MainLiveResources,
+    lifecycle_token: tuple[str | None, int],
+) -> None:
     """Write one sanitized JSONL record after successful generation."""
+    if not _lifecycle_token_matches(resources, lifecycle_token):
+        return
     confirmed = st.session_state.get("main_confirmed_interaction") or {}
     interaction = confirmed.get("interaction", {})
     interaction_id = str(interaction.get("interaction_id", ""))
@@ -3915,6 +4081,8 @@ def _log_completed_interaction_once() -> None:
 def _render_conversation_history(
     view: MainUIViewModel,
     tts_controller: SingleTurnTTSController,
+    *,
+    mutations_enabled: bool = True,
 ) -> None:
     """Render sanitized session-level tutoring history."""
     turns = st.session_state[
@@ -3957,7 +4125,7 @@ def _render_conversation_history(
     control_columns[0].button(
         "Clear conversation",
         width="stretch",
-        disabled=not turns,
+        disabled=not turns or not mutations_enabled,
         key="main_clear_conversation_button",
         on_click=_clear_conversation,
         args=(tts_controller,),
@@ -4134,6 +4302,18 @@ def _generate_confirmed_turn(
     resources: MainLiveResources,
 ) -> bool:
     """Generate one confirmed turn while preserving existing backend gates."""
+    if not _study_mutations_enabled(resources):
+        return False
+    confirmed_wrapper = st.session_state.get("main_confirmed_interaction")
+    if not isinstance(confirmed_wrapper, dict):
+        return False
+    raw_token = confirmed_wrapper.get("lifecycle_token")
+    if raw_token is None:
+        raw_token = _lifecycle_token(resources)
+        confirmed_wrapper["lifecycle_token"] = raw_token
+    lifecycle_token = (raw_token[0], int(raw_token[1]))
+    if not _lifecycle_token_matches(resources, lifecycle_token):
+        return False
     interaction_id = _confirmed_interaction_id()
     api_configured = bool(os.environ.get("DASHSCOPE_API_KEY"))
     assessment = assess_tutor_generation(
@@ -4165,14 +4345,19 @@ def _generate_confirmed_turn(
             )
             payload = generation.to_session_payload()
     except Exception as exc:
+        if not _lifecycle_token_matches(resources, lifecycle_token):
+            return False
         st.session_state["main_tutor_error"] = f"{type(exc).__name__}: {exc}"
         st.session_state["main_tutor_context"] = None
         st.session_state["main_tutor_result"] = None
         st.session_state["main_xai_result"] = None
         return False
 
+    if not _lifecycle_token_matches(resources, lifecycle_token):
+        return False
     st.session_state["main_tutor_context"] = payload["context"]
     st.session_state["main_tutor_result"] = payload["tutor"]
+    st.session_state["main_tutor_result_token"] = lifecycle_token
     st.session_state["main_xai_result"] = payload["xai"]
     st.session_state["main_tutor_error"] = None
     st.session_state["main_last_generated_interaction_id"] = interaction_id
@@ -4181,6 +4366,7 @@ def _generate_confirmed_turn(
             resources=resources,
             tutor_payload=payload["tutor"],
             llm_xai_payload=payload["xai"],
+            lifecycle_token=lifecycle_token,
         )
     except Exception as exc:
         st.session_state["main_conversation_error"] = (
@@ -4188,7 +4374,7 @@ def _generate_confirmed_turn(
             f"{type(exc).__name__}: {exc}"
         )
     try:
-        _log_completed_interaction_once()
+        _log_completed_interaction_once(resources, lifecycle_token)
     except Exception as exc:
         st.session_state["main_conversation_error"] = (
             "Tutor answer succeeded, but JSONL recording failed: "
@@ -4202,6 +4388,8 @@ def _maybe_generate_confirmed_turn(
     resources: MainLiveResources,
 ) -> bool:
     """Automatically continue once per newly confirmed interaction."""
+    if not _study_mutations_enabled(resources):
+        return False
     interaction_id = _confirmed_interaction_id()
     if (
         not interaction_id
@@ -4234,6 +4422,7 @@ def _render_generation_status(
         st.button(
             "Retry",
             key="main_retry_answer_button",
+            disabled=not _study_mutations_enabled(resources),
             on_click=_retry_confirmed_turn,
         )
     elif assessment.code == "cloud_permission_required":
@@ -4248,7 +4437,7 @@ def _render_generation_status(
 
 
 def _render_tutor_result(
-    tts_controller: SingleTurnTTSController,
+    resources: MainLiveResources,
 ) -> None:
     """Render the answer, meaningful follow-up, and one metadata line."""
     result = st.session_state["main_tutor_result"]
@@ -4261,13 +4450,15 @@ def _render_tutor_result(
 
     st.markdown(result["answer"])
 
-    speech = tts_controller.synthesize_once(
+    result_token = st.session_state.get("main_tutor_result_token")
+    speech = resources.single_turn_tts.synthesize_once(
         interaction_id=str(
             st.session_state.get("main_last_generated_interaction_id") or ""
         ),
         text=str(result["answer"]),
         enabled=bool(
-            _media_runtime_requested()
+            _media_runtime_requested(resources)
+            and _lifecycle_token_matches(resources, result_token)
             and st.session_state.get("main_voice_engine") == "single_turn"
             and st.session_state["main_answer_audio_enabled"]
         ),
@@ -4294,6 +4485,7 @@ def _render_tutor_result(
     st.button(
         "FOLLOW-UP",
         key="main_start_follow_up_button",
+        disabled=not _study_mutations_enabled(resources),
         on_click=_start_follow_up,
     )
 
@@ -4752,12 +4944,18 @@ def _on_live_overlay_change() -> None:
 
 
 def _store_live_confirmation(
+    resources: MainLiveResources,
     view: MainUIViewModel,
     proposal: LiveInteractionProposal,
     *,
     selected_option: str,
     automatic: bool,
 ) -> None:
+    proposal_token = st.session_state.get("main_live_proposal_token")
+    if not _study_mutations_enabled(resources) or not _lifecycle_token_matches(
+        resources, proposal_token
+    ):
+        raise RuntimeError("The Study changed before target confirmation.")
     manual_bbox = None
     selected_aoi_id = selected_option
     if selected_option == "manual_region":
@@ -4812,6 +5010,7 @@ def _store_live_confirmation(
             selected_aoi_id != proposal.predicted_aoi_id
         ),
         "confirmed_context": confirmed_context,
+        "lifecycle_token": tuple(proposal_token),
     }
     st.session_state["main_confirmed"] = True
     st.session_state["main_confirmation_source"] = (
@@ -4829,6 +5028,11 @@ def _consume_live_proposal(
     resources: MainLiveResources,
     view: MainUIViewModel,
 ) -> None:
+    if not _study_mutations_enabled(resources):
+        return
+    voice_snapshot = resources.voice.snapshot()
+    if bool(voice_snapshot.get("suspended")):
+        return
     resources.runtime.poll()
     confirmed = (
         st.session_state.get("main_confirmed_interaction")
@@ -4845,8 +5049,11 @@ def _consume_live_proposal(
     raw = resources.inbox.pop()
     if raw is None:
         return
+    if not resources.ingress.session_snapshot().active:
+        return
     if raw.deck_id != view.deck_id or raw.slide_id != view.active_slide_id:
         return
+    proposal_token = _lifecycle_token(resources)
 
     snapshot = resources.ingress.observations.latest_geometry_for(
         view.deck_id,
@@ -4898,6 +5105,7 @@ def _consume_live_proposal(
     reset_main_turn_state(st.session_state)
     st.session_state.update(preserved_manual_state)
     st.session_state["main_live_proposal"] = proposal
+    st.session_state["main_live_proposal_token"] = proposal_token
     st.session_state["main_live_original_transcript"] = (
         proposal.original_speech_transcript
     )
@@ -4927,6 +5135,7 @@ def _consume_live_proposal(
         interaction_pending=False,
     ):
         _store_live_confirmation(
+            resources,
             view,
             proposal,
             selected_option=str(proposal.predicted_aoi_id),
@@ -4977,11 +5186,14 @@ def _render_live_target_column(
 
 def _render_voice_component(
     view: MainUIViewModel,
+    resources: MainLiveResources,
 ) -> None:
+    lifecycle = resources.study_review.lifecycle()
     render_voice_control_component(
         engine=str(st.session_state["main_voice_engine"]),
         flow=str(st.session_state["main_interaction_flow"]),
         speech_mode=str(st.session_state["main_speech_mode"]),
+        study_paused=lifecycle.status in {"paused", "finish_pending"},
         palette_tokens=palette_semantic(st.session_state["main_ui_palette"]),
         key=(
             "main_voice_control_"
@@ -5005,7 +5217,8 @@ def _current_voice_panel_view(
     }
     raw_phase = str(snapshot.get("state") or "").strip().lower()
     phase = phase_aliases.get(raw_phase, raw_phase)
-    if not _media_runtime_requested():
+    lifecycle = resources.study_review.lifecycle()
+    if not _media_runtime_requested(resources):
         phase = "typed"
     target_needs_confirmation = bool(
         proposal is not None and not st.session_state.get("main_confirmed")
@@ -5021,9 +5234,11 @@ def _current_voice_panel_view(
         phase = "confirmation"
     elif confirmed_aoi_id and phase not in {"typed"} and phase in {"", "ready", "listening"}:
         phase = "locked"
+    if lifecycle.status in {"paused", "finish_pending"}:
+        phase = "study_paused"
     error_code = (
         snapshot.get("error_code")
-        if _media_runtime_requested()
+        if _media_runtime_requested(resources)
         else None
     )
     return build_voice_panel_view(
@@ -5067,8 +5282,10 @@ def _render_unified_interaction(
         unsafe_allow_html=True,
     )
 
-    if _media_runtime_requested():
-        _render_voice_component(view)
+    if _media_runtime_requested(resources):
+        _render_voice_component(view, resources)
+    if not _study_mutations_enabled(resources):
+        return
 
     proposal = st.session_state.get("main_live_proposal")
     if not isinstance(proposal, LiveInteractionProposal):
@@ -5076,7 +5293,10 @@ def _render_unified_interaction(
     if proposal is None:
         _render_target_column(view)
         _render_intent_column(view)
-        if _maybe_generate_confirmed_turn(view, resources) and _media_runtime_requested():
+        if (
+            _maybe_generate_confirmed_turn(view, resources)
+            and _media_runtime_requested(resources)
+        ):
             st.session_state["main_live_full_rerun_requested"] = True
         return
 
@@ -5107,6 +5327,7 @@ def _render_unified_interaction(
     if confirm_clicked and selected is not None:
         try:
             _store_live_confirmation(
+                resources,
                 view,
                 proposal,
                 selected_option=selected,
@@ -5187,7 +5408,7 @@ def _render_manual_interaction(
     """Route every flow through one stable Attention & Voice panel."""
     if live_resources is None:
         return
-    if _media_runtime_requested():
+    if _media_runtime_requested(live_resources):
         _render_live_periodic(live_resources, view)
         return
     _render_unified_interaction(view, live_resources)
@@ -5199,6 +5420,7 @@ def _render_lower_workspace(
     live_resources: MainLiveResources,
 ) -> None:
     """Keep the compact Tutor Output below the slide column only."""
+    mutations_enabled = _study_mutations_enabled(live_resources)
     with st.container(key="main_tutor_answer"):
         heading, action = st.columns(
             [0.8, 0.2],
@@ -5225,6 +5447,7 @@ def _render_lower_workspace(
             st.button(
                 "RESET TURN",
                 key="main_reset_turn_button",
+                disabled=not mutations_enabled,
                 on_click=_reset_turn_state,
             )
         _render_unified_answer(view, live_resources)
@@ -5232,6 +5455,7 @@ def _render_lower_workspace(
         _render_conversation_history(
             view,
             live_resources.single_turn_tts,
+            mutations_enabled=mutations_enabled,
         )
 
 

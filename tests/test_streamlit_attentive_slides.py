@@ -755,9 +755,9 @@ class TestStreamlitAttentiveSlides(
     def test_live_fragment_runs_only_while_media_is_enabled(self) -> None:
         interaction = self.function_source("_render_manual_interaction")
 
-        self.assertIn("_media_runtime_requested()", interaction)
+        self.assertIn("_media_runtime_requested(live_resources)", interaction)
         self.assertIn("_render_unified_interaction", interaction)
-        master_check = interaction.index("_media_runtime_requested()")
+        master_check = interaction.index("_media_runtime_requested(live_resources)")
         periodic = interaction.index("_render_live_periodic", master_check)
         inactive = interaction.index("_render_unified_interaction", periodic)
 
@@ -952,8 +952,8 @@ class TestStreamlitAttentiveSlides(
 
     def test_all_flows_share_one_attention_and_voice_panel(self) -> None:
         source = self.function_source("_render_unified_interaction")
-        self.assertIn("Attention & Voice", source)
-        self.assertIn("_render_voice_component(view)", source)
+        self.assertIn("Attention and voice controls", source)
+        self.assertIn("_render_voice_component(view, resources)", source)
         self.assertIn("_render_target_column(view)", source)
         self.assertIn("_render_intent_column(view)", source)
         self.assertNotIn("main_interaction_mode", source)
@@ -962,10 +962,11 @@ class TestStreamlitAttentiveSlides(
         result = self.function_source("_render_tutor_result")
         self.assertLess(
             result.index('st.markdown(\n        result["answer"]'),
-            result.index("tts_controller.synthesize_once("),
+            result.index("resources.single_turn_tts.synthesize_once("),
         )
         self.assertIn("st.audio", result)
-        self.assertIn("_media_runtime_requested()", result)
+        self.assertIn("_media_runtime_requested(resources)", result)
+        self.assertIn("_lifecycle_token_matches", result)
         self.assertIn('main_voice_engine") == "single_turn"', result)
         builder = self.function_source("build_main_live_resources")
         self.assertEqual(builder.count("SingleTurnTTSController("), 1)

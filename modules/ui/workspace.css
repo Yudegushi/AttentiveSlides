@@ -497,6 +497,15 @@ body:has(.st-key-main_slide_rail_reopen) .st-key-main_topbar {
   width: 7px;
 }
 
+.as-topbar-status.is-paused {
+  color: #9a642a;
+}
+
+.as-topbar-status.is-paused .as-status-dot {
+  background: #b47835;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #b47835 18%, transparent);
+}
+
 .st-key-main_topbar button {
   font-size: 10px;
   font-weight: 700;

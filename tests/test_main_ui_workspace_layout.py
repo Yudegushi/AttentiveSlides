@@ -49,16 +49,17 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
     def test_master_control_is_the_media_runtime_gate(self) -> None:
         helper = self.functions["_media_runtime_requested"]
         self.assertIn("main_live_master_enabled", helper)
+        self.assertIn("_study_mutations_enabled", helper)
         controls = self.functions["_render_live_controls"]
-        self.assertIn("enabled = _media_runtime_requested()", controls)
+        self.assertIn("enabled = _media_runtime_requested(resources)", controls)
         self.assertIn("set_master_enabled(enabled)", controls)
-        self.assertIn("_media_runtime_requested()", self.functions["_learner_state_view"])
-        self.assertIn("_media_runtime_requested()", self.functions["_render_tutor_result"])
-        self.assertIn("_media_runtime_requested()", self.functions["_render_manual_interaction"])
+        self.assertIn("_media_runtime_requested(resources)", self.functions["_learner_state_view"])
+        self.assertIn("_media_runtime_requested(resources)", self.functions["_render_tutor_result"])
+        self.assertIn("_media_runtime_requested(live_resources)", self.functions["_render_manual_interaction"])
         builder = self.functions["build_main_live_resources"]
         self.assertNotIn("service.ensure_started()", builder)
         self.assertIn("resources.service.ensure_started()", controls)
-        self.assertIn("resources.service.shutdown()", controls)
+        self.assertNotIn("resources.service.shutdown()", controls)
 
     def test_palette_confirmation_and_slide_rail_defaults(self) -> None:
         defaults = build_main_live_defaults()

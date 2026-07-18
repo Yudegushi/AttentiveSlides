@@ -30,6 +30,7 @@ def build_voice_panel_view(
     if not phase:
         phase = "listening" if speech_mode == "continuous" else "ready"
     copy = {
+        "study_paused": ("Study paused", ""),
         "typed": ("Typed input ready", "Choose a prompt or ask below"),
         "ready": ("Ready", "Hold V or the button to speak"),
         "listening": ("Listening for speech", "Hands-free input is active"),

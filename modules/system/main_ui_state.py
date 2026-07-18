@@ -137,6 +137,7 @@ def build_main_turn_defaults() -> dict[str, Any]:
         "main_confirmation_error": None,
         "main_confirmed": False,
         "main_tutor_result": None,
+        "main_tutor_result_token": None,
         "main_tutor_context": None,
         "main_last_generated_interaction_id": None,
         "main_last_generation_attempted_interaction_id": None,
@@ -157,9 +158,9 @@ def build_main_live_defaults() -> dict[str, Any]:
         "main_answer_audio_enabled": True,
         "main_ui_palette": "ivory-study-desk",
         "main_slide_rail_expanded": True,
-        "main_study_started_monotonic": None,
         "main_voice_status_message": None,
         "main_live_proposal": None,
+        "main_live_proposal_token": None,
         "main_live_original_transcript": None,
         "main_live_predicted_aoi_id": None,
         "main_live_layout_revision": None,
@@ -194,6 +195,7 @@ def reset_main_live_turn_state(
         "main_live_original_transcript",
         "main_live_predicted_aoi_id",
         "main_live_layout_revision",
+        "main_live_proposal_token",
         "main_voice_status_message",
     ):
         state[key] = None

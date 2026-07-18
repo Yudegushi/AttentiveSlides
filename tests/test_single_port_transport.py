@@ -551,6 +551,11 @@ class FakeVoiceTransport:
         self.consume = consume
         self.audio = []
         self.commands = []
+        self.suspended = False
+
+    def set_suspended(self, suspended, reason):
+        del reason
+        self.suspended = bool(suspended)
 
     def should_consume_audio(self):
         return self.consume

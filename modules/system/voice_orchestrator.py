@@ -60,6 +60,8 @@ class VoiceOrchestrator:
         self._active_session_id: str | None = None
         self._continuous_requested = False
         self._status_message: str | None = None
+        self._suspended = False
+        self._suspended_reason: str | None = None
 
     def attach_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         with self._lock:
@@ -105,12 +107,25 @@ class VoiceOrchestrator:
         if previous is not None:
             self._submit(lambda: self._stop_for_missing_target(reason))
 
+    def set_suspended(self, suspended: bool, reason: str) -> None:
+        """Close or reopen the synchronous command/audio gate."""
+        suspended = bool(suspended)
+        with self._lock:
+            self._suspended = suspended
+            self._suspended_reason = (
+                str(reason).strip()[:160] if suspended else None
+            )
+
     def should_consume_audio(self) -> bool:
         with self._lock:
             preferences = self._preferences
+            suspended = self._suspended
         return (
-            preferences.engine is VoiceEngine.OMNI
-            or preferences.speech_mode is SpeechMode.PUSH_TO_TALK
+            not suspended
+            and (
+                preferences.engine is VoiceEngine.OMNI
+                or preferences.speech_mode is SpeechMode.PUSH_TO_TALK
+            )
         )
 
     def current_target(self) -> TargetBinding | None:
@@ -130,7 +145,8 @@ class VoiceOrchestrator:
         with self._lock:
             preferences = self._preferences
             active_session_id = self._active_session_id
-        if session_id != active_session_id:
+            suspended = self._suspended
+        if suspended or session_id != active_session_id:
             return
         if preferences.engine is VoiceEngine.SINGLE_TURN:
             if preferences.speech_mode is SpeechMode.PUSH_TO_TALK:
@@ -141,6 +157,16 @@ class VoiceOrchestrator:
     async def handle_http_command(
         self, command: str, session_id: str
     ) -> dict[str, object]:
+        with self._lock:
+            suspended = self._suspended
+        if suspended and command in {
+            "ptt/start",
+            "continuous/start",
+            "target/confirm",
+        }:
+            raise ValueError("voice input is suspended")
+        if suspended and command == "target/reject":
+            return self.snapshot()
         preferences = self._preferences_snapshot()
         if command == "ptt/start":
             if preferences.speech_mode is not SpeechMode.PUSH_TO_TALK:
@@ -254,6 +280,8 @@ class VoiceOrchestrator:
             target = self._target
             active_session_id = self._active_session_id
             status_message = self._status_message
+            suspended = self._suspended
+            suspended_reason = self._suspended_reason
         if preferences.engine is VoiceEngine.OMNI:
             engine_state = self._omni.snapshot()
             state = str(engine_state.get("state", "off"))
@@ -274,6 +302,8 @@ class VoiceOrchestrator:
             "target_signature": target.signature if target else None,
             "target_label": target.label if target else None,
             "status_message": status_message,
+            "suspended": suspended,
+            "suspended_reason": suspended_reason,
         }
 
     async def websocket(self, request: web.Request) -> web.WebSocketResponse:

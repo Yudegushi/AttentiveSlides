@@ -102,6 +102,17 @@ class VoiceControlComponentContractTests(unittest.TestCase):
         self.assertIn("Resume listening", self.component)
         self.assertIn("signature !== previousSignature", self.component)
 
+    def test_study_pause_disables_v_and_uses_safe_stop_paths(self) -> None:
+        self.assertIn("study_paused=bool(study_paused)", self.wrapper)
+        for token in (
+            "args.study_paused",
+            "wasStudyPaused",
+            "safeStopPtt()",
+            'command("/attentive-voice/continuous/stop")',
+            'updateStatus("Study paused", "", 0)',
+        ):
+            self.assertIn(token, self.component)
+
     def test_transport_is_compact_and_has_no_tutor_or_provider_block(self) -> None:
         self.assertIn('id="meter"', self.component)
         self.assertIn('id="ptt"', self.component)

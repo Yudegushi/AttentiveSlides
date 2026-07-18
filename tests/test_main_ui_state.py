@@ -247,9 +247,9 @@ class TestMainUIState(unittest.TestCase):
                 "main_answer_audio_enabled": True,
                 "main_ui_palette": "ivory-study-desk",
                 "main_slide_rail_expanded": True,
-                "main_study_started_monotonic": None,
                 "main_voice_status_message": None,
                 "main_live_proposal": None,
+                "main_live_proposal_token": None,
                 "main_live_original_transcript": None,
                 "main_live_predicted_aoi_id": None,
                 "main_live_layout_revision": None,
@@ -278,6 +278,7 @@ class TestMainUIState(unittest.TestCase):
             "main_answer_audio_enabled": False,
             "main_voice_status_message": "old status",
             "main_live_proposal": {"interaction_id": "live-1"},
+            "main_live_proposal_token": ("review-1", 1),
             "main_live_original_transcript": "original",
             "main_live_predicted_aoi_id": "aoi-1",
             "main_live_layout_revision": 7,
@@ -307,6 +308,7 @@ class TestMainUIState(unittest.TestCase):
             ["logged-1"],
         )
         self.assertIsNone(state["main_live_proposal"])
+        self.assertIsNone(state["main_live_proposal_token"])
         self.assertIsNone(
             state["main_live_original_transcript"]
         )

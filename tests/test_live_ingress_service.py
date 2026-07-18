@@ -50,6 +50,13 @@ class FakeVoiceTransport:
         self.state = "off"
         self.stop_reasons = []
         self.loop = None
+        self.suspended = False
+        self.suspension_events = []
+        self.stop_error = None
+
+    def set_suspended(self, suspended, reason):
+        self.suspended = bool(suspended)
+        self.suspension_events.append((bool(suspended), reason))
 
     def attach_loop(self, loop):
         self.loop = loop
@@ -58,6 +65,8 @@ class FakeVoiceTransport:
         return {"state": self.state, "ptt_active": False}
 
     async def stop(self, reason):
+        if self.stop_error is not None:
+            raise self.stop_error
         self.stop_reasons.append(reason)
         self.state = "off"
 
@@ -453,6 +462,39 @@ class LiveIngressVoiceLifecycleTest(unittest.TestCase):
         snapshot = self.ingress.session_snapshot()
         self.assertTrue(snapshot.active)
         self.assertFalse(snapshot.session_pending)
+
+    def test_quiesce_closes_gate_and_stops_runtime_even_when_voice_stop_fails(self):
+        self.service.set_master_enabled(True)
+        self.service.runtime.is_running = True
+        self.voice.state = "ready"
+        self.voice.stop_error = OSError("provider timeout")
+
+        with self.assertRaisesRegex(RuntimeError, "provider timeout"):
+            self.service.quiesce("study paused")
+
+        self.assertTrue(self.voice.suspended)
+        self.assertEqual(
+            self.voice.suspension_events[0],
+            (True, "study paused"),
+        )
+        self.assertFalse(self.service.master_enabled)
+        self.assertFalse(self.service.runtime.is_running)
+        self.assertEqual(self.service.runtime.stop_count, 1)
+
+    def test_resume_reopens_gate_before_restoring_master_and_is_idempotent(self):
+        self.service.quiesce("study paused")
+        self.service.resume_from_quiesce(master_enabled=True)
+        self.service.resume_from_quiesce(master_enabled=True)
+
+        self.assertFalse(self.voice.suspended)
+        self.assertEqual(self.voice.suspension_events[-1][0], False)
+        self.assertTrue(self.service.master_enabled)
+        self.assertTrue(self.ingress.session_snapshot().armed)
+
+        self.service.quiesce("study paused")
+        self.service.quiesce("study paused")
+        self.assertTrue(self.voice.suspended)
+        self.assertFalse(self.service.master_enabled)
 
 
 if __name__ == "__main__":

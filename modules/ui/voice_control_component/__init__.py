@@ -18,6 +18,7 @@ def render_voice_control_component(
     engine: str,
     flow: str,
     speech_mode: str,
+    study_paused: bool,
     palette_tokens: Mapping[str, str],
     key: str,
 ) -> dict[str, object] | None:
@@ -32,6 +33,7 @@ def render_voice_control_component(
         engine=str(engine),
         flow=str(flow),
         speech_mode=str(speech_mode),
+        study_paused=bool(study_paused),
         palette_tokens=safe_tokens,
         default={"event": "mounted"},
         key=key,

@@ -259,6 +259,33 @@ class VoiceOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(("pcm", "session", b"drop"), self.ptt.calls)
         self.assertIsNone(self.orchestrator.snapshot()["session_id"])
 
+    async def test_suspended_gate_rejects_start_and_confirm_but_allows_cleanup(self) -> None:
+        self.orchestrator.update_preferences(
+            VoicePreferences(speech_mode=SpeechMode.PUSH_TO_TALK)
+        )
+        await self.settle()
+        await self.orchestrator.handle_http_command("ptt/start", "session")
+        self.orchestrator.set_suspended(True, "study paused")
+
+        self.assertFalse(self.orchestrator.should_consume_audio())
+        await self.orchestrator.accept_pcm("session", b"drop")
+        self.assertNotIn(("pcm", "session", b"drop"), self.ptt.calls)
+        for command in ("ptt/start", "continuous/start", "target/confirm"):
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(ValueError, "suspended"):
+                    await self.orchestrator.handle_http_command(command, "session")
+
+        await self.orchestrator.handle_http_command("ptt/stop", "session")
+        await self.orchestrator.handle_http_command("continuous/stop", "session")
+        await self.orchestrator.handle_http_command("target/reject", "session")
+        snapshot = self.orchestrator.snapshot()
+        self.assertTrue(snapshot["suspended"])
+        self.assertEqual(snapshot["suspended_reason"], "study paused")
+
+        self.orchestrator.set_suspended(False, "study resumed")
+        self.assertTrue(self.orchestrator.should_consume_audio())
+        await self.orchestrator.handle_http_command("ptt/start", "session")
+
     async def test_clearing_target_stops_a_session_and_prevents_restart(self) -> None:
         self.orchestrator.update_preferences(VoicePreferences(engine=VoiceEngine.OMNI))
         await self.settle()

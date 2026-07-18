@@ -139,6 +139,7 @@
         engine: "single_turn",
         flow: "one_turn",
         speech_mode: "push_to_talk",
+        study_paused: false,
         palette_tokens: {},
       };
       let socket = null;
@@ -251,6 +252,9 @@
 
       function stateCopy(state) {
         const phase = String(state || "").toLowerCase();
+        if (args.study_paused || phase === "study_paused") {
+          return ["Study paused", "", 0];
+        }
         if (["recording", "sampling", "speech_detected"].includes(phase)) {
           return ["Recording", "Sampling attention", 68];
         }
@@ -323,6 +327,12 @@
 
       function ensureSocket() {
         if (tornDown) return;
+        if (args.study_paused) {
+          ptt.disabled = true;
+          handsfree.disabled = true;
+          updateStatus("Study paused", "", 0);
+          return;
+        }
         const session = mediaSession();
         if (!session) {
           updateStatus("Voice unavailable", "Enable camera and microphone first", 0, true);
@@ -361,7 +371,7 @@
 
       async function startPtt(event) {
         if (event) event.preventDefault();
-        if (args.speech_mode !== "push_to_talk" || pttActive || pttStartPromise) return;
+        if (args.study_paused || args.speech_mode !== "push_to_talk" || pttActive || pttStartPromise) return;
         if (event && Number.isInteger(event.pointerId) && ptt.setPointerCapture) {
           pttPointerId = event.pointerId;
           try { ptt.setPointerCapture(event.pointerId); } catch (_) {}
@@ -448,6 +458,7 @@
       function onShortcutKeydown(event) {
         if (
           event.code !== "KeyV"
+          || args.study_paused
           || args.speech_mode !== "push_to_talk"
           || event.repeat
           || shouldIgnoreShortcut(event)
@@ -543,16 +554,35 @@
       async function render(nextArgs) {
         const previousMode = args.speech_mode;
         const previousSignature = continuousSignature;
+        const wasStudyPaused = Boolean(args.study_paused);
         args = nextArgs;
         applyPalette(args.palette_tokens);
         ptt.hidden = args.speech_mode !== "push_to_talk";
         cancel.hidden = !pttActive;
         handsfree.hidden = args.speech_mode !== "continuous";
-        ensureSocket();
         const session = mediaSession();
         const signature = session
           ? session + ":" + args.engine + ":" + args.speech_mode
+            + (args.study_paused ? ":paused" : ":active")
           : null;
+
+        if (args.study_paused) {
+          safeStopPtt();
+          if (args.speech_mode === "continuous" && session && !continuousPaused) {
+            await command("/attentive-voice/continuous/stop").catch(() => {});
+          }
+          continuousSignature = signature;
+          continuousPaused = true;
+          ptt.disabled = true;
+          handsfree.disabled = true;
+          clearPlayback();
+          updateStatus("Study paused", "", 0);
+          return;
+        }
+        if (wasStudyPaused) {
+          continuousPaused = false;
+        }
+        ensureSocket();
 
         if (previousMode === "continuous" && args.speech_mode !== "continuous" && session) {
           await command("/attentive-voice/continuous/stop").catch(() => {});
