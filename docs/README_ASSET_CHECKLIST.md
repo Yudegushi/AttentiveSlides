@@ -139,7 +139,7 @@ confirmation without implying surveillance or diagnostic certainty.
 |---|---|---|
 | Canonical source | `.github/assets/attentiveslides-logo.svg` | Editable vector source; authoritative logo geometry and colors |
 | Square mark | `.github/assets/attentiveslides-logo.png` | Transparent PNG exported from the canonical SVG; primary README asset |
-| Generation master | Maintainer working asset | Highest-resolution AI original retained for visual reference, not treated as an editable source |
+| Generation master | `.github/assets/attentiveslides-logo-generation-master.png` | Highest-resolution AI original retained for visual reference, not treated as an editable source |
 | Horizontal wordmark | Maintainer-supplied later | Combine the mark with editable "AttentiveSlides" text; do not generate lettering |
 | Favicon | Maintainer-supplied later | Simplify to slide + focus/confirmation at 32 px and 16 px |
 | Light background | Derived from source | Charcoal outline on warm cream |
@@ -154,6 +154,16 @@ confirmation without implying surveillance or diagnostic certainty.
 - The mark does not resemble an eye, camera, robot, or medical symbol.
 - Stroke widths and corner radii remain coherent after downscaling.
 - The transparent PNG has clean edges and enough internal padding for GitHub.
+
+### Current logo assets
+
+- `attentiveslides-logo.svg`: completed canonical vector source.
+- `attentiveslides-logo.png`: completed 1024 × 1024 transparent export used by
+  the README.
+- `attentiveslides-logo-generation-master.png`: retained AI generation master;
+  it is not the canonical source or the public README image.
+- Horizontal wordmark, favicon-specific exports, and a dedicated dark-background
+  variant remain maintainer-supplied derivatives.
 
 ## README integration status
 

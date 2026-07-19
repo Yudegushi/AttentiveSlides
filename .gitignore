@@ -13,9 +13,10 @@ build/
 .coverage
 htmlcov/
 
-# Local documentation scratch space. Canonical project documentation lives at
-# the repository root in README.md and SYSTEM_FEATURES.md.
-/docs/
+# Local documentation scratch space. Track only durable public guides.
+/docs/*
+!/docs/deployment.md
+!/docs/README_ASSET_CHECKLIST.md
 
 # Local generated data and private study inputs.
 /audio_eval/
