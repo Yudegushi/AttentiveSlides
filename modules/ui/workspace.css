@@ -1279,7 +1279,7 @@ div[class*="st-key-main_slide_thumb_"]:has(button[kind="primary"]) {
 .attentive-aoi-marker {
   border: 2px solid var(--as-slide-accent);
   border-radius: 50%;
-  box-shadow: 0 0 0 8px var(--as-slide-accent-soft);
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--as-slide-accent) 12%, transparent);
   height: 74px;
   left: calc(50% + 20px);
   position: absolute;
