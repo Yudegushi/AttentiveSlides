@@ -64,6 +64,11 @@ PDF
 7. **Review the session.** A completed Study can show derived heatmaps, dwell
    totals, study time, and uncertain learner-state aggregates.
 
+![AttentiveSlides workflow from multimodal reference grounding through learner confirmation and grounded tutoring](.github/assets/attentiveslides-workflow.png)
+
+*Gaze and language propose a target; the learner confirms or corrects it before
+the grounded tutor answers. Study Review uses derived session information only.*
+
 <!-- TODO(readme-assets): Add .github/assets/demo-grounding.gif using docs/README_ASSET_CHECKLIST.md. -->
 
 ## Key features
