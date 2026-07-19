@@ -1,2 +1,0 @@
-streamlit-webrtc==0.75.0
-aiohttp==3.14.1

@@ -1,0 +1,66 @@
+# Canonical AttentiveSlides environment
+#
+# Target: Python 3.10 on the Lenovo RTX 4060 deployment (`pyboe`).
+# This is intentionally one complete runtime, model-preparation, diagnostic,
+# and evaluation environment rather than a minimal production subset.
+# Versions are the verified 4060 environment snapshot from 2026-07-19.
+# Model weights, converted artifacts, recordings, and caches stay outside Git.
+
+# PyTorch CUDA 12.1 wheels used by both MobileViT and EmotiEff.
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# Core application, numerical, image, and configuration stack.
+streamlit==1.59.1
+numpy==2.2.6
+Pillow==12.2.0
+opencv-python==4.13.0.92
+PyYAML==6.0.3
+
+# Slide model: native PDF rendering/text extraction plus OCR fallback.
+# EasyOCR downloads its model files to the external user cache on first use.
+PyMuPDF==1.27.2.2
+easyocr==1.7.2
+
+# Browser media transport and its retained diagnostic WebRTC probe.
+aiohttp==3.14.1
+streamlit-webrtc==0.75.0
+
+# Speech model: faster-whisper STT and local microphone/VAD support.
+# Whisper weights are downloaded to the Hugging Face cache, not this repo.
+faster-whisper==1.2.1
+webrtcvad-wheels==2.0.14
+sounddevice==0.5.5
+soundfile==0.14.0
+
+# Grounded Tutor, DashScope Omni realtime voice, and Bailian TTS clients.
+dashscope==1.26.3
+openai==1.109.1
+requests==2.33.1
+websockets==16.1
+
+# Shared GPU model runtime.
+# `+cu121` matches the verified 4060 environment and PyTorch wheel index above.
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+huggingface-hub==1.11.0
+
+# Model: MobileViT fatigue estimator.
+# `scripts/prepare_mobilevit_fatigue.py` pins/downloads the source and writes
+# the prepared artifact to external runtime data.
+timm==1.0.27
+
+# Model: EmotiEff emotion and engagement estimators.
+# Source `.pt`/`.h5` and converted `.ts`/`.pt` artifacts stay outside Git;
+# `scripts/prepare_emotieff_learner_state.py` verifies pinned source metadata.
+h5py==3.14.0
+
+# Audio/LLM/reference evaluation and reproducibility tools.
+# Downloaded datasets, recordings, provider results, and reports are ignored.
+datasets==4.8.4
+
+# Legacy optional adapters intentionally excluded from this verified install:
+# - `mediapipe` is dynamically imported by the older Python gaze-grid adapter.
+# - `pyrealsense2` is dynamically imported by the RealSense camera adapter.
+# The production 4060 UI uses browser Face Mesh plus the separate local
+# EyeTheia service. Install legacy adapters deliberately and validate their
+# platform/model compatibility before selecting those code paths.

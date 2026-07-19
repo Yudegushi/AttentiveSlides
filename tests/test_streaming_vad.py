@@ -7,8 +7,8 @@ from modules.audio.streaming_vad import EnergyVadBackend, VadBackend, default_va
 
 
 class StreamingVadTest(unittest.TestCase):
-    def test_audio_requirements_install_the_preferred_pcm_vad_backend(self):
-        requirements = Path("requirements-audio.txt").read_text(encoding="utf-8")
+    def test_project_requirements_install_the_preferred_pcm_vad_backend(self):
+        requirements = Path("requirements.txt").read_text(encoding="utf-8")
 
         self.assertIn("webrtcvad-wheels==2.0.14", requirements.splitlines())
 

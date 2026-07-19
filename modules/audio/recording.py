@@ -13,7 +13,7 @@ def record_wav(output_path: str, duration_sec: float, sample_rate: int = 16000) 
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "Install optional audio recording dependencies before recording: "
-            "pip install -r requirements-audio.txt"
+            "pip install -r requirements.txt"
         ) from exc
 
     path = Path(output_path)

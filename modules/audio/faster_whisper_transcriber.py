@@ -74,7 +74,7 @@ class FasterWhisperTranscriber:
         except ModuleNotFoundError as exc:
             raise RuntimeError(
                 "Install optional audio dependencies before using faster_whisper: "
-                "pip install -r requirements-audio.txt"
+                "pip install -r requirements.txt"
             ) from exc
 
         kwargs: dict[str, Any] = {"device": self.config.device}

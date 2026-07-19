@@ -26,7 +26,7 @@ def prepare_minds14_zh_cn_samples(
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "Install optional audio evaluation dependencies first: "
-            "pip install -r requirements-audio-eval.txt"
+            "pip install -r requirements.txt"
         ) from exc
 
     output_path = Path(output_dir)
