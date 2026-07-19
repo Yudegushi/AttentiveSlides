@@ -759,7 +759,7 @@ def _initialize_global_state() -> None:
         "main_llm_aoi_error": None,
         "main_show_aoi_overlay": True,
         "main_canvas_revision": 0,
-        "main_slide_width_percent": 70,
+        "main_slide_width_percent": 80,
         "main_selection_matches": [],
         "main_selection_text": "",
         "main_selection_error": None,
@@ -3468,7 +3468,7 @@ def _render_current_slide_llm_aoi_action(
 
 def _adjust_slide_width(delta: int) -> None:
     """Move the displayed slide scale by one normalized toolbar step."""
-    current = st.session_state.get("main_slide_width_percent", 70)
+    current = st.session_state.get("main_slide_width_percent", 80)
     st.session_state["main_slide_width_percent"] = normalize_main_slide_width_percent(
         int(current) + int(delta)
     )

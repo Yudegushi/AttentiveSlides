@@ -64,7 +64,7 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
     def test_palette_confirmation_and_slide_rail_defaults(self) -> None:
         defaults = build_main_live_defaults()
         self.assertEqual(defaults["main_confirmation_policy"], "Confidence-based auto")
-        self.assertEqual(defaults["main_auto_confirm_threshold"], 0.80)
+        self.assertEqual(defaults["main_auto_confirm_threshold"], 0.70)
         self.assertEqual(defaults["main_ui_palette"], "ivory-study-desk")
         self.assertFalse(defaults["main_slide_rail_expanded"])
         controls = self.functions["_render_live_controls"]

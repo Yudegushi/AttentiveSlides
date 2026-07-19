@@ -184,7 +184,7 @@ class TestMainUIState(unittest.TestCase):
             normalize_main_slide_width_percent,
         )
 
-        self.assertEqual(normalize_main_slide_width_percent(None), 70)
+        self.assertEqual(normalize_main_slide_width_percent(None), 80)
         self.assertEqual(normalize_main_slide_width_percent(49), 50)
         self.assertEqual(normalize_main_slide_width_percent(73), 75)
         self.assertEqual(normalize_main_slide_width_percent(101), 100)
@@ -241,7 +241,7 @@ class TestMainUIState(unittest.TestCase):
                 "main_confirmation_policy": (
                     "Confidence-based auto"
                 ),
-                "main_auto_confirm_threshold": 0.80,
+                "main_auto_confirm_threshold": 0.70,
                 "main_voice_engine": "single_turn",
                 "main_speech_mode": "push_to_talk",
                 "main_answer_audio_enabled": True,

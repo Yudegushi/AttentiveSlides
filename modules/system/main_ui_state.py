@@ -106,7 +106,7 @@ def normalize_main_slide_width_percent(value: object) -> int:
     try:
         numeric = float(value)
     except (TypeError, ValueError):
-        return 70
+        return 80
     snapped = int(round(numeric / 5.0) * 5)
     return max(50, min(100, snapped))
 
@@ -152,7 +152,7 @@ def build_main_live_defaults() -> dict[str, Any]:
         "main_interaction_flow": "one_turn",
         "main_live_master_enabled": False,
         "main_confirmation_policy": "Confidence-based auto",
-        "main_auto_confirm_threshold": 0.80,
+        "main_auto_confirm_threshold": 0.70,
         "main_voice_engine": "single_turn",
         "main_speech_mode": "push_to_talk",
         "main_answer_audio_enabled": True,
