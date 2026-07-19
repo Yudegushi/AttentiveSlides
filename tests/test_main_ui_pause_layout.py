@@ -95,16 +95,19 @@ class FakeService:
 
 
 class FakeQueue:
-    def __init__(self):
+    def __init__(self, item=None):
         self.clear_count = 0
         self.pop_count = 0
+        self.item = item
 
     def clear(self):
         self.clear_count += 1
 
     def pop(self):
         self.pop_count += 1
-        return None
+        item = self.item
+        self.item = None
+        return item
 
 
 def make_state():
@@ -134,7 +137,10 @@ def make_resources(status="active"):
         snapshots=FakeQueue(),
         voice=SimpleNamespace(snapshot=lambda: {"suspended": False}),
         ingress=SimpleNamespace(
-            session_snapshot=lambda: SimpleNamespace(active=True)
+            session_snapshot=lambda: SimpleNamespace(active=True),
+            observations=SimpleNamespace(
+                latest_geometry_for=lambda _deck_id, _slide_id: None
+            ),
         ),
         runtime=SimpleNamespace(poll=lambda: None),
         single_turn_tts=None,
@@ -236,6 +242,63 @@ class MainUIPauseBehaviorTests(unittest.TestCase):
         with patch.object(app, "st", FakeStreamlit(make_state())):
             app._consume_live_proposal(paused, SimpleNamespace())
         self.assertEqual(paused.inbox.pop_count, 0)
+
+    def test_new_speech_replaces_a_locked_unsubmitted_turn(self):
+        proposal = app.LiveInteractionProposal(
+            interaction_id="turn-new",
+            deck_id="deck-a",
+            slide_id=2,
+            layout_revision=7,
+            transcript="Explain the new chart",
+            gaze_grid="middle_right",
+            gaze_confidence=0.8,
+            stable_duration_sec=0.2,
+            predicted_aoi_id="chart-new",
+            target_confidence=0.5,
+            original_speech_transcript="Explain the new chart",
+            gaze_source="eyetheia_local",
+        )
+        state = make_state()
+        state["main_confirmed_interaction"] = {
+            "interaction": {"interaction_id": "turn-old"}
+        }
+        state["main_confirmed"] = True
+        state["main_typed_command"] = "Explain the old chart"
+        state["main_last_generated_interaction_id"] = None
+        resources, _events = make_resources("active")
+        resources.inbox = FakeQueue(proposal)
+        geometry = SimpleNamespace(
+            deck_id="deck-a",
+            slide_id=2,
+            layout_revision=7,
+        )
+        resources.ingress.observations.latest_geometry_for = (
+            lambda _deck_id, _slide_id: SimpleNamespace(geometry=geometry)
+        )
+        view = SimpleNamespace(
+            deck_id="deck-a",
+            active_slide_id=2,
+            active_slide=SimpleNamespace(aois=()),
+        )
+
+        with patch.object(app, "st", FakeStreamlit(state)):
+            app._consume_live_proposal(resources, view)
+
+        self.assertEqual(resources.inbox.pop_count, 1)
+        self.assertEqual(state["main_typed_command"], "Explain the new chart")
+        self.assertEqual(state["main_live_predicted_aoi_id"], "chart-new")
+        self.assertIsNone(state["main_confirmed_interaction"])
+
+    def test_reset_turn_clears_pending_proposal_once(self):
+        state = make_state()
+        state["main_typed_command"] = "Queued speech"
+        resources, _events = make_resources("active")
+
+        with patch.object(app, "st", FakeStreamlit(state)):
+            app._reset_live_turn(resources)
+
+        self.assertEqual(resources.inbox.clear_count, 1)
+        self.assertEqual(state["main_typed_command"], "")
 
     def test_tutor_late_result_and_playback_are_discarded_after_token_change(self):
         state = make_state()

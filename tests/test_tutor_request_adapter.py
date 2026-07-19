@@ -68,6 +68,15 @@ def make_context(
 
 
 class TestTutorRequestAdapter(unittest.TestCase):
+    def test_external_knowledge_is_allowed_by_default(self) -> None:
+        request = TutorRequestAdapter().from_context(
+            make_context()
+        )
+
+        self.assertTrue(
+            request.allow_external_knowledge
+        )
+
     def test_confirmed_aoi_is_preserved(self) -> None:
         request = TutorRequestAdapter().from_context(
             make_context()

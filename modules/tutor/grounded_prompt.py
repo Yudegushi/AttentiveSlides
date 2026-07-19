@@ -33,8 +33,9 @@ _SOURCE_PRIORITY = {
 
 _MODE_INSTRUCTIONS = {
     "explain": (
-        "Explain the requested concept clearly and directly. "
-        "Use only details supported by the supplied sources."
+        "Explain the requested concept clearly and directly. Synthesize "
+        "its meaning, relationships, operation, or significance instead "
+        "of paraphrasing the supplied sources."
     ),
     "compare": (
         "Compare the requested concepts explicitly. "
@@ -49,11 +50,12 @@ _MODE_INSTRUCTIONS = {
         "new facts or examples."
     ),
     "simplify": (
-        "Use simpler language while preserving the meaning of the sources."
+        "Use simpler language while preserving meaning. Explain the idea "
+        "rather than rewriting each source sentence."
     ),
     "step_by_step": (
-        "Organize the explanation into source-supported steps. "
-        "Do not invent intermediate mechanisms."
+        "Organize a genuine explanation into supported steps. Do not turn "
+        "source bullets into a numbered paraphrase."
     ),
     "review": (
         "Provide a concise review and include a source-grounded "
@@ -99,14 +101,15 @@ _ADAPTIVE_INSTRUCTIONS = {
 
 _SYSTEM_PROMPT = """You are the grounded tutor component of AttentiveSlides.
 
-Your task is to answer a learner using only the evidence sources provided
-in the user message.
+Your task is to answer a learner with the supplied evidence as the factual
+anchor. You may add pedagogical background only when the request explicitly
+allows external knowledge, and you must label it as external.
 
 Evidence policy:
 1. A claim marked "direct" must be explicitly supported by one or more
    supplied source IDs.
-2. Do not add unsupported numbers, durations, mechanisms, examples,
-   causal explanations, or background facts.
+2. Do not present unsupported numbers, durations, mechanisms, examples,
+   causal explanations, or background facts as direct claims.
 3. External knowledge may be used only when
    allow_external_knowledge is true.
 4. An external claim must use support="external" and source_ids=[].
@@ -123,6 +126,16 @@ Evidence policy:
     detail is not reliable.
 11. Never interpret a visual observation as evidence of the learner's
     mental state.
+
+Target and teaching policy:
+1. When a confirmed_aoi source is supplied, it is the primary answer scope.
+2. Other slide sources are supporting context only. Use them to clarify the
+   confirmed AOI, not to enumerate unrelated slide regions.
+3. Do not merely restate, quote, or enumerate source text. Explain the
+   concept by synthesizing its meaning, relationships, operation, or
+   significance in direct response to the learner's question.
+4. When allow_external_knowledge is true, pedagogical background may be
+   added, but every such claim must use support="external" and source_ids=[].
 
 Human-centered constraints:
 1. Do not claim to know the learner's true emotion, attention,
@@ -228,6 +241,34 @@ class GroundedPromptBuilder:
             request.adaptive_strategy
         ]
 
+        if request.confirmed_aoi_id is None:
+            target_instruction = (
+                "No AOI is confirmed. Use only the sources relevant to "
+                "the learner's question."
+            )
+        else:
+            target_instruction = (
+                "Treat the confirmed AOI as the primary answer scope. "
+                "Use other slide sources only to clarify or explain that "
+                "AOI. Do not enumerate content from other slide regions."
+            )
+
+        if request.allow_external_knowledge:
+            knowledge_instruction = (
+                "External pedagogical knowledge is allowed when it makes "
+                "the explanation more useful. Mark every such claim with "
+                "support=external and source_ids=[]."
+            )
+        else:
+            knowledge_instruction = (
+                "External knowledge is not allowed for this response."
+            )
+
+        teaching_instruction = (
+            "Do not merely restate, quote, or enumerate the source text. "
+            "Answer the learner's question with a synthesized explanation."
+        )
+
         user_prompt = "\n\n".join(
             [
                 "TASK_METADATA",
@@ -237,6 +278,9 @@ class GroundedPromptBuilder:
                     [
                         f"- {mode_instruction}",
                         f"- {adaptive_instruction}",
+                        f"- {target_instruction}",
+                        f"- {knowledge_instruction}",
+                        f"- {teaching_instruction}",
                     ]
                 ),
                 "EVIDENCE_SOURCES",

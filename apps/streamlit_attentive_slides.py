@@ -302,6 +302,7 @@ def build_main_live_resources(
                 "ATTENTIVE_WHISPER_COMPUTE_TYPE",
                 "auto",
             ),
+            language="en",
         )
     )
     audio_worker = AudioWorker(
@@ -3282,6 +3283,11 @@ def _reset_turn_state() -> None:
     st.session_state[
         "main_selection_error"
     ] = None
+
+
+def _reset_live_turn(resources: MainLiveResources) -> None:
+    _reset_turn_state()
+    resources.inbox.clear()
     st.session_state[
         "main_conversation_error"
     ] = None
@@ -5407,18 +5413,6 @@ def _consume_live_proposal(
     if bool(voice_snapshot.get("suspended")):
         return
     resources.runtime.poll()
-    confirmed = (
-        st.session_state.get("main_confirmed_interaction")
-        or {}
-    ).get("interaction", {})
-    pending_id = str(confirmed.get("interaction_id", ""))
-    if (
-        pending_id
-        and pending_id
-        != st.session_state.get("main_last_generated_interaction_id")
-    ):
-        return
-
     raw = resources.inbox.pop()
     if raw is None:
         return
@@ -5830,7 +5824,8 @@ def _render_lower_workspace(
                 "RESET TURN",
                 key="main_reset_turn_button",
                 disabled=not mutations_enabled,
-                on_click=_reset_turn_state,
+                on_click=_reset_live_turn,
+                args=(live_resources,),
             )
         _render_unified_answer(view, live_resources)
     with st.expander("Conversation history", expanded=False):

@@ -18,7 +18,7 @@ class TutorRequestAdapter:
     def __init__(
         self,
         *,
-        allow_external_knowledge: bool = False,
+        allow_external_knowledge: bool = True,
         response_language: str = "en",
     ) -> None:
         self.allow_external_knowledge = (

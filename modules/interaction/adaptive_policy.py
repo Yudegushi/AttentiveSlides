@@ -22,9 +22,6 @@ def select_adaptive_strategy(
     if history and resolved_aoi_id and history.same_aoi_question_count(resolved_aoi_id) >= 2:
         return "simpler_explanation"
 
-    if stable_duration_sec >= 5 and intent_result.intent == "explain":
-        return "step_by_step"
-
     if intent_result.intent == "review" or learning_state.possible_review_needed:
         return "review_question"
 

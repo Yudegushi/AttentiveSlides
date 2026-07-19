@@ -407,6 +407,14 @@ class LocalEyeTheiaCaptureContractTest(unittest.TestCase):
         self.assertIn("let videoInFlight = false", component)
         self.assertIn("let audioInFlight = false", component)
 
+    def test_audio_processor_keeps_a_live_output_pull_path(self):
+        component = self.component_source()
+
+        self.assertIn("processor.connect(silentGain)", component)
+        self.assertIn("silentGain.connect(audioContext.destination)", component)
+        self.assertIn("silentGain.gain.value = 1", component)
+        self.assertNotIn("silentGain.gain.value = 0", component)
+
     def test_packs_native_frames_for_loopback_eyetheia(self):
         component = self.component_source()
 

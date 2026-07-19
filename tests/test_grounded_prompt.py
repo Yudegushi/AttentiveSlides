@@ -192,6 +192,41 @@ class TestGroundedPromptBuilder(unittest.TestCase):
             prompt.user_prompt,
         )
 
+    def test_confirmed_aoi_is_primary_and_other_sources_are_supporting(self) -> None:
+        prompt = GroundedPromptBuilder().build(
+            self.make_request()
+        )
+
+        self.assertIn(
+            "Treat the confirmed AOI as the primary answer scope",
+            prompt.user_prompt,
+        )
+        self.assertIn(
+            "Do not enumerate content from other slide regions",
+            prompt.user_prompt,
+        )
+
+    def test_explain_mode_requires_synthesis_instead_of_restatement(self) -> None:
+        prompt = GroundedPromptBuilder().build(
+            self.make_request(
+                response_mode="explain",
+                allow_external_knowledge=True,
+            )
+        )
+
+        self.assertIn(
+            "Do not merely restate, quote, or enumerate the source text",
+            prompt.user_prompt,
+        )
+        self.assertIn(
+            "External pedagogical knowledge is allowed",
+            prompt.user_prompt,
+        )
+        self.assertIn(
+            "support=external",
+            prompt.user_prompt,
+        )
+
     def test_quiz_requires_active_recall_question(
         self,
     ) -> None:

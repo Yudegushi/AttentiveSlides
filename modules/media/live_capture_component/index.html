@@ -589,7 +589,7 @@
     mediaNode = audioContext.createMediaStreamSource(stream);
     processor = audioContext.createScriptProcessor(4096, 1, 1);
     silentGain = audioContext.createGain();
-    silentGain.gain.value = 0;
+    silentGain.gain.value = 1;
     processor.onaudioprocess = (event) => {
       if (!running || audioInFlight) return;
       const pcm = downsampleToS16(event.inputBuffer.getChannelData(0), audioContext.sampleRate);
