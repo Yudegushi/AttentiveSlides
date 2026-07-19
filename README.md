@@ -23,11 +23,21 @@ Then run the one-port launcher:
   --port 8501
 ```
 
-Then forward the public port when remote access is required:
+Then forward the AttentiveSlides public port and the separate EyeTheia
+loopback port when remote browser access needs local point gaze:
 
 ```bash
-ssh -N -L 8501:127.0.0.1:8501 LenovoLinux_Dorm
+ssh -N \
+  -L 8501:127.0.0.1:8501 \
+  -L 8001:127.0.0.1:8001 \
+  LenovoLinux_Dorm
 ```
+
+Port 8501 contains the Streamlit, media-ingress, voice, and preview routes.
+Port 8001 is not part of that application proxy: browser JavaScript connects
+to `ws://127.0.0.1:8001/ws/predict_gaze`, so the second tunnel is required
+when EyeTheia runs on the Lenovo host. Without it, the UI remains usable and
+point gaze degrades to the configured grid/manual targeting path.
 
 The application supports Manual and Live study, PDF/AOI processing, typed and
 voice intent, confirmation-gated gaze targeting, grounded tutoring, XAI,

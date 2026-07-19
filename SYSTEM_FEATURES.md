@@ -197,7 +197,10 @@ target and intent were selected.
 
 The production launcher exposes Streamlit, media ingestion, voice WebSockets,
 and slide previews through one public aiohttp port. Streamlit and ingress use
-separate internal ports and are never exposed directly to the browser.
+separate internal ports and are never exposed directly to the browser. Local
+EyeTheia is a separate loopback WebSocket service on port 8001; a remote
+browser needs an additional SSH tunnel for that port because it is not routed
+through the AttentiveSlides proxy.
 
 The browser capture component provides:
 
@@ -225,10 +228,13 @@ invalidate stale packets and release the active runtime safely.
 
 ### Local EyeTheia point gaze
 
-Browser Face Mesh landmarks remain on the Lenovo machine and are sent to the
-loopback EyeTheia service. The returned point prediction is forwarded to the
-AttentiveSlides ingress with its page and viewport geometry. The server keeps
-only recent points and rejects stale or revision-mismatched samples.
+Face Mesh runs in browser JavaScript. Its landmarks are sent to
+`ws://127.0.0.1:8001/ws/predict_gaze`; for a browser on another machine, an
+SSH tunnel maps that browser-local port to the EyeTheia service on Lenovo.
+Raw landmarks are not sent to the AttentiveSlides ingress or persisted there.
+The returned point prediction is forwarded to AttentiveSlides with its page
+and viewport geometry. The server keeps only recent points and rejects stale
+or revision-mismatched samples.
 
 Point-to-AOI matching considers containment, distance tolerance, AOI priority,
 and short dwell aggregation. The live debug overlay displays the authoritative
