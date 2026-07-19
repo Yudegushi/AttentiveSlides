@@ -1,0 +1,47 @@
+AttentiveSlides
+Copyright (C) 2026 AttentiveSlides contributors
+
+AttentiveSlides is a human-centered AI learning assistant for slide-based
+study.
+
+Original AttentiveSlides source code and documentation are licensed under the
+GNU Affero General Public License version 3 only (AGPL-3.0-only). The complete
+license text is provided in the root LICENSE file.
+
+This project-level license applies only to original AttentiveSlides materials
+whose copyright is held by the AttentiveSlides contributors, except where an
+individual file or directory states otherwise. It does not replace, extend, or
+relicense third-party software, fonts, model implementations, model artifacts,
+datasets, services, or other materials.
+
+Third-party materials retain their respective licenses and terms. In
+particular:
+
+- PyMuPDF and MuPDF are available under the GNU Affero General Public License
+  and commercial licensing terms from their respective copyright holders.
+- EyeTheia is an optional external gaze-estimation service licensed upstream
+  under the GNU General Public License version 3. EyeTheia source code and model
+  artifacts are not distributed as part of this repository.
+- EmotiEffLib code is licensed upstream under the Apache License 2.0. Upstream
+  and converted model artifacts are not distributed as part of this repository
+  and remain subject to their applicable source, model, and dataset terms.
+- The timm implementation used for MobileViT is licensed upstream under the
+  Apache License 2.0. The separately downloaded MobileViT-v2 drowsiness model
+  is identified as MIT-licensed by its upstream model card. MobileViT and
+  fatigue-model artifacts are not distributed as part of this repository and
+  remain subject to their applicable provenance and training-data terms.
+- Bundled Literata and IBM Plex Sans font files are licensed under the SIL Open
+  Font License 1.1. Their license texts are retained beside the font files.
+
+Downloaded model weights, converted runtime artifacts, uploaded documents,
+recordings, caches, API credentials, and user data are not covered by the
+AttentiveSlides project license merely because they are used with the software.
+They remain governed by their own rights, licenses, and terms.
+
+Product names, project names, and trademarks belonging to third parties are
+used only for identification. No endorsement by those third parties is implied.
+
+This NOTICE is a project-level copyright and license-scope statement. Consult
+the README acknowledgements, requirements.txt comments, assets/fonts/README.md,
+and model-preparation scripts for the repository's current component-specific
+references when distributing or deploying the software.

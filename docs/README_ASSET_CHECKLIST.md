@@ -137,9 +137,9 @@ confirmation without implying surveillance or diagnostic certainty.
 
 | Variant | Planned output | Notes |
 |---|---|---|
-| Canonical source | `.github/assets/attentiveslides-logo.svg` | Editable vector source; authoritative logo geometry and colors |
-| Square mark | `.github/assets/attentiveslides-logo.png` | Transparent PNG exported from the canonical SVG; primary README asset |
-| Generation master | `.github/assets/attentiveslides-logo-generation-master.png` | Highest-resolution AI original retained for visual reference, not treated as an editable source |
+| Approved source | `.github/assets/attentiveslides-logo-generation-master.png` | Original 1254 × 1254 AI generation selected as the authoritative current artwork |
+| Square mark | `.github/assets/attentiveslides-logo.png` | Exact copy of the approved source under the stable README asset name |
+| Editable vector source | Maintainer-supplied later | Create only from a faithful manual redraw that preserves the approved artwork |
 | Horizontal wordmark | Maintainer-supplied later | Combine the mark with editable "AttentiveSlides" text; do not generate lettering |
 | Favicon | Maintainer-supplied later | Simplify to slide + focus/confirmation at 32 px and 16 px |
 | Light background | Derived from source | Charcoal outline on warm cream |
@@ -148,20 +148,21 @@ confirmation without implying surveillance or diagnostic certainty.
 ### Acceptance checks
 
 - The image is original and has no text or watermark.
-- The SVG is the canonical editable source; PNG files are exports or generation
-  references rather than source artwork.
+- The generation master is the authoritative approved artwork until a faithful
+  editable vector source is created and reviewed.
 - The square mark reads clearly at 32 × 32 px and on both white and cream.
 - The mark does not resemble an eye, camera, robot, or medical symbol.
 - Stroke widths and corner radii remain coherent after downscaling.
-- The transparent PNG has clean edges and enough internal padding for GitHub.
+- The PNG has clean edges and enough internal padding for GitHub.
 
 ### Current logo assets
 
-- `attentiveslides-logo.svg`: completed canonical vector source.
-- `attentiveslides-logo.png`: completed 1024 × 1024 transparent export used by
-  the README.
-- `attentiveslides-logo-generation-master.png`: retained AI generation master;
-  it is not the canonical source or the public README image.
+- `attentiveslides-logo-generation-master.png`: authoritative 1254 × 1254 AI
+  original selected by the maintainer.
+- `attentiveslides-logo.png`: exact copy of the approved original used by the
+  README under a stable public asset name.
+- The rejected SVG redraw has been removed; no vector file is currently
+  presented as canonical.
 - Horizontal wordmark, favicon-specific exports, and a dedicated dark-background
   variant remain maintainer-supplied derivatives.
 

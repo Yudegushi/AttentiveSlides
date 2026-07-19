@@ -374,8 +374,7 @@ Vendored Literata and IBM Plex Sans files retain their SIL Open Font License
 
 ## License
 
-This repository does not currently contain a root project `LICENSE` file, so
-this README does not assert a project-wide open-source license. Third-party
-code, models, fonts, and services remain governed by their respective licenses
-and terms listed above. Add an explicit root license before representing the
-AttentiveSlides project itself as licensed for reuse or redistribution.
+Original AttentiveSlides source code and documentation are licensed under the
+[GNU Affero General Public License version 3 only](LICENSE)
+(`AGPL-3.0-only`). See [NOTICE](NOTICE) for the project copyright scope and
+third-party component, model, font, service, and data boundaries.
