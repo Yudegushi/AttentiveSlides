@@ -213,7 +213,7 @@ class TestMainUIWidgetInventory(
             "main_slide_scale_fit",
             "main_previous_slide_button",
             "main_next_slide_button",
-            "main_target_scope",
+            "main_target_scope_control",
             "main_show_aoi_overlay",
             "main_clear_region_button",
             "main_typed_command",

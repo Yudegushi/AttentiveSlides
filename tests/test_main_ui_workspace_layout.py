@@ -171,8 +171,19 @@ class MainUIWorkspaceLayoutTests(unittest.TestCase):
         self.assertNotIn("lesson_identity", controls)
         self.assertIn("--as-content-top-gap: 10px", self.css)
         self.assertIn(
-            ".st-key-main_topbar button,\n"
-            ".st-key-main_reset_turn_button button",
+            ".st-key-main_topbar button {\n"
+            "  font-family: var(--as-font-ui);\n"
+            "  font-size: 10px;\n"
+            "  font-weight: 700;\n"
+            "  letter-spacing: 0.05em;",
+            self.css,
+        )
+        self.assertIn(
+            ".st-key-main_reset_turn_button button,\n"
+            ".st-key-main_reset_turn_button button p {\n"
+            "  color: var(--as-ink) !important;\n"
+            "  font-family: var(--as-font-ui);\n"
+            "  font-size: 9px;",
             self.css,
         )
         self.assertIn("font-size: 10px", self.css)

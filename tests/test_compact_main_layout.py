@@ -204,7 +204,7 @@ class TestCompactMainLayout(
         self.assertIn('st.session_state["main_slide_width_percent"]', width_helper)
         self.assertIn("[gutter, width_percent, gutter]", width_helper)
         self.assertIn("attentive-built-in-stage", placeholder)
-        self.assertIn("AttentiveSlides", placeholder)
+        self.assertIn("Attentive Slides", placeholder)
         self.assertIn(
             "Select a slide region, state your learning goal, and receive a grounded tutor response.",
             placeholder,

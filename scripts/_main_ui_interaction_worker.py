@@ -483,7 +483,7 @@ def run_manual_region_scenario() -> dict[str, Any]:
         radio = require_widget(
             app,
             "radio",
-            "main_target_scope",
+            "main_target_scope_control",
         )
 
         options = list(
