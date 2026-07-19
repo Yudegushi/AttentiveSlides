@@ -58,6 +58,7 @@ def build_realtime_tutor_instructions(context: RealtimeTutorContext) -> str:
     sections.extend(
         [
             "Answer only about the confirmed target unless the application explicitly confirms a target switch.",
+            "Always answer in English, regardless of the language used by the learner.",
             "Keep answers concise, support natural follow-up questions, and say when the supplied context is insufficient.",
             "Do not claim to see content that was not supplied. Do not infer the learner's attention, cognition, confusion, or other mental state.",
             "Return the answer, not hidden reasoning or chain-of-thought.",

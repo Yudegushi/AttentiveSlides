@@ -29,7 +29,7 @@ def build_prompt(context: TutorContext) -> str:
             "You are a slide-based tutor for AttentiveSlides.",
             "Use only the provided slide context. If external background is needed, label it explicitly.",
             "Do not claim to know the learner's true emotion, fatigue, confusion, or attention.",
-            "Answer in Chinese and preserve key English terms.",
+            "Answer in English, regardless of the language used in the learner's question.",
             f"Response mode: {mode}",
             f"Adaptive strategy: {context.adaptive_strategy}",
             f"User transcript: {resolved.transcript}",

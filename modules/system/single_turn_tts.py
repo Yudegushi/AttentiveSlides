@@ -70,7 +70,7 @@ class SingleTurnTTSController:
                 result = SingleTurnSpeechResult(
                     normalized_id,
                     None,
-                    "tts_failed: 回答朗读暂时不可用；文字回答不受影响。",
+                    "tts_failed: Answer playback is temporarily unavailable; the text answer is unaffected.",
                 )
             self._cache[key] = result
             return result

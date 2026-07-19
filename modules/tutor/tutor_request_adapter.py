@@ -19,7 +19,7 @@ class TutorRequestAdapter:
         self,
         *,
         allow_external_knowledge: bool = False,
-        response_language: str = "zh-CN",
+        response_language: str = "en",
     ) -> None:
         self.allow_external_knowledge = (
             allow_external_knowledge
@@ -50,7 +50,7 @@ class TutorRequestAdapter:
 
         question = (
             resolved.transcript.strip()
-            or "请根据当前 slide context 继续讲解。"
+            or "Continue the explanation using the current slide context."
         )
 
         return TutorLLMRequest(

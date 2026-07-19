@@ -13,12 +13,12 @@ DEFAULT_SPEECH_MODEL = (
 
 DEFAULT_SPEECH_VOICE = "Cherry"
 
-DEFAULT_SPEECH_LANGUAGE = "Chinese"
+DEFAULT_SPEECH_LANGUAGE = "English"
 
 DEFAULT_TUTOR_SPEECH_INSTRUCTIONS = (
-    "使用清晰、自然、耐心的教学语气。"
-    "语速适中，重点概念适当停顿。"
-    "不要加入原文中不存在的内容。"
+    "Use a clear, natural, and patient teaching voice. "
+    "Speak at a moderate pace and pause briefly around key concepts. "
+    "Do not add content that is absent from the original answer."
 )
 
 

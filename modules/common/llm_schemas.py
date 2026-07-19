@@ -159,7 +159,7 @@ class TutorLLMRequest:
     interaction_history: list[dict[str, Any]] = field(default_factory=list)
 
     allow_external_knowledge: bool = False
-    response_language: str = "zh-CN"
+    response_language: str = "en"
     schema_version: str = "1.0"
 
     def __post_init__(self) -> None:
