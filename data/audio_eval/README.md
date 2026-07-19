@@ -8,15 +8,22 @@ The next-stage downloader writes PolyAI/minds14 zh-CN samples to:
 data/audio_eval/minds14_zh_cn/
 ```
 
-Generated wav files and manifests are ignored by git. Keep only this README and
-`.gitkeep` tracked.
+Generated wav files and manifests are ignored by Git. Keep only this README
+tracked.
 
 ## Project-specific private recordings
 
 Reviewed user recordings are kept locally in root `audio_eval/` and transferred to an
 ignored `data/audio_eval/user_smoke/` directory only on an evaluation machine. The matching
-CSV and profile results are also ignored. See [audio usability evaluation](../../docs/audio_usability_eval.md)
-for the reviewed-manifest and profile-comparison workflow.
+CSV and profile results are also ignored. The repository-level data and privacy
+boundary is recorded in [SYSTEM_FEATURES.md](../../SYSTEM_FEATURES.md).
+
+Install the canonical project environment before preparing or evaluating
+audio:
+
+```bash
+python -m pip install -r requirements.txt
+```
 
 Recommended local preparation command:
 

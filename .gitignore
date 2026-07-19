@@ -13,18 +13,42 @@ build/
 .coverage
 htmlcov/
 
-# Local generated data
+# Local documentation scratch space. Canonical project documentation lives at
+# the repository root in README.md and SYSTEM_FEATURES.md.
+/docs/
+
+# Local generated data and private study inputs.
 /audio_eval/
-data/logs/*.jsonl
+/data/logs/
+/data/live_decks/
+/data/incoming/
+/data/slide_images/
+/data/slide_previews/
+/data/uploaded_decks/
+/data/calibration_profiles/
+/data/study_reviews/
+/data/gaze_reviews/
+/data/aoi_manifest.json
+/data/deck_metadata.json
+/data/upload_index.json
+
 data/audio_samples/*
-!data/audio_samples/.gitkeep
 !data/audio_samples/README.md
 data/audio_eval/*
-!data/audio_eval/.gitkeep
 !data/audio_eval/README.md
-data/slide_images/
-data/uploaded_decks/
-data/calibration_profiles/
+
+# Generated evaluation reports and provider outputs.
+/evaluation/output/
+/evaluation/reports/
+/evaluation/results/
+
+# Model downloads and converted artifacts must remain external. These rules
+# protect accidental project-local overrides without hiding source manifests.
+/models/
+/artifacts/
+/data/models/
+/data/artifacts/
+*.part
 
 # Local secrets and machine-specific settings
 .env
