@@ -138,7 +138,7 @@ confirmation without implying surveillance or diagnostic certainty.
 | Variant | Planned output | Notes |
 |---|---|---|
 | Approved source | `.github/assets/attentiveslides-logo-generation-master.png` | Original 1254 × 1254 AI generation selected as the authoritative current artwork |
-| Square mark | `.github/assets/attentiveslides-logo.png` | Exact copy of the approved source under the stable README asset name |
+| Square mark | `.github/assets/attentiveslides-logo.png` | Transparent-background derivative of the approved source under the stable README asset name |
 | Editable vector source | Maintainer-supplied later | Create only from a faithful manual redraw that preserves the approved artwork |
 | Horizontal wordmark | Maintainer-supplied later | Combine the mark with editable "AttentiveSlides" text; do not generate lettering |
 | Favicon | Maintainer-supplied later | Simplify to slide + focus/confirmation at 32 px and 16 px |
@@ -153,14 +153,15 @@ confirmation without implying surveillance or diagnostic certainty.
 - The square mark reads clearly at 32 × 32 px and on both white and cream.
 - The mark does not resemble an eye, camera, robot, or medical symbol.
 - Stroke widths and corner radii remain coherent after downscaling.
-- The PNG has clean edges and enough internal padding for GitHub.
+- The transparent PNG has clean edges and enough internal padding for GitHub.
 
 ### Current logo assets
 
 - `attentiveslides-logo-generation-master.png`: authoritative 1254 × 1254 AI
   original selected by the maintainer.
-- `attentiveslides-logo.png`: exact copy of the approved original used by the
-  README under a stable public asset name.
+- `attentiveslides-logo.png`: transparent-background derivative used by the
+  README. Fully opaque artwork pixels retain the approved original's RGB data;
+  only the extracted antialiased boundary uses a soft alpha matte.
 - The rejected SVG redraw has been removed; no vector file is currently
   presented as canonical.
 - Horizontal wordmark, favicon-specific exports, and a dedicated dark-background
