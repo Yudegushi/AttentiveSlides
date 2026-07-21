@@ -152,8 +152,7 @@ Output constraints:
 4. Follow the output object template supplied in the user message.
 5. The only allowed top-level keys are:
    response_mode, answer, decision_summary, claims,
-   external_knowledge_used, uncertainty_note,
-   active_recall_question.
+   uncertainty_note, active_recall_question.
 6. Do not copy field descriptions, validation rules, metadata,
    or source objects into the output JSON.
 7. Use the requested response language while preserving important
@@ -408,7 +407,6 @@ class GroundedPromptBuilder:
                 "<short verifiable description of evidence use>"
             ),
             "claims": claims_template,
-            "external_knowledge_used": False,
             "uncertainty_note": None,
             "active_recall_question": active_recall_value,
         }
@@ -421,8 +419,7 @@ class GroundedPromptBuilder:
             (
                 "The output JSON must contain exactly these top-level "
                 "keys: response_mode, answer, decision_summary, claims, "
-                "external_knowledge_used, uncertainty_note, and "
-                "active_recall_question."
+                "uncertainty_note, and active_recall_question."
             ),
             (
                 "Do not output a rules, metadata, schema, task_metadata, "
@@ -440,10 +437,6 @@ class GroundedPromptBuilder:
             (
                 "An insufficient claim must use source_ids=[] and "
                 "requires a non-null uncertainty_note."
-            ),
-            (
-                "external_knowledge_used must be true exactly when at "
-                "least one claim has support=external."
             ),
             (
                 "Do not copy placeholder values from the output object "

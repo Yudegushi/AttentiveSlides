@@ -138,6 +138,24 @@ class TestGroundedTutorAgent(unittest.TestCase):
             260,
         )
 
+    def test_inconsistent_external_flag_does_not_retry(self) -> None:
+        payload = valid_response_payload()
+        payload["external_knowledge_used"] = True
+        client = SequenceClient([
+            json.dumps(payload),
+        ])
+
+        result = GroundedTutorAgent(
+            llm_client=client,
+            max_retries=1,
+        ).answer_context(make_context())
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(client.calls, 1)
+        self.assertFalse(
+            result.call_result.response.external_knowledge_used
+        )
+
     def test_validation_failure_is_retried(
         self,
     ) -> None:

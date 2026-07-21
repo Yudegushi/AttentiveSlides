@@ -182,6 +182,22 @@ class TestGroundedPromptBuilder(unittest.TestCase):
             prompt.user_prompt,
         )
 
+    def test_external_knowledge_flag_is_not_requested_from_llm(self) -> None:
+        prompt = GroundedPromptBuilder().build(
+            self.make_request(
+                allow_external_knowledge=True
+            )
+        )
+
+        self.assertNotIn(
+            "external_knowledge_used",
+            prompt.system_prompt,
+        )
+        self.assertNotIn(
+            "external_knowledge_used",
+            prompt.user_prompt,
+        )
+
     def test_mode_specific_instruction_is_embedded(self) -> None:
         prompt = GroundedPromptBuilder().build(
             self.make_request(response_mode="compare")

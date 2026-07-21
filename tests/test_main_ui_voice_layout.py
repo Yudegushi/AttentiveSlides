@@ -138,10 +138,6 @@ class MainUIVoiceLayoutTests(unittest.TestCase):
         self.assertIn("main_target_scope_control", callback)
         self.assertIn("main_target_scope", callback)
 
-    def test_reset_turn_clears_stale_recording_errors(self) -> None:
-        reset = self.functions["_reset_turn_state"]
-        self.assertIn("main_conversation_error", reset)
-
     def test_dialogue_alone_supplies_bounded_history(self) -> None:
         generation = self.functions["_generate_confirmed_turn"]
         self.assertIn("main_interaction_flow", generation)

@@ -602,7 +602,6 @@ class GroundedTutorAgent:
                     "Use exactly these top-level keys: "
                     "response_mode, answer, "
                     "decision_summary, claims, "
-                    "external_knowledge_used, "
                     "uncertainty_note, and "
                     "active_recall_question. "
                     "Do not add a rules or metadata field. "

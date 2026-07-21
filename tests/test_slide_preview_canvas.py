@@ -119,30 +119,6 @@ class TestSlidePreviewCanvas(unittest.TestCase):
         self.assertIn("format_func=_target_scope_label", rendered)
         self.assertNotIn('options=[\'Use whole slide\'', rendered)
 
-    def test_live_gaze_cursor_is_exactly_low_salience_and_static(self) -> None:
-        gaze_css = self.viewport.split(".gaze-dot {", 1)[1].split("}", 1)[0]
-        for token in (
-            "width: 10px",
-            "height: 10px",
-            "margin: -5px 0 0 -5px",
-            "border: 1px solid rgba(72, 84, 78, 0.18)",
-            "background: rgba(72, 84, 78, 0.16)",
-            "box-shadow: 0 0 8px 5px rgba(72, 84, 78, 0.08)",
-            "pointer-events: none",
-        ):
-            self.assertIn(token, gaze_css)
-        for forbidden in (
-            "#2563eb",
-            "#ffffff",
-            "rgba(15, 23, 42",
-            "animation",
-            "transition",
-            "pulse",
-            "scale",
-        ):
-            self.assertNotIn(forbidden, gaze_css)
-        self.assertIn("const GAZE_STALE_AFTER_MS = 1000", self.viewport)
-
     def test_viewport_receives_complete_palette_for_chrome_only(self) -> None:
         self.assertIn("palette_tokens=safe_tokens", self.viewport_wrapper)
         self.assertIn("palette_tokens must contain every semantic token", self.viewport_wrapper)

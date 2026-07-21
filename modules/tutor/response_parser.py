@@ -27,10 +27,10 @@ _TOP_LEVEL_REQUIRED_FIELDS = {
     "answer",
     "decision_summary",
     "claims",
-    "external_knowledge_used",
 }
 
 _TOP_LEVEL_OPTIONAL_FIELDS = {
+    "external_knowledge_used",
     "uncertainty_note",
     "active_recall_question",
 }
@@ -245,9 +245,6 @@ class StructuredResponseParser:
         answer = payload["answer"]
         decision_summary = payload["decision_summary"]
         claims_payload = payload["claims"]
-        external_knowledge_used = payload[
-            "external_knowledge_used"
-        ]
 
         if not isinstance(response_mode, str):
             self._raise_type_error(
@@ -271,12 +268,6 @@ class StructuredResponseParser:
             self._raise_type_error(
                 "claims",
                 "array",
-            )
-
-        if type(external_knowledge_used) is not bool:
-            self._raise_type_error(
-                "external_knowledge_used",
-                "boolean",
             )
 
         uncertainty_note = payload.get("uncertainty_note")
@@ -307,6 +298,10 @@ class StructuredResponseParser:
             for claim_index, claim_payload
             in enumerate(claims_payload)
         ]
+        external_knowledge_used = any(
+            claim.support == "external"
+            for claim in claims
+        )
 
         try:
             return StructuredTutorResponse(

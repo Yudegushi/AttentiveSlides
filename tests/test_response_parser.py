@@ -185,20 +185,39 @@ class TestStructuredResponseParser(unittest.TestCase):
             "invalid_field_type",
         )
 
-    def test_schema_inconsistency_is_rejected(self) -> None:
+    def test_external_knowledge_flag_is_derived_from_claims(self) -> None:
         payload = valid_payload()
         payload["external_knowledge_used"] = True
 
-        with self.assertRaises(
-            ResponseParseError
-        ) as context:
-            self.parser.parse(
-                json.dumps(payload)
-            )
+        result = self.parser.parse(json.dumps(payload))
 
-        self.assertEqual(
-            context.exception.code,
-            "schema_validation_error",
+        self.assertFalse(
+            result.response.external_knowledge_used
+        )
+
+        payload["claims"] = [
+            {
+                "claim": "External background.",
+                "support": "external",
+                "source_ids": [],
+            }
+        ]
+        payload["external_knowledge_used"] = False
+
+        result = self.parser.parse(json.dumps(payload))
+
+        self.assertTrue(
+            result.response.external_knowledge_used
+        )
+
+    def test_external_knowledge_flag_may_be_omitted(self) -> None:
+        payload = valid_payload()
+        del payload["external_knowledge_used"]
+
+        result = self.parser.parse(json.dumps(payload))
+
+        self.assertFalse(
+            result.response.external_knowledge_used
         )
 
     def test_strict_parser_rejects_code_fence(self) -> None:
