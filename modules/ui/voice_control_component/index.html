@@ -116,6 +116,9 @@
   <script>
     (() => {
       const MEDIA_SESSION_KEY = "attentive-media-session";
+      const AUDIO_PRODUCED_KEY_PREFIX = "attentive-audio-produced:";
+      const AUDIO_ACKED_KEY_PREFIX = "attentive-audio-acked:";
+      const AUDIO_DRAIN_TIMEOUT_MS = 3000;
       const FRAME_HEIGHT = 150;
       const SEMANTIC_KEYS = [
         "canvas", "workspace", "topbar", "rail", "surface", "ink", "muted",
@@ -201,15 +204,38 @@
         catch (_) { return null; }
       }
 
-      async function command(path) {
+      async function command(path, extraHeaders = {}) {
         const session = mediaSession();
         if (!session) throw new Error("Enable camera and microphone first.");
         const response = await fetch(path, {
           method: "POST",
-          headers: { "X-Attentive-Media-Session": session },
+          headers: { "X-Attentive-Media-Session": session, ...extraHeaders },
         });
         if (!response.ok) throw new Error("Voice command failed (" + response.status + ").");
         return response.json();
+      }
+
+      function audioWatermark(prefix, session) {
+        try {
+          const value = Number(globalThis.localStorage.getItem(prefix + session));
+          return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+        } catch (_) {
+          return 0;
+        }
+      }
+
+      async function waitForAudioDrain() {
+        const session = mediaSession();
+        if (!session) throw new Error("Enable camera and microphone first.");
+        const throughSequence = audioWatermark(AUDIO_PRODUCED_KEY_PREFIX, session);
+        const deadline = performance.now() + AUDIO_DRAIN_TIMEOUT_MS;
+        while (audioWatermark(AUDIO_ACKED_KEY_PREFIX, session) < throughSequence) {
+          if (performance.now() >= deadline) {
+            throw new Error("Audio upload did not finish; please retry this turn.");
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 20));
+        }
+        return throughSequence;
       }
 
       async function ensureAudioContext() {
@@ -427,7 +453,16 @@
         updateStatus("Transcribing", "Preparing your question", 32);
         try {
           if (pendingStart) await pendingStart;
-          handleCommandResponse(await command("/attentive-voice/ptt/stop"));
+          let throughSequence;
+          try {
+            throughSequence = await waitForAudioDrain();
+          } catch (error) {
+            await command("/attentive-voice/ptt/stop").catch(() => {});
+            throw error;
+          }
+          handleCommandResponse(await command("/attentive-voice/ptt/stop", {
+            "X-Attentive-Audio-Through-Sequence": String(throughSequence),
+          }));
         } catch (error) {
           updateStatus("Voice input needs attention", error.message, 0, true);
         }

@@ -82,6 +82,13 @@ class AudioWorkerTest(unittest.TestCase):
             channels=2,
             timestamp_clock="browser_performance_seconds",
         )
+        self.source.accept_audio_samples(
+            pcm([0], sample_rate=48_000, channels=2),
+            timestamp=3.09,
+            sample_rate=48_000,
+            channels=2,
+            timestamp_clock="browser_performance_seconds",
+        )
 
         results = worker.process_available_audio()
 

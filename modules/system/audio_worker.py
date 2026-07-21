@@ -13,6 +13,7 @@ import wave
 
 import numpy as np
 
+from modules.audio.pcm_stream import Pcm16StreamResampler
 from modules.audio.voice_turn_detector import SpeechTurn, VoiceTurnDetector
 from modules.common.schemas import Transcript
 from modules.interaction.speech_to_text import transcribe_audio
@@ -92,6 +93,7 @@ class AudioWorker:
         self._clock = clock
         self.config = config or AudioWorkerConfig()
         self._normalizer = _AudioClockNormalizer()
+        self._resampler = Pcm16StreamResampler()
         self._results: queue.Queue[AudioTurnResult] = queue.Queue(
             maxsize=self.config.result_queue_size
         )
@@ -132,6 +134,7 @@ class AudioWorker:
         if thread is not None and thread is not current_thread():
             thread.join(timeout=2.0)
         self.detector.cancel()
+        self._resampler.reset()
         self.media_source.audio_queue.clear()
         if was_running:
             self.stop_count += 1
@@ -192,6 +195,7 @@ class AudioWorker:
         overruns = self.media_source.audio_queue.overrun_count
         if overruns > self._last_audio_overruns:
             self.detector.mark_degraded("audio_overrun")
+            self._resampler.reset()
         self._last_audio_overruns = overruns
 
     def _result_for_turn(self, turn: SpeechTurn) -> AudioTurnResult:
@@ -248,9 +252,6 @@ class AudioWorker:
         source = np.asarray(packet.samples, dtype=np.int16)
         mono = np.rint(source.astype(np.float64).mean(axis=1)).astype(np.int16)
         target_rate = self.detector.config.sample_rate
-        if packet.sample_rate == target_rate:
-            return mono
-        target_size = max(1, round(mono.size * target_rate / packet.sample_rate))
-        positions = np.linspace(0, mono.size - 1, num=target_size)
-        resampled = np.interp(positions, np.arange(mono.size), mono.astype(np.float64))
-        return np.rint(resampled).astype(np.int16)
+        if target_rate != self._resampler.TARGET_RATE:
+            raise ValueError("streaming PCM resampler requires a 16000 Hz detector")
+        return self._resampler.convert_array(mono, source_rate=packet.sample_rate)

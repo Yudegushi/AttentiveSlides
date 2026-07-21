@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 import math
+import os
+from pathlib import Path
 from threading import RLock
 import time
 from typing import Callable, Protocol
@@ -16,6 +18,7 @@ import numpy as np
 from aiohttp import web
 
 from modules.review.study_review_store import StudyReviewStore
+from modules.audio.pcm_stream import Pcm16StreamResampler, PcmWaveDebugRecorder
 
 from .browser_gaze_source import (
     BrowserGazeSource,
@@ -29,6 +32,11 @@ SESSION_HEADER = "X-Attentive-Media-Session"
 TIMESTAMP_HEADER = "X-Media-Timestamp"
 SAMPLE_RATE_HEADER = "X-Media-Sample-Rate"
 CHANNELS_HEADER = "X-Media-Channels"
+AUDIO_FIRST_SEQUENCE_HEADER = "X-Media-Audio-First-Sequence"
+AUDIO_LAST_SEQUENCE_HEADER = "X-Media-Audio-Last-Sequence"
+AUDIO_BLOCK_COUNT_HEADER = "X-Media-Audio-Block-Count"
+AUDIO_THROUGH_SEQUENCE_HEADER = "X-Attentive-Audio-Through-Sequence"
+AUDIO_BLOCK_SAMPLES = 4096
 
 
 class MediaIngressError(ValueError):
@@ -266,12 +274,12 @@ class FallbackMediaIngress:
         channels: int,
         enqueue: bool = True,
     ) -> bool:
-        """Accept one bounded 16 kHz mono little-endian signed-16 PCM chunk."""
+        """Accept one bounded mono little-endian signed-16 PCM chunk."""
 
         if len(payload) > self.max_audio_bytes:
             raise MediaPayloadTooLarge("audio payload exceeds byte limit")
-        if sample_rate != 16_000:
-            raise MediaIngressError("audio sample rate must be 16000 Hz")
+        if not 8_000 <= sample_rate <= 192_000:
+            raise MediaIngressError("audio sample rate must be between 8000 and 192000 Hz")
         if channels != 1:
             raise MediaIngressError("audio channel count must be 1")
         sample_width = np.dtype("<i2").itemsize * channels
@@ -496,6 +504,10 @@ def fallback_page_html() -> str:
   <p>Fallback transport uses same-origin HTTP only. Frames and PCM chunks are bounded in memory and are not written to disk.</p>
 <script>
 (() => {
+  const AUDIO_PRODUCED_KEY_PREFIX = "attentive-audio-produced:";
+  const AUDIO_ACKED_KEY_PREFIX = "attentive-audio-acked:";
+  const AUDIO_BATCH_MAX_BYTES = 96 * 1024;
+  const AUDIO_QUEUE_MAX_BYTES = 192 * 1024;
   const sessionId = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() :
     String(Date.now()) + "-" + Math.random().toString(16).slice(2);
   const status = document.getElementById("status");
@@ -514,7 +526,11 @@ def fallback_page_html() -> str:
   let heartbeatTimer = null;
   let running = false;
   let videoInFlight = false;
-  let audioInFlight = false;
+  const audioQueue = [];
+  let audioQueuedBytes = 0;
+  let audioDrainInFlight = false;
+  let audioSequence = 0;
+  let audioTransportFailed = false;
   let clientVideoDrops = 0;
   let clientAudioDrops = 0;
 
@@ -533,14 +549,18 @@ def fallback_page_html() -> str:
     return response;
   }
 
-  function downsampleToS16(input, sourceRate) {
-    const count = Math.max(1, Math.floor(input.length * 16000 / sourceRate));
-    const output = new Int16Array(count);
-    for (let index = 0; index < count; index += 1) {
-      const sample = input[Math.min(input.length - 1, Math.floor(index * sourceRate / 16000))];
+  function floatToS16(input) {
+    const output = new Int16Array(input.length);
+    for (let index = 0; index < input.length; index += 1) {
+      const sample = input[index];
       output[index] = Math.max(-1, Math.min(1, sample)) * 32767;
     }
     return output;
+  }
+
+  function setAudioWatermark(prefix, sequence) {
+    try { globalThis.localStorage.setItem(prefix + sessionId, String(sequence)); }
+    catch (_) {}
   }
 
   function startVideoPump() {
@@ -576,36 +596,87 @@ def fallback_page_html() -> str:
     }, 200);
   }
 
+  async function drainAudioQueue() {
+    if (!running || audioDrainInFlight || audioTransportFailed) return;
+    audioDrainInFlight = true;
+    try {
+      while (running && audioQueue.length > 0) {
+        let batchBytes = 0;
+        let batchCount = 0;
+        while (
+          batchCount < audioQueue.length
+          && batchBytes + audioQueue[batchCount].pcm.byteLength <= AUDIO_BATCH_MAX_BYTES
+        ) {
+          batchBytes += audioQueue[batchCount].pcm.byteLength;
+          batchCount += 1;
+        }
+        const batch = audioQueue.slice(0, batchCount);
+        const payload = new Uint8Array(batchBytes);
+        let offset = 0;
+        for (const item of batch) {
+          payload.set(new Uint8Array(item.pcm.buffer), offset);
+          offset += item.pcm.byteLength;
+        }
+        const first = batch[0];
+        const last = batch[batch.length - 1];
+        await requireOk(await fetch("/attentive-media/audio", {
+          method: "POST",
+          headers: headers({
+            "Content-Type": "audio/L16",
+            "X-Media-Timestamp": String(first.timestamp),
+            "X-Media-Sample-Rate": String(Math.round(audioContext.sampleRate)),
+            "X-Media-Channels": "1",
+            "X-Media-Audio-First-Sequence": String(first.sequence),
+            "X-Media-Audio-Last-Sequence": String(last.sequence),
+            "X-Media-Audio-Block-Count": String(batch.length),
+          }),
+          body: payload.buffer,
+        }));
+        audioQueue.splice(0, batchCount);
+        audioQueuedBytes -= batchBytes;
+        setAudioWatermark(AUDIO_ACKED_KEY_PREFIX, last.sequence);
+      }
+    } catch (error) {
+      audioTransportFailed = true;
+      clientAudioDrops += audioQueue.length;
+      setStatus("Audio transport error: " + error.message);
+      void stopCapture(true);
+    } finally {
+      audioDrainInFlight = false;
+    }
+  }
+
+  function enqueueAudio(pcm, timestamp) {
+    const sequence = ++audioSequence;
+    audioQueue.push({ pcm, timestamp, sequence });
+    audioQueuedBytes += pcm.byteLength;
+    setAudioWatermark(AUDIO_PRODUCED_KEY_PREFIX, sequence);
+    if (audioQueuedBytes > AUDIO_QUEUE_MAX_BYTES) {
+      audioTransportFailed = true;
+      clientAudioDrops += audioQueue.length;
+      setStatus("Audio transport cannot keep up; capture stopped.");
+      void stopCapture(true);
+      return;
+    }
+    void drainAudioQueue();
+  }
+
   function startAudioPump() {
+    audioQueue.length = 0;
+    audioQueuedBytes = 0;
+    audioSequence = 0;
+    audioTransportFailed = false;
+    setAudioWatermark(AUDIO_PRODUCED_KEY_PREFIX, 0);
+    setAudioWatermark(AUDIO_ACKED_KEY_PREFIX, 0);
     audioContext = new AudioContext();
     mediaNode = audioContext.createMediaStreamSource(stream);
     processor = audioContext.createScriptProcessor(4096, 1, 1);
     silentGain = audioContext.createGain();
     silentGain.gain.value = 0;
     processor.onaudioprocess = (event) => {
-      if (!running) return;
-      if (audioInFlight) {
-        clientAudioDrops += 1;
-        return;
-      }
-      const pcm = downsampleToS16(
-        event.inputBuffer.getChannelData(0), audioContext.sampleRate
-      );
-      audioInFlight = true;
-      fetch("/attentive-media/audio", {
-        method: "POST",
-        headers: headers({
-          "Content-Type": "audio/L16",
-          "X-Media-Timestamp": String(performance.now() / 1000),
-          "X-Media-Sample-Rate": "16000",
-          "X-Media-Channels": "1",
-        }),
-        body: pcm.buffer,
-      }).then(requireOk).catch((error) => {
-        setStatus("Audio transport error: " + error.message);
-      }).finally(() => {
-        audioInFlight = false;
-      });
+      if (!running || audioTransportFailed) return;
+      const pcm = floatToS16(event.inputBuffer.getChannelData(0));
+      enqueueAudio(pcm, performance.now() / 1000);
     };
     mediaNode.connect(processor);
     processor.connect(silentGain);
@@ -649,6 +720,9 @@ def fallback_page_html() -> str:
   async function stopCapture(notifyServer) {
     const wasRunning = running || stream;
     running = false;
+    audioQueue.length = 0;
+    audioQueuedBytes = 0;
+    audioTransportFailed = false;
     window.clearInterval(videoTimer);
     window.clearInterval(heartbeatTimer);
     videoTimer = null;
@@ -718,6 +792,7 @@ def build_fallback_app(
     capture_html: str | None = None,
     health_check: Callable[[], tuple[bool, dict[str, object]]] | None = None,
     voice_transport: VoiceTransport | None = None,
+    audio_debug_recorder: PcmWaveDebugRecorder | None = None,
 ) -> web.Application:
     """Build the one-origin fallback application without starting a device."""
 
@@ -730,6 +805,13 @@ def build_fallback_app(
         )
     )
     app[MEDIA_INGRESS_KEY] = ingress
+    if audio_debug_recorder is None:
+        debug_dir = os.environ.get("ATTENTIVE_AUDIO_DEBUG_DIR", "").strip()
+        if debug_dir:
+            audio_debug_recorder = PcmWaveDebugRecorder(Path(debug_dir))
+    voice_resamplers: dict[str, Pcm16StreamResampler] = {}
+    audio_last_sequences: dict[str, int] = {}
+    audio_sequence_gaps = 0
 
     async def page(_request: web.Request) -> web.Response:
         return web.Response(text=fallback_page_html(), content_type="text/html")
@@ -746,7 +828,13 @@ def build_fallback_app(
         )
 
     async def start(request: web.Request) -> web.Response:
+        nonlocal audio_sequence_gaps
         try:
+            voice_resamplers.clear()
+            audio_last_sequences.clear()
+            audio_sequence_gaps = 0
+            if audio_debug_recorder is not None:
+                audio_debug_recorder.close()
             ingress.start(_session_id(request))
         except MediaIngressError as exc:
             _raise_http_error(exc)
@@ -764,9 +852,31 @@ def build_fallback_app(
         return web.json_response(ingress.stats_payload())
 
     async def audio(request: web.Request) -> web.Response:
+        nonlocal audio_sequence_gaps
         try:
             session_id = _session_id(request)
             payload = await request.read()
+            sample_rate = _header_int(request, SAMPLE_RATE_HEADER)
+            first_sequence = _optional_header_int(request, AUDIO_FIRST_SEQUENCE_HEADER)
+            last_sequence = _optional_header_int(request, AUDIO_LAST_SEQUENCE_HEADER)
+            block_count = _optional_header_int(request, AUDIO_BLOCK_COUNT_HEADER)
+            sequence_values = (first_sequence, last_sequence, block_count)
+            if any(value is not None for value in sequence_values):
+                if any(value is None for value in sequence_values):
+                    raise MediaIngressError("audio sequence headers must be provided together")
+                assert first_sequence is not None
+                assert last_sequence is not None
+                assert block_count is not None
+                expected = audio_last_sequences.get(session_id, 0) + 1
+                valid_sequence = (
+                    first_sequence == expected
+                    and last_sequence >= first_sequence
+                    and block_count == last_sequence - first_sequence + 1
+                    and len(payload) == block_count * AUDIO_BLOCK_SAMPLES * 2
+                )
+                if not valid_sequence:
+                    audio_sequence_gaps += 1
+                    raise MediaIngressError("audio sequence is not contiguous")
             consume = bool(
                 voice_transport is not None
                 and voice_transport.should_consume_audio()
@@ -775,10 +885,17 @@ def build_fallback_app(
                 session_id,
                 payload,
                 timestamp=_header_float(request, TIMESTAMP_HEADER),
-                sample_rate=_header_int(request, SAMPLE_RATE_HEADER),
+                sample_rate=sample_rate,
                 channels=_header_int(request, CHANNELS_HEADER),
                 enqueue=not consume,
             )
+            if audio_debug_recorder is not None:
+                audio_debug_recorder.write(
+                    session_id,
+                    "browser_raw",
+                    payload,
+                    sample_rate=sample_rate,
+                )
         except MediaIngressError as exc:
             _raise_http_error(exc)
         except Exception:
@@ -786,12 +903,26 @@ def build_fallback_app(
         if consume:
             try:
                 assert voice_transport is not None
-                await voice_transport.accept_pcm(session_id, payload)
+                resampler = voice_resamplers.setdefault(
+                    session_id, Pcm16StreamResampler()
+                )
+                voice_pcm = resampler.convert(payload, source_rate=sample_rate)
+                if audio_debug_recorder is not None:
+                    audio_debug_recorder.write(
+                        session_id,
+                        "voice_16k",
+                        voice_pcm,
+                        sample_rate=16_000,
+                    )
+                if voice_pcm:
+                    await voice_transport.accept_pcm(session_id, voice_pcm)
             except web.HTTPException:
                 raise
             except Exception:
                 raise web.HTTPServiceUnavailable(text="voice transport unavailable")
-        return web.json_response(ingress.stats_payload())
+        if last_sequence is not None:
+            audio_last_sequences[session_id] = last_sequence
+        return web.Response(status=204)
 
     async def fatigue(request: web.Request) -> web.Response:
         try:
@@ -829,14 +960,22 @@ def build_fallback_app(
         return web.json_response(ingress.stats_payload())
 
     async def stop(request: web.Request) -> web.Response:
+        session_id = _session_id(request)
         try:
-            ingress.stop(_session_id(request))
+            ingress.stop(session_id)
         except MediaIngressError as exc:
             _raise_http_error(exc)
+        voice_resamplers.pop(session_id, None)
+        audio_last_sequences.pop(session_id, None)
+        if audio_debug_recorder is not None:
+            audio_debug_recorder.close_session(session_id)
         return web.json_response(ingress.stats_payload())
 
     async def stats(_request: web.Request) -> web.Response:
-        return web.json_response(ingress.stats_payload())
+        payload = ingress.stats_payload()
+        payload["audio_last_sequence"] = max(audio_last_sequences.values(), default=0)
+        payload["audio_sequence_gaps"] = audio_sequence_gaps
+        return web.json_response(payload)
 
     async def voice_state(request: web.Request) -> web.Response:
         assert voice_transport is not None
@@ -855,6 +994,26 @@ def build_fallback_app(
         session_id = _session_id(request)
         try:
             ingress.require_active_session(session_id)
+            if command == "ptt/stop":
+                through_sequence = _optional_header_int(
+                    request, AUDIO_THROUGH_SEQUENCE_HEADER
+                )
+                if through_sequence is not None and (
+                    through_sequence < 0
+                    or audio_last_sequences.get(session_id, 0) < through_sequence
+                ):
+                    raise web.HTTPConflict(text="audio upload is not drained")
+                resampler = voice_resamplers.get(session_id)
+                tail = resampler.flush() if resampler is not None else b""
+                if audio_debug_recorder is not None:
+                    audio_debug_recorder.write(
+                        session_id,
+                        "voice_16k",
+                        tail,
+                        sample_rate=16_000,
+                    )
+                if tail:
+                    await voice_transport.accept_pcm(session_id, tail)
             payload = await voice_transport.handle_http_command(command, session_id)
         except MediaIngressError as exc:
             _raise_http_error(exc)
@@ -901,6 +1060,11 @@ def build_fallback_app(
         app.router.add_post("/attentive-voice/target/reject", voice_command)
     app.on_startup.append(_start_watchdog)
     app.on_cleanup.append(_stop_watchdog)
+    if audio_debug_recorder is not None:
+        async def close_audio_debug(_app: web.Application) -> None:
+            audio_debug_recorder.close()
+
+        app.on_cleanup.append(close_audio_debug)
     return app
 
 
@@ -955,6 +1119,12 @@ def _header_int(request: web.Request, name: str) -> int:
         return int(value)
     except ValueError as exc:
         raise MediaIngressError(f"{name} must be an integer") from exc
+
+
+def _optional_header_int(request: web.Request, name: str) -> int | None:
+    if name not in request.headers:
+        return None
+    return _header_int(request, name)
 
 
 def _raise_http_error(error: ValueError) -> None:

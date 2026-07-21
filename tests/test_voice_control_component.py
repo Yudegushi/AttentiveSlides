@@ -48,6 +48,18 @@ class VoiceControlComponentContractTests(unittest.TestCase):
         self.assertIn("setPointerCapture", self.component)
         self.assertIn("releasePointerCapture", self.component)
 
+    def test_ptt_stop_waits_for_audio_queue_watermark(self) -> None:
+        for token in (
+            '"attentive-audio-produced:"',
+            '"attentive-audio-acked:"',
+            "async function waitForAudioDrain()",
+            "AUDIO_DRAIN_TIMEOUT_MS = 3000",
+            "throughSequence = await waitForAudioDrain()",
+            '"X-Attentive-Audio-Through-Sequence": String(throughSequence)',
+            "Audio upload did not finish; please retry this turn.",
+        ):
+            self.assertIn(token, self.component)
+
     def test_global_v_focus_modifier_repeat_and_parent_guards_exist(self) -> None:
         for token in (
             "window.parent.document",

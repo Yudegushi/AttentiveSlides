@@ -199,6 +199,22 @@ class SinglePortTransportTest(unittest.TestCase):
                 enqueue=False,
             )
 
+    def test_native_browser_sample_rate_is_accepted_and_preserved_in_queue(self):
+        self.ingress.start("session-a")
+        payload = np.arange(16, dtype="<i2").tobytes()
+
+        self.ingress.accept_audio_pcm(
+            "session-a",
+            payload,
+            timestamp=1.0,
+            sample_rate=48_000,
+            channels=1,
+        )
+
+        packet = self.source.audio_queue.get_nowait()
+        self.assertEqual(packet.sample_rate, 48_000)
+        self.assertEqual(packet.samples.reshape(-1).tobytes(), payload)
+
     def test_app_exposes_one_origin_media_routes(self):
         with warnings.catch_warnings():
             warnings.simplefilter("error", web.NotAppKeyWarning)
@@ -225,6 +241,15 @@ class SinglePortTransportTest(unittest.TestCase):
         self.assertIn("getUserMedia({ video: true, audio: true })", page)
         self.assertIn('fetch("/attentive-media/video"', page)
         self.assertIn('fetch("/attentive-media/audio"', page)
+        self.assertIn("function floatToS16(input)", page)
+        self.assertNotIn("downsampleToS16", page)
+        self.assertNotIn("audioInFlight", page)
+        self.assertIn("async function drainAudioQueue()", page)
+        self.assertIn("const AUDIO_BATCH_MAX_BYTES = 96 * 1024", page)
+        self.assertIn(
+            '"X-Media-Sample-Rate": String(Math.round(audioContext.sampleRate))',
+            page,
+        )
         self.assertNotIn("http://", page)
         self.assertNotIn("https://", page)
 
@@ -405,7 +430,11 @@ class LocalEyeTheiaCaptureContractTest(unittest.TestCase):
         self.assertIn('}, "image/jpeg", 0.65)', component)
         self.assertIn("}, 200)", component)
         self.assertIn("let videoInFlight = false", component)
-        self.assertIn("let audioInFlight = false", component)
+        self.assertIn("const audioQueue = []", component)
+        self.assertIn("const AUDIO_BATCH_MAX_BYTES = 96 * 1024", component)
+        self.assertIn("const AUDIO_QUEUE_MAX_BYTES = 192 * 1024", component)
+        self.assertIn("async function drainAudioQueue()", component)
+        self.assertNotIn("audioInFlight", component)
 
     def test_audio_processor_keeps_a_live_output_pull_path(self):
         component = self.component_source()
@@ -414,6 +443,19 @@ class LocalEyeTheiaCaptureContractTest(unittest.TestCase):
         self.assertIn("silentGain.connect(audioContext.destination)", component)
         self.assertIn("silentGain.gain.value = 1", component)
         self.assertNotIn("silentGain.gain.value = 0", component)
+
+    def test_audio_upload_keeps_native_rate_and_does_not_downsample_in_browser(self):
+        component = self.component_source()
+
+        self.assertIn("function floatToS16(input)", component)
+        self.assertNotIn("downsampleToS16", component)
+        self.assertIn(
+            '"X-Media-Sample-Rate": String(Math.round(audioContext.sampleRate))',
+            component,
+        )
+        self.assertIn('"X-Media-Audio-First-Sequence"', component)
+        self.assertIn('"X-Media-Audio-Last-Sequence"', component)
+        self.assertIn('"X-Media-Audio-Block-Count"', component)
 
     def test_packs_native_frames_for_loopback_eyetheia(self):
         component = self.component_source()
@@ -624,10 +666,84 @@ class VoiceTransportRouteTest(unittest.IsolatedAsyncioTestCase):
                 "X-Media-Channels": "1",
             },
         )
-        self.assertEqual(response.status, 200)
+        self.assertEqual(response.status, 204)
         self.assertEqual(self.voice.audio, [("session-a", payload)])
         self.assertTrue(self.source.audio_queue.empty())
         self.assertTrue(self.ingress.session_snapshot().audio_fresh)
+
+    async def test_native_48k_voice_audio_is_stream_resampled_before_ptt_runtime(self):
+        source = np.arange(4096, dtype="<i2").tobytes()
+        response = await self.client.post(
+            "/attentive-media/audio",
+            data=source,
+            headers={
+                SESSION_HEADER: "session-a",
+                "X-Media-Timestamp": "1.0",
+                "X-Media-Sample-Rate": "48000",
+                "X-Media-Channels": "1",
+                "X-Media-Audio-First-Sequence": "1",
+                "X-Media-Audio-Last-Sequence": "1",
+                "X-Media-Audio-Block-Count": "1",
+            },
+        )
+        stopped = await self.client.post(
+            "/attentive-voice/ptt/stop",
+            headers={
+                SESSION_HEADER: "session-a",
+                "X-Attentive-Audio-Through-Sequence": "1",
+            },
+        )
+
+        self.assertEqual(response.status, 204)
+        self.assertEqual(stopped.status, 200)
+        converted = b"".join(pcm for session_id, pcm in self.voice.audio)
+        self.assertTrue(all(session_id == "session-a" for session_id, _ in self.voice.audio))
+        self.assertEqual(len(converted) // 2, 1365)
+        self.assertTrue(self.source.audio_queue.empty())
+
+    async def test_audio_batches_require_contiguous_sequences_and_stop_watermark(self):
+        payload = np.arange(8192, dtype="<i2").tobytes()
+        accepted = await self.client.post(
+            "/attentive-media/audio",
+            data=payload,
+            headers={
+                SESSION_HEADER: "session-a",
+                "X-Media-Timestamp": "1.0",
+                "X-Media-Sample-Rate": "48000",
+                "X-Media-Channels": "1",
+                "X-Media-Audio-First-Sequence": "1",
+                "X-Media-Audio-Last-Sequence": "2",
+                "X-Media-Audio-Block-Count": "2",
+            },
+        )
+        premature_stop = await self.client.post(
+            "/attentive-voice/ptt/stop",
+            headers={
+                SESSION_HEADER: "session-a",
+                "X-Attentive-Audio-Through-Sequence": "3",
+            },
+        )
+        gap = await self.client.post(
+            "/attentive-media/audio",
+            data=np.arange(4096, dtype="<i2").tobytes(),
+            headers={
+                SESSION_HEADER: "session-a",
+                "X-Media-Timestamp": "1.2",
+                "X-Media-Sample-Rate": "48000",
+                "X-Media-Channels": "1",
+                "X-Media-Audio-First-Sequence": "4",
+                "X-Media-Audio-Last-Sequence": "4",
+                "X-Media-Audio-Block-Count": "1",
+            },
+        )
+        stats = await self.client.get("/attentive-media/stats")
+
+        self.assertEqual(accepted.status, 204)
+        self.assertEqual(premature_stop.status, 409)
+        self.assertEqual(gap.status, 400)
+        payload_stats = await stats.json()
+        self.assertEqual(payload_stats["audio_last_sequence"], 2)
+        self.assertEqual(payload_stats["audio_sequence_gaps"], 1)
 
     async def test_commands_state_and_websocket_reject_stale_sessions(self):
         stale = await self.client.post(

@@ -29,6 +29,10 @@
   const EYETHEIA_URL = "ws://127.0.0.1:8001/ws/predict_gaze";
   const DEBUG_CHANNEL_NAME = "attentiveslides-gaze-debug-v1";
   const MEDIA_SESSION_KEY = "attentive-media-session";
+  const AUDIO_PRODUCED_KEY_PREFIX = "attentive-audio-produced:";
+  const AUDIO_ACKED_KEY_PREFIX = "attentive-audio-acked:";
+  const AUDIO_BATCH_MAX_BYTES = 96 * 1024;
+  const AUDIO_QUEUE_MAX_BYTES = 192 * 1024;
   const debugChannel = typeof BroadcastChannel === "function"
     ? new BroadcastChannel(DEBUG_CHANNEL_NAME)
     : null;
@@ -56,7 +60,11 @@
   let running = false;
   let generation = null;
   let videoInFlight = false;
-  let audioInFlight = false;
+  const audioQueue = [];
+  let audioQueuedBytes = 0;
+  let audioDrainInFlight = false;
+  let audioSequence = 0;
+  let audioTransportFailed = false;
   let lastAudioStatusUpdate = 0;
   let faceMesh = null;
   let faceMeshTimer = null;
@@ -106,6 +114,22 @@
         globalThis.localStorage.removeItem(MEDIA_SESSION_KEY);
       }
     } catch (_) {}
+  }
+
+  function setAudioWatermark(prefix, sequence) {
+    try {
+      globalThis.localStorage.setItem(prefix + sessionId, String(sequence));
+    } catch (_) {}
+  }
+
+  function resetAudioTransport() {
+    audioQueue.length = 0;
+    audioQueuedBytes = 0;
+    audioDrainInFlight = false;
+    audioSequence = 0;
+    audioTransportFailed = false;
+    setAudioWatermark(AUDIO_PRODUCED_KEY_PREFIX, 0);
+    setAudioWatermark(AUDIO_ACKED_KEY_PREFIX, 0);
   }
 
   async function requireOk(response) {
@@ -516,11 +540,10 @@
     audioStatus.textContent = `Mic peak ${peak} · energy VAD: ${state}`;
   }
 
-  function downsampleToS16(input, sourceRate) {
-    const count = Math.max(1, Math.floor(input.length * 16000 / sourceRate));
-    const output = new Int16Array(count);
-    for (let index = 0; index < count; index += 1) {
-      const sample = input[Math.min(input.length - 1, Math.floor(index * sourceRate / 16000))];
+  function floatToS16(input) {
+    const output = new Int16Array(input.length);
+    for (let index = 0; index < input.length; index += 1) {
+      const sample = input[index];
       output[index] = Math.max(-1, Math.min(1, sample)) * 32767;
     }
     return output;
@@ -584,31 +607,80 @@
     }, 200);
   }
 
+  async function drainAudioQueue() {
+    if (!running || audioDrainInFlight || audioTransportFailed) return;
+    audioDrainInFlight = true;
+    try {
+      while (running && audioQueue.length > 0) {
+        let batchBytes = 0;
+        let batchCount = 0;
+        while (
+          batchCount < audioQueue.length
+          && batchBytes + audioQueue[batchCount].pcm.byteLength <= AUDIO_BATCH_MAX_BYTES
+        ) {
+          batchBytes += audioQueue[batchCount].pcm.byteLength;
+          batchCount += 1;
+        }
+        const batch = audioQueue.slice(0, batchCount);
+        const payload = new Uint8Array(batchBytes);
+        let offset = 0;
+        for (const item of batch) {
+          payload.set(new Uint8Array(item.pcm.buffer), offset);
+          offset += item.pcm.byteLength;
+        }
+        const first = batch[0];
+        const last = batch[batch.length - 1];
+        await requireOk(await fetch("/attentive-media/audio", {
+          method: "POST",
+          headers: headers({
+            "Content-Type": "audio/L16",
+            "X-Media-Timestamp": String(first.timestamp),
+            "X-Media-Sample-Rate": String(Math.round(audioContext.sampleRate)),
+            "X-Media-Channels": "1",
+            "X-Media-Audio-First-Sequence": String(first.sequence),
+            "X-Media-Audio-Last-Sequence": String(last.sequence),
+            "X-Media-Audio-Block-Count": String(batch.length),
+          }),
+          body: payload.buffer,
+        }));
+        audioQueue.splice(0, batchCount);
+        audioQueuedBytes -= batchBytes;
+        setAudioWatermark(AUDIO_ACKED_KEY_PREFIX, last.sequence);
+        noteTransportSuccess("Audio transport");
+      }
+    } catch (error) {
+      audioTransportFailed = true;
+      void stopCapture(true, "Audio transport failed; restart capture: " + error.message);
+    } finally {
+      audioDrainInFlight = false;
+    }
+  }
+
+  function enqueueAudio(pcm, timestamp) {
+    const sequence = ++audioSequence;
+    audioQueue.push({ pcm, timestamp, sequence });
+    audioQueuedBytes += pcm.byteLength;
+    setAudioWatermark(AUDIO_PRODUCED_KEY_PREFIX, sequence);
+    if (audioQueuedBytes > AUDIO_QUEUE_MAX_BYTES) {
+      audioTransportFailed = true;
+      void stopCapture(true, "Audio transport cannot keep up; restart capture.");
+      return;
+    }
+    void drainAudioQueue();
+  }
+
   async function startAudioPump() {
+    resetAudioTransport();
     audioContext = new AudioContext();
     mediaNode = audioContext.createMediaStreamSource(stream);
     processor = audioContext.createScriptProcessor(4096, 1, 1);
     silentGain = audioContext.createGain();
     silentGain.gain.value = 1;
     processor.onaudioprocess = (event) => {
-      if (!running || audioInFlight) return;
-      const pcm = downsampleToS16(event.inputBuffer.getChannelData(0), audioContext.sampleRate);
+      if (!running || audioTransportFailed) return;
+      const pcm = floatToS16(event.inputBuffer.getChannelData(0));
       updateAudioStatus(pcm);
-      audioInFlight = true;
-      fetch("/attentive-media/audio", {
-        method: "POST",
-        headers: headers({
-          "Content-Type": "audio/L16",
-          "X-Media-Timestamp": String(performance.now() / 1000),
-          "X-Media-Sample-Rate": "16000",
-          "X-Media-Channels": "1",
-        }),
-        body: pcm.buffer,
-      }).then(requireOk).then(() => {
-        noteTransportSuccess("Audio transport");
-      }).catch((error) => {
-        noteTransportFailure("Audio transport", error);
-      }).finally(() => { audioInFlight = false; });
+      enqueueAudio(pcm, performance.now() / 1000);
     };
     mediaNode.connect(processor);
     processor.connect(silentGain);
@@ -691,6 +763,9 @@
     silentGain = null;
     if (audioContext) await audioContext.close().catch(() => {});
     audioContext = null;
+    audioQueue.length = 0;
+    audioQueuedBytes = 0;
+    audioTransportFailed = false;
     audioStatus.textContent = "Mic level: capture stopped.";
     if (stream) stream.getTracks().forEach((track) => track.stop());
     stream = null;
