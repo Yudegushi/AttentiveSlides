@@ -833,6 +833,44 @@ class TestStreamlitAttentiveSlides(
             ],
         )
 
+    def test_claim_evidence_map_is_display_only(
+        self,
+    ) -> None:
+        renderer = self.function_source(
+            "_render_claim_evidence_map"
+        )
+        main_xai = self.function_source(
+            "_render_main_xai"
+        )
+
+        self.assertIn(
+            "_render_claim_evidence_map(answer)",
+            main_xai,
+        )
+        self.assertIn("Claim–Evidence Map", renderer)
+        self.assertIn(
+            "Structural provenance validation",
+            renderer,
+        )
+        self.assertIn(
+            "Semantic verification",
+            renderer,
+        )
+        self.assertIn("st.container", renderer)
+        self.assertIn("_render_records_table", renderer)
+
+        for forbidden in (
+            "st.session_state",
+            "st.button",
+            "st.expander",
+            "_navigate_to_slide",
+            "_retry_confirmed_turn",
+            "_confirm",
+            "_correct",
+            "st.rerun",
+        ):
+            self.assertNotIn(forbidden, renderer)
+
     def test_no_arrow_backed_tables(
         self,
     ) -> None:

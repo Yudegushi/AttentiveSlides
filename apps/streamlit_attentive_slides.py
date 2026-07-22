@@ -5263,6 +5263,210 @@ def _render_tutor_result(
     )
 
 
+def _render_claim_evidence_map(
+    answer: dict[str, Any],
+) -> None:
+    """Render joined claim evidence without workflow controls."""
+    claim_rows = answer.get(
+        "claim_evidence_map"
+    )
+
+    if not isinstance(claim_rows, list):
+        claim_rows = []
+
+    if not claim_rows:
+        claims = answer.get("claims")
+        sources = answer.get("sources")
+
+        if isinstance(claims, list) and claims:
+            st.markdown(
+                "##### Claim–source mapping"
+            )
+            _render_records_table(
+                claims,
+                hide_index=True,
+                width="stretch",
+            )
+
+        if isinstance(sources, list) and sources:
+            st.markdown(
+                "##### Available sources"
+            )
+            _render_records_table(
+                sources,
+                hide_index=True,
+                width="stretch",
+            )
+
+        if not claims and not sources:
+            st.info(
+                "Claim evidence is not available "
+                "for this turn."
+            )
+
+        return
+
+    st.markdown("##### Claim–Evidence Map")
+    st.caption(
+        "Structural provenance validation checks citation "
+        "and source consistency only. Semantic verification "
+        "is not performed."
+    )
+
+    for claim in claim_rows:
+        if not isinstance(claim, dict):
+            continue
+
+        claim_index = claim.get("claim_index")
+        support = claim.get("support") or "unknown"
+        claim_text = claim.get("claim") or (
+            "Claim text unavailable."
+        )
+
+        with st.container(border=True):
+            st.markdown(
+                f"###### Claim {claim_index or '—'} · "
+                f"{support}"
+            )
+            st.write(claim_text)
+
+            claim_metrics = st.columns(3)
+            claim_metrics[0].metric(
+                "Cited sources",
+                claim.get("cited_source_count", 0),
+            )
+            claim_metrics[1].metric(
+                "Source validation",
+                claim.get(
+                    "source_validation_status"
+                )
+                or "unavailable",
+            )
+            claim_metrics[2].metric(
+                "Semantic verification",
+                claim.get(
+                    "semantic_verification"
+                )
+                or "not_performed",
+            )
+
+            structural = claim.get(
+                "structural_validation"
+            )
+            if not isinstance(structural, dict):
+                structural = {}
+
+            st.caption(
+                "Structural validation: "
+                f"{structural.get('status') or 'unavailable'}"
+            )
+
+            warnings = claim.get("warnings")
+            if isinstance(warnings, list):
+                for warning in warnings:
+                    if warning:
+                        st.warning(str(warning))
+
+            evidence_rows = claim.get("sources")
+            if not isinstance(evidence_rows, list):
+                evidence_rows = []
+
+            if not evidence_rows:
+                st.caption(
+                    "No slide-source evidence rows apply "
+                    "to this claim."
+                )
+
+            for source in evidence_rows:
+                if not isinstance(source, dict):
+                    continue
+
+                with st.container(border=True):
+                    st.markdown(
+                        "**Evidence source:** "
+                        f"{source.get('source_id') or 'unavailable'}"
+                    )
+
+                    source_summary = [{
+                        "source_kind": source.get(
+                            "source_kind"
+                        ),
+                        "slide_id": source.get(
+                            "slide_id"
+                        ),
+                        "aoi_id": source.get("aoi_id"),
+                        "source_existence": source.get(
+                            "source_existence_status"
+                        ),
+                        "citation": source.get(
+                            "citation_status"
+                        ),
+                        "confirmed_target_match": source.get(
+                            "confirmed_target_match"
+                        ),
+                    }]
+                    _render_records_table(
+                        source_summary,
+                        hide_index=True,
+                        width="stretch",
+                    )
+
+                    excerpt = source.get(
+                        "text_preview"
+                    )
+                    if excerpt:
+                        st.markdown("**Source excerpt**")
+                        st.write(excerpt)
+
+                    metadata = source.get("metadata")
+                    if isinstance(metadata, dict) and metadata:
+                        st.markdown(
+                            "**Allowlisted source metadata**"
+                        )
+                        _render_records_table(
+                            [
+                                {
+                                    "field": key,
+                                    "value": value,
+                                }
+                                for key, value
+                                in metadata.items()
+                            ],
+                            hide_index=True,
+                            width="stretch",
+                        )
+
+                    source_structural = source.get(
+                        "structural_validation"
+                    )
+                    if not isinstance(
+                        source_structural,
+                        dict,
+                    ):
+                        source_structural = {}
+
+                    issues = source_structural.get(
+                        "issues"
+                    )
+                    if isinstance(issues, list) and issues:
+                        st.markdown(
+                            "**Structural validation issues**"
+                        )
+                        _render_records_table(
+                            issues,
+                            hide_index=True,
+                            width="stretch",
+                        )
+
+                    source_warnings = source.get(
+                        "warnings"
+                    )
+                    if isinstance(source_warnings, list):
+                        for warning in source_warnings:
+                            if warning:
+                                st.warning(str(warning))
+
+
 def _render_main_xai() -> None:
     """Render integrated, observable pipeline explanations."""
     integrated = build_integrated_pipeline_xai(
@@ -5540,27 +5744,7 @@ def _render_main_xai() -> None:
                 ]
             )
 
-        if answer["claims"]:
-            st.markdown(
-                "##### Claim–source mapping"
-            )
-
-            _render_records_table(
-                answer["claims"],
-                hide_index=True,
-                width="stretch",
-            )
-
-        if answer["sources"]:
-            st.markdown(
-                "##### Available sources"
-            )
-
-            _render_records_table(
-                answer["sources"],
-                hide_index=True,
-                width="stretch",
-            )
+        _render_claim_evidence_map(answer)
 
     with st.container(
         border=True

@@ -174,6 +174,67 @@ def make_llm_xai(
                     "Fixation maintains gaze "
                     "on one location."
                 ),
+                "metadata": {
+                    "aoi_type": "text",
+                    "bbox": [0.1, 0.2, 0.6, 0.7],
+                    "target_confidence": 0.9,
+                    "provider_request_id": "PRIVATE ID",
+                },
+                "warnings": [],
+            }
+        ],
+        "claim_evidence_map": [
+            {
+                "claim_index": 1,
+                "claim": (
+                    "Fixation maintains gaze "
+                    "on one location."
+                ),
+                "support": "direct",
+                "source_ids": [
+                    "slide_005_aoi_left_text"
+                ],
+                "cited_source_count": 1,
+                "all_sources_valid": valid,
+                "source_validation_status": (
+                    "valid" if valid else "invalid"
+                ),
+                "structural_validation": {
+                    "status": (
+                        "passed" if valid else "failed"
+                    ),
+                    "issues": [],
+                },
+                "semantic_verification": "not_performed",
+                "sources": [
+                    {
+                        "source_id": "slide_005_aoi_left_text",
+                        "source_kind": "confirmed_aoi",
+                        "slide_id": 5,
+                        "aoi_id": "left_text",
+                        "title": "Fixation",
+                        "cited": True,
+                        "text_preview": (
+                            "Fixation maintains gaze "
+                            "on one location."
+                        ),
+                        "metadata": {
+                            "aoi_type": "text",
+                            "bbox": [0.1, 0.2, 0.6, 0.7],
+                            "target_confidence": 0.9,
+                            "raw_media": "PRIVATE IMAGE",
+                        },
+                        "warnings": [],
+                        "source_existence_status": "found",
+                        "citation_status": "cited",
+                        "confirmed_target_match": "matching",
+                        "structural_validation": {
+                            "status": "passed",
+                            "issues": [],
+                        },
+                    }
+                ],
+                "warnings": [],
             }
         ],
         "validation": {
@@ -376,6 +437,55 @@ class TestIntegratedPipelineXAI(
             [
                 "slide_005_aoi_left_text"
             ],
+        )
+
+    def test_claim_evidence_map_and_safe_metadata_are_retained(
+        self,
+    ) -> None:
+        answer = build_complete_payload()[
+            "questions"
+        ]["answer"]
+
+        claim = answer["claim_evidence_map"][0]
+        source = claim["sources"][0]
+
+        self.assertEqual(
+            claim["semantic_verification"],
+            "not_performed",
+        )
+        self.assertEqual(
+            source["metadata"],
+            {
+                "aoi_type": "text",
+                "target_confidence": 0.9,
+                "bbox": [0.1, 0.2, 0.6, 0.7],
+            },
+        )
+        serialized = json.dumps(answer)
+        self.assertNotIn("PRIVATE IMAGE", serialized)
+        self.assertNotIn("PRIVATE ID", serialized)
+
+    def test_old_payload_without_claim_evidence_map_is_safe(
+        self,
+    ) -> None:
+        llm_xai = make_llm_xai()
+        llm_xai.pop("claim_evidence_map")
+        payload = build_integrated_pipeline_xai(
+            target_scope="Manual region",
+            manual_bbox=[0.1, 0.1, 0.9, 0.8],
+            selection_matches=[],
+            intent_result=make_intent_result(),
+            confirmed_interaction=make_confirmed_interaction(),
+            tutor_result=make_tutor_result(),
+            llm_xai=llm_xai,
+            cloud_text_allowed=True,
+        )
+
+        self.assertEqual(
+            payload["questions"]["answer"][
+                "claim_evidence_map"
+            ],
+            [],
         )
 
     def test_failed_validation_is_unsupported(

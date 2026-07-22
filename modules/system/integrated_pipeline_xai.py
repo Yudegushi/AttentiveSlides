@@ -13,6 +13,7 @@ prompts, API credentials, or provider request identifiers.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -509,6 +510,14 @@ def _build_answer_view(
         grounded_xai.get("sources")
     )
 
+    claim_evidence_map = (
+        _claim_evidence_rows(
+            grounded_xai.get(
+                "claim_evidence_map"
+            )
+        )
+    )
+
     if answer:
         explanation = (
             decision_summary
@@ -559,6 +568,9 @@ def _build_answer_view(
         ),
         "claims": claims,
         "sources": sources,
+        "claim_evidence_map": (
+            claim_evidence_map
+        ),
     }
 
 
@@ -1110,6 +1122,10 @@ def _claim_rows(
         ):
             source_ids = []
 
+        all_sources_valid = item.get(
+            "all_sources_valid"
+        )
+
         rows.append(
             {
                 "claim_index": (
@@ -1134,10 +1150,24 @@ def _claim_rows(
                     for source_id
                     in source_ids
                 ],
-                "all_sources_valid": bool(
-                    item.get(
-                        "all_sources_valid",
-                        False,
+                "all_sources_valid": (
+                    all_sources_valid
+                    if isinstance(
+                        all_sources_valid,
+                        bool,
+                    )
+                    else None
+                ),
+                "source_validation_status": (
+                    _safe_status(
+                        item.get(
+                            "source_validation_status"
+                        ),
+                        {
+                            "valid",
+                            "invalid",
+                            "not_applicable",
+                        },
                     )
                 ),
             }
@@ -1161,57 +1191,304 @@ def _source_rows(
         ):
             continue
 
-        rows.append(
+        rows.append(_public_source_row(item))
+
+    return rows
+
+
+def _claim_evidence_rows(
+    value: Any,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    rows: list[dict[str, Any]] = []
+
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+
+        source_ids = item.get("source_ids", [])
+        if not isinstance(source_ids, (list, tuple)):
+            source_ids = []
+
+        sources = item.get("sources", [])
+        if not isinstance(sources, list):
+            sources = []
+
+        all_sources_valid = item.get(
+            "all_sources_valid"
+        )
+
+        rows.append({
+            "claim_index": _public_index(
+                item.get("claim_index")
+            ),
+            "claim": (
+                _safe_text(item.get("claim"))
+                or None
+            ),
+            "support": (
+                _safe_status(
+                    item.get("support"),
+                    {"direct", "external", "insufficient"},
+                )
+            ),
+            "source_ids": [
+                str(source_id)
+                for source_id in source_ids
+            ],
+            "cited_source_count": max(
+                0,
+                _safe_int(
+                    item.get("cited_source_count")
+                ),
+            ),
+            "all_sources_valid": (
+                all_sources_valid
+                if isinstance(
+                    all_sources_valid,
+                    bool,
+                )
+                else None
+            ),
+            "source_validation_status": (
+                _safe_status(
+                    item.get(
+                        "source_validation_status"
+                    ),
+                    {
+                        "valid",
+                        "invalid",
+                        "not_applicable",
+                    },
+                )
+            ),
+            "structural_validation": (
+                _structural_validation_view(
+                    item.get(
+                        "structural_validation"
+                    )
+                )
+            ),
+            "semantic_verification": (
+                "not_performed"
+            ),
+            "sources": [
+                _evidence_source_row(source)
+                for source in sources
+                if isinstance(source, Mapping)
+            ],
+            "warnings": _warning_rows(
+                item.get("warnings")
+            ),
+        })
+
+    return rows
+
+
+def _public_source_row(
+    item: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "source_id": (
+            _safe_text(item.get("source_id"))
+            or None
+        ),
+        "source_kind": (
+            _safe_text(item.get("source_kind"))
+            or None
+        ),
+        "slide_id": item.get("slide_id"),
+        "aoi_id": (
+            _safe_text(item.get("aoi_id"))
+            or None
+        ),
+        "title": (
+            _safe_text(item.get("title"))
+            or None
+        ),
+        "cited": bool(item.get("cited", False)),
+        "text_preview": (
+            _safe_text(item.get("text_preview"))
+            or None
+        ),
+        "metadata": _source_metadata_view(
+            item.get("metadata")
+        ),
+        "warnings": _warning_rows(
+            item.get("warnings")
+        ),
+    }
+
+
+def _evidence_source_row(
+    item: Mapping[str, Any],
+) -> dict[str, Any]:
+    row = _public_source_row(item)
+    row.update({
+        "source_existence_status": (
+            _safe_status(
+                item.get(
+                    "source_existence_status"
+                ),
+                {"found", "missing"},
+            )
+        ),
+        "citation_status": (
+            _safe_status(
+                item.get("citation_status"),
+                {"cited", "not_cited"},
+            )
+        ),
+        "confirmed_target_match": (
+            _safe_status(
+                item.get(
+                    "confirmed_target_match"
+                ),
+                {
+                    "matching",
+                    "not_matching",
+                    "not_applicable",
+                },
+            )
+        ),
+        "structural_validation": (
+            _structural_validation_view(
+                item.get(
+                    "structural_validation"
+                )
+            )
+        ),
+    })
+    return row
+
+
+def _source_metadata_view(
+    value: Any,
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+
+    metadata: dict[str, Any] = {}
+
+    for key in (
+        "aoi_type",
+        "aoi_name",
+        "visual_type",
+        "provenance",
+    ):
+        text = _safe_text(value.get(key))
+        if text:
+            metadata[key] = text[:160]
+
+    for key in (
+        "target_confidence",
+        "confidence",
+    ):
+        number = _optional_normalized_float(
+            value.get(key)
+        )
+        if number is not None:
+            metadata[key] = number
+
+    bbox = _safe_bbox(value.get("bbox"))
+    if bbox is not None:
+        metadata["bbox"] = list(bbox)
+
+    return metadata
+
+
+def _structural_validation_view(
+    value: Any,
+) -> dict[str, Any]:
+    item = _as_mapping(value)
+    issues = item.get("issues", [])
+    if not isinstance(issues, list):
+        issues = []
+
+    return {
+        "status": _safe_status(
+            item.get("status"),
+            {"passed", "warning", "failed"},
+        ),
+        "issues": [
             {
+                "severity": _safe_status(
+                    issue.get("severity"),
+                    {"error", "warning"},
+                ),
+                "code": (
+                    _safe_text(issue.get("code"))
+                    or None
+                ),
+                "message": (
+                    _safe_text(issue.get("message"))
+                    or None
+                ),
+                "claim_index": _public_index(
+                    issue.get("claim_index")
+                ),
                 "source_id": (
                     _safe_text(
-                        item.get(
-                            "source_id"
-                        )
-                    )
-                    or None
-                ),
-                "source_kind": (
-                    _safe_text(
-                        item.get(
-                            "source_kind"
-                        )
-                    )
-                    or None
-                ),
-                "slide_id": item.get(
-                    "slide_id"
-                ),
-                "aoi_id": (
-                    _safe_text(
-                        item.get("aoi_id")
-                    )
-                    or None
-                ),
-                "title": (
-                    _safe_text(
-                        item.get("title")
-                    )
-                    or None
-                ),
-                "cited": bool(
-                    item.get(
-                        "cited",
-                        False,
-                    )
-                ),
-                "text_preview": (
-                    _safe_text(
-                        item.get(
-                            "text_preview"
-                        )
+                        issue.get("source_id")
                     )
                     or None
                 ),
             }
-        )
+            for issue in issues
+            if isinstance(issue, Mapping)
+        ],
+    }
 
-    return rows
+
+def _warning_rows(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+
+    return [
+        text[:240]
+        for item in value
+        if (text := _safe_text(item))
+    ]
+
+
+def _safe_status(
+    value: Any,
+    allowed: set[str],
+) -> str | None:
+    text = _safe_text(value)
+    return text if text in allowed else None
+
+
+def _public_index(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+
+    try:
+        index = int(value)
+    except (TypeError, ValueError):
+        return None
+
+    return index if index > 0 else None
+
+
+def _optional_normalized_float(
+    value: Any,
+) -> float | None:
+    if isinstance(value, bool):
+        return None
+
+    number = _optional_float(value)
+    if (
+        number is None
+        or not math.isfinite(number)
+        or number < 0.0
+        or number > 1.0
+    ):
+        return None
+
+    return number
 
 
 def _extract_interaction(
@@ -1276,7 +1553,9 @@ def _safe_bbox(
     )
 
     if any(
-        item < 0.0 or item > 1.0
+        not math.isfinite(item)
+        or item < 0.0
+        or item > 1.0
         for item in values
     ):
         return None

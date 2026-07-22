@@ -13,6 +13,8 @@ and operational telemetry suitable for Streamlit presentation.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from typing import Any
 
 from modules.tutor.grounded_tutor_agent import (
@@ -62,8 +64,21 @@ def build_xai_view_model(
     valid_source_ids = request.source_ids()
     cited_source_ids = response.cited_source_ids()
 
-    source_rows = [
-        {
+    source_rows: list[dict[str, Any]] = []
+
+    for source in request.sources:
+        metadata, metadata_warnings = (
+            _public_source_metadata(
+                source.metadata,
+                geometry_expected=bool(
+                    source.aoi_id
+                    or source.source_kind
+                    == "visual_observation"
+                ),
+            )
+        )
+
+        source_rows.append({
             "source_id": source.source_id,
             "source_kind": source.source_kind,
             "slide_id": source.slide_id,
@@ -76,9 +91,9 @@ def build_xai_view_model(
                 source.text,
                 source_preview_chars,
             ),
-        }
-        for source in request.sources
-    ]
+            "metadata": metadata,
+            "warnings": metadata_warnings,
+        })
 
     claim_rows = [
         {
@@ -86,9 +101,25 @@ def build_xai_view_model(
             "claim": claim.claim,
             "support": claim.support,
             "source_ids": list(claim.source_ids),
-            "all_sources_valid": all(
-                source_id in valid_source_ids
-                for source_id in claim.source_ids
+            "all_sources_valid": (
+                all(
+                    source_id in valid_source_ids
+                    for source_id in claim.source_ids
+                )
+                if claim.support == "direct"
+                else None
+            ),
+            "source_validation_status": (
+                (
+                    "valid"
+                    if all(
+                        source_id in valid_source_ids
+                        for source_id in claim.source_ids
+                    )
+                    else "invalid"
+                )
+                if claim.support == "direct"
+                else "not_applicable"
             ),
         }
         for claim_index, claim
@@ -140,6 +171,16 @@ def build_xai_view_model(
         "confirmed_aoi_id": request.confirmed_aoi_id,
         "sources": source_rows,
         "claims": claim_rows,
+        "claim_evidence_map": (
+            _build_claim_evidence_map(
+                claims=response.claims,
+                source_rows=source_rows,
+                issues=validation.issues,
+                confirmed_aoi_id=(
+                    request.confirmed_aoi_id
+                ),
+            )
+        ),
         "validation": {
             "is_valid": validation.is_valid,
             "citation_coverage": (
@@ -202,6 +243,351 @@ def build_xai_view_model(
     assert_public_xai_payload(payload)
 
     return payload
+
+
+def _build_claim_evidence_map(
+    *,
+    claims: Any,
+    source_rows: list[dict[str, Any]],
+    issues: Any,
+    confirmed_aoi_id: str | None,
+) -> list[dict[str, Any]]:
+    """Join public claims, cited sources, and structural issues."""
+    source_by_id = {
+        row["source_id"]: row
+        for row in source_rows
+    }
+    issues_by_claim: dict[
+        int,
+        list[dict[str, Any]],
+    ] = {}
+    confirmed_target_issues: list[
+        dict[str, Any]
+    ] = []
+
+    for issue in issues:
+        validator_index = getattr(
+            issue,
+            "claim_index",
+            None,
+        )
+        public_issue = {
+            "severity": getattr(
+                issue,
+                "severity",
+                None,
+            ),
+            "code": getattr(
+                issue,
+                "code",
+                None,
+            ),
+            "message": getattr(
+                issue,
+                "message",
+                None,
+            ),
+            "claim_index": (
+                validator_index + 1
+                if isinstance(
+                    validator_index,
+                    int,
+                )
+                else None
+            ),
+            "source_id": getattr(
+                issue,
+                "source_id",
+                None,
+            ),
+        }
+
+        if not isinstance(validator_index, int):
+            if public_issue["code"] in {
+                "missing_confirmed_aoi_source",
+                "confirmed_aoi_unused",
+                "confirmed_aoi_not_cited",
+            }:
+                confirmed_target_issues.append(
+                    public_issue
+                )
+            continue
+
+        issues_by_claim.setdefault(
+            validator_index,
+            [],
+        ).append(public_issue)
+
+    rows: list[dict[str, Any]] = []
+
+    for validator_index, claim in enumerate(claims):
+        public_claim_index = validator_index + 1
+        claim_issues = issues_by_claim.get(
+            validator_index,
+            [],
+        )
+        direct = claim.support == "direct"
+        if direct:
+            claim_issues = [
+                *claim_issues,
+                *confirmed_target_issues,
+            ]
+        evidence_rows: list[dict[str, Any]] = []
+
+        for source_id in claim.source_ids:
+            source = source_by_id.get(source_id)
+            source_issues = [
+                issue
+                for issue in claim_issues
+                if issue.get("source_id")
+                in {None, source_id}
+            ]
+
+            if source is None:
+                evidence_rows.append({
+                    "source_id": source_id,
+                    "source_kind": None,
+                    "slide_id": None,
+                    "aoi_id": None,
+                    "title": None,
+                    "cited": True,
+                    "text_preview": None,
+                    "metadata": {},
+                    "warnings": [
+                        "Cited source was not supplied "
+                        "to the tutor request."
+                    ],
+                    "source_existence_status": (
+                        "missing"
+                    ),
+                    "citation_status": "cited",
+                    "confirmed_target_match": (
+                        "not_applicable"
+                    ),
+                    "structural_validation": {
+                        "status": _issue_status(
+                            source_issues
+                        ),
+                        "issues": source_issues,
+                    },
+                })
+                continue
+
+            evidence = dict(source)
+            evidence.update({
+                "source_existence_status": "found",
+                "citation_status": "cited",
+                "confirmed_target_match": (
+                    "not_applicable"
+                    if confirmed_aoi_id is None
+                    else (
+                        "matching"
+                        if (
+                            source.get("source_kind")
+                            == "confirmed_aoi"
+                            and source.get("aoi_id")
+                            == confirmed_aoi_id
+                        )
+                        else "not_matching"
+                    )
+                ),
+                "structural_validation": {
+                    "status": _issue_status(
+                        source_issues
+                    ),
+                    "issues": source_issues,
+                },
+            })
+            evidence_rows.append(evidence)
+
+        if direct:
+            all_sources_valid = all(
+                source_id in source_by_id
+                for source_id in claim.source_ids
+            )
+            source_validation_status = (
+                "valid"
+                if all_sources_valid
+                else "invalid"
+            )
+            warnings = (
+                []
+                if all_sources_valid
+                else [
+                    "One or more cited sources are missing."
+                ]
+            )
+        else:
+            all_sources_valid = None
+            source_validation_status = (
+                "not_applicable"
+            )
+            warnings = [
+                "Slide-source citation does not apply "
+                f"to {claim.support} support."
+            ]
+
+        rows.append({
+            "claim_index": public_claim_index,
+            "claim": claim.claim,
+            "support": claim.support,
+            "source_ids": list(claim.source_ids),
+            "cited_source_count": len(
+                claim.source_ids
+            ),
+            "all_sources_valid": all_sources_valid,
+            "source_validation_status": (
+                source_validation_status
+            ),
+            "structural_validation": {
+                "status": _issue_status(
+                    claim_issues
+                ),
+                "issues": claim_issues,
+            },
+            "semantic_verification": (
+                "not_performed"
+            ),
+            "sources": evidence_rows,
+            "warnings": warnings,
+        })
+
+    return rows
+
+
+def _issue_status(
+    issues: list[dict[str, Any]],
+) -> str:
+    if any(
+        issue.get("severity") == "error"
+        for issue in issues
+    ):
+        return "failed"
+
+    if any(
+        issue.get("severity") == "warning"
+        for issue in issues
+    ):
+        return "warning"
+
+    return "passed"
+
+
+def _public_source_metadata(
+    value: Any,
+    *,
+    geometry_expected: bool,
+) -> tuple[dict[str, Any], list[str]]:
+    """Copy only validated metadata intended for public XAI."""
+    if not isinstance(value, Mapping):
+        return {}, ["Source metadata was unavailable."]
+
+    public: dict[str, Any] = {}
+    warnings: list[str] = []
+
+    for key in (
+        "aoi_type",
+        "aoi_name",
+        "visual_type",
+        "provenance",
+    ):
+        text = _metadata_text(value.get(key))
+        if text is not None:
+            public[key] = text
+
+    for key in (
+        "target_confidence",
+        "confidence",
+    ):
+        confidence = _normalized_number(
+            value.get(key)
+        )
+        if confidence is not None:
+            public[key] = confidence
+        elif key in value:
+            warnings.append(
+                f"Invalid {key} was omitted."
+            )
+
+    bbox = _normalized_bbox(
+        value.get("bbox")
+    )
+    if bbox is not None:
+        public["bbox"] = list(bbox)
+    elif "bbox" in value:
+        warnings.append(
+            "Invalid normalized bbox was omitted."
+        )
+    elif geometry_expected:
+        warnings.append(
+            "Normalized bbox is unavailable."
+        )
+
+    return public, warnings
+
+
+def _metadata_text(
+    value: Any,
+) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    normalized = " ".join(value.split())
+    if not normalized:
+        return None
+
+    return normalized[:160]
+
+
+def _normalized_number(
+    value: Any,
+) -> float | None:
+    if isinstance(value, bool):
+        return None
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    if (
+        not math.isfinite(number)
+        or number < 0.0
+        or number > 1.0
+    ):
+        return None
+
+    return number
+
+
+def _normalized_bbox(
+    value: Any,
+) -> tuple[float, float, float, float] | None:
+    if (
+        not isinstance(value, (list, tuple))
+        or len(value) != 4
+        or any(isinstance(item, bool) for item in value)
+    ):
+        return None
+
+    try:
+        bbox = tuple(float(item) for item in value)
+    except (TypeError, ValueError):
+        return None
+
+    if any(
+        not math.isfinite(item)
+        or item < 0.0
+        or item > 1.0
+        for item in bbox
+    ):
+        return None
+
+    x_min, y_min, x_max, y_max = bbox
+    if x_min >= x_max or y_min >= y_max:
+        return None
+
+    return bbox
 
 
 def assert_public_xai_payload(
