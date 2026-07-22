@@ -46,6 +46,9 @@ data/audio_eval/*
 # Generated completion-time analysis remains local.
 /analysis_time/
 
+# Local implementation planning note.
+/attentiveslides_xai_implementation_goal.md
+
 # Model downloads and converted artifacts must remain external. These rules
 # protect accidental project-local overrides without hiding source manifests.
 /models/
