@@ -4018,6 +4018,24 @@ def _resolve_current_intent(
             intent_input
         )
 
+        if (
+            intent_input.source == "typed_text"
+            and not resolution.recognized
+        ):
+            resolution = replace(
+                resolution,
+                intent_result=replace(
+                    resolution.intent_result,
+                    intent="explain",
+                    confidence=1.0,
+                ),
+                recognized=True,
+                provenance=(
+                    *resolution.provenance,
+                    "unrecognized typed text defaults to explain",
+                ),
+            )
+
     except Exception as exc:
         st.session_state[
             "main_intent_error"
@@ -5569,6 +5587,14 @@ def _render_voice_component(
     )
 
 
+def _on_live_transcript_change(widget_key: str) -> None:
+    """Copy an edited proposal transcript into canonical turn state."""
+    st.session_state["main_typed_command"] = str(
+        st.session_state.get(widget_key) or ""
+    )
+    _on_typed_command_change()
+
+
 def _current_voice_panel_view(
     resources: MainLiveResources,
 ) -> VoicePanelView:
@@ -5670,14 +5696,21 @@ def _render_unified_interaction(
         '<div class="as-field-label">Question / transcript</div>',
         unsafe_allow_html=True,
     )
-    st.text_area(
+    transcript_widget_key = (
+        f"main_live_transcript_editor_{proposal.interaction_id}"
+    )
+    if transcript_widget_key not in st.session_state:
+        st.session_state[transcript_widget_key] = proposal.transcript
+    transcript_value = st.text_area(
         "Speech transcript",
-        key="main_typed_command",
+        key=transcript_widget_key,
         height=88,
         placeholder="Your completed speech turn appears here.",
-        on_change=_on_typed_command_change,
+        on_change=_on_live_transcript_change,
+        args=(transcript_widget_key,),
         label_visibility="collapsed",
     )
+    st.session_state["main_typed_command"] = str(transcript_value or "")
     interaction_id = _confirmed_interaction_id()
     submission_started = bool(
         interaction_id
@@ -5687,14 +5720,15 @@ def _render_unified_interaction(
             st.session_state.get("main_last_generated_interaction_id"),
         }
     )
+    confirm_disabled = (
+        selected is None
+        or not str(st.session_state.get("main_typed_command") or "").strip()
+        or submission_started
+    )
     confirm_clicked = st.button(
         "ASK TUTOR",
         type="primary",
-        disabled=(
-            selected is None
-            or not st.session_state["main_typed_command"].strip()
-            or submission_started
-        ),
+        disabled=confirm_disabled,
         width="stretch",
         key="main_live_confirm_button",
     )

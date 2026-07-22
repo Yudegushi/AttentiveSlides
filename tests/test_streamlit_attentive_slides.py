@@ -995,6 +995,29 @@ class TestStreamlitAttentiveSlides(
             confirmation.index("or view.active_slide.slide_text.strip()"),
         )
 
+    def test_unrecognized_typed_text_falls_back_to_explain(self) -> None:
+        resolver = self.function_source("_resolve_current_intent")
+        self.assertIn('intent_input.source == "typed_text"', resolver)
+        self.assertIn("and not resolution.recognized", resolver)
+        self.assertIn('intent="explain"', resolver)
+        self.assertIn("unrecognized typed text defaults to explain", resolver)
+
+    def test_live_transcript_uses_proposal_scoped_widget_state(self) -> None:
+        interaction = self.function_source("_render_unified_interaction")
+        callback = self.function_source("_on_live_transcript_change")
+        self.assertIn("main_live_transcript_editor_", interaction)
+        self.assertIn("proposal.interaction_id", interaction)
+        self.assertIn("on_change=_on_live_transcript_change", interaction)
+        self.assertIn(
+            'st.session_state["main_typed_command"] = str(transcript_value or "")',
+            interaction,
+        )
+        self.assertIn(
+            'str(st.session_state.get("main_typed_command") or "").strip()',
+            interaction,
+        )
+        self.assertIn('st.session_state["main_typed_command"]', callback)
+
 
 if __name__ == "__main__":
     unittest.main()

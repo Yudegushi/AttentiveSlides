@@ -43,6 +43,14 @@ data/audio_eval/*
 /evaluation/reports/
 /evaluation/results/
 
+# Local paired-timing experiment and generated completion-time analysis.
+/analysis_time/
+/modules/system/timing_experiment.py
+/modules/ui/timing_submit_component/
+/tests/test_main_ui_timing_mode.py
+/tests/test_timing_experiment.py
+/tests/test_timing_ui_components.py
+
 # Model downloads and converted artifacts must remain external. These rules
 # protect accidental project-local overrides without hiding source manifests.
 /models/
