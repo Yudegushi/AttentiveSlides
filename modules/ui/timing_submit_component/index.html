@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { background: transparent; margin: 0; padding: 0; }
+    button {
+      background: var(--as-primary);
+      border: 1px solid var(--as-primary);
+      border-radius: 4px;
+      color: var(--as-primary-on);
+      cursor: pointer;
+      font: 700 12px/16px "IBM Plex Sans", "Noto Sans", sans-serif;
+      min-height: 40px;
+      padding: 8px 12px;
+      width: 100%;
+    }
+    button:disabled { cursor: not-allowed; opacity: .5; }
+    button:focus-visible { outline: 2px solid var(--as-primary); outline-offset: 2px; }
+  </style>
+</head>
+<body>
+  <button id="submit" type="button" disabled>ASK TUTOR</button>
+  <script>
+    (() => {
+      const PTT_TIMING_KEY = "attentive-timing-ptt";
+      const button = document.getElementById("submit");
+      let submitted = false;
+
+      function send(type, payload = {}) {
+        window.parent.postMessage({ isStreamlitMessage: true, type, ...payload }, "*");
+      }
+
+      function setValue(value) {
+        send("streamlit:setComponentValue", { value });
+      }
+
+      function eventId() {
+        if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+          return "submit-" + globalThis.crypto.randomUUID();
+        }
+        return "submit-" + String(performance.timeOrigin + performance.now())
+          + "-" + Math.random().toString(16).slice(2);
+      }
+
+      function pttTiming() {
+        try {
+          const value = JSON.parse(globalThis.localStorage.getItem(PTT_TIMING_KEY));
+          if (!value || typeof value !== "object") return {};
+          return {
+            timing_start_event_id: value.event_id,
+            timing_started_at_browser_ms: value.started_at_browser_ms,
+            timing_intermediate_at_browser_ms: value.released_at_browser_ms,
+          };
+        } catch (_) {
+          return {};
+        }
+      }
+
+      button.addEventListener("click", () => {
+        if (button.disabled || submitted) return;
+        submitted = true;
+        button.disabled = true;
+        setValue({
+          event: "timing_submit",
+          event_id: eventId(),
+          submitted_at_browser_ms: performance.timeOrigin + performance.now(),
+          ...pttTiming(),
+        });
+      });
+
+      function render(args) {
+        submitted = false;
+        const tokens = args.palette_tokens || {};
+        for (const [name, value] of Object.entries(tokens)) {
+          if (typeof value === "string" && value.trim()) {
+            document.documentElement.style.setProperty("--as-" + name, value);
+          }
+        }
+        button.textContent = String(args.label || "ASK TUTOR");
+        button.disabled = Boolean(args.disabled);
+        send("streamlit:setFrameHeight", { height: 42 });
+      }
+
+      window.addEventListener("message", (event) => {
+        if (event.data && event.data.type === "streamlit:render") {
+          render(event.data.args || {});
+        }
+      });
+      send("streamlit:componentReady", { apiVersion: 1 });
+      send("streamlit:setFrameHeight", { height: 42 });
+    })();
+  </script>
+</body>
+</html>

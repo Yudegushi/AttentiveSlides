@@ -99,6 +99,9 @@
       let liveCandidateAoiId = null;
       let serverMatchedAoiId = null;
       let aoiElements = new Map();
+      let drawStartedAtBrowserMs = null;
+      let drawFinishedAtBrowserMs = null;
+      let drawTimingEventId = null;
 
       function send(type, payload = {}) {
         window.parent.postMessage({
@@ -320,6 +323,11 @@
           manual_bbox: manualBBox,
           browser_timestamp_ms: performance.timeOrigin + performance.now(),
         };
+        if (drawStartedAtBrowserMs !== null && drawTimingEventId) {
+          payload.timing_event_id = drawTimingEventId;
+          payload.timing_started_at_browser_ms = drawStartedAtBrowserMs;
+          payload.timing_intermediate_at_browser_ms = drawFinishedAtBrowserMs;
+        }
         const signature = geometrySignature(payload);
         if (signature !== lastReportedSignature) {
           revision += 1;
@@ -380,6 +388,15 @@
       function beginDraw(event) {
         if (!args.drawing_enabled) return;
         event.preventDefault();
+        if (args.timing_enabled) {
+          drawStartedAtBrowserMs = performance.timeOrigin + performance.now();
+          drawFinishedAtBrowserMs = null;
+          drawTimingEventId = (
+            globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
+              ? "selection-" + globalThis.crypto.randomUUID()
+              : "selection-" + String(drawStartedAtBrowserMs) + "-" + Math.random().toString(16).slice(2)
+          );
+        }
         slide.setPointerCapture(event.pointerId);
         dragStart = normalizedPoint(event);
         drawManual(dragStart);
@@ -394,6 +411,9 @@
       function endDraw(event) {
         if (!dragStart) return;
         event.preventDefault();
+        if (args.timing_enabled) {
+          drawFinishedAtBrowserMs = performance.timeOrigin + performance.now();
+        }
         const end = normalizedPoint(event);
         const bbox = [
           Math.min(dragStart.x, end.x),
@@ -446,7 +466,12 @@
           && requestedRevision === lastRequestedRevision;
         args = nextArgs;
         revision = Math.max(revision, requestedRevision);
-        if (!preserveManualBBox) manualBBox = null;
+        if (!preserveManualBBox) {
+          manualBBox = null;
+          drawStartedAtBrowserMs = null;
+          drawFinishedAtBrowserMs = null;
+          drawTimingEventId = null;
+        }
         lastRequestedRevision = requestedRevision;
         root.innerHTML = "";
 

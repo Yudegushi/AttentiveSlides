@@ -109,6 +109,18 @@ from modules.system.main_ui_state import (
     reset_main_turn_state,
     write_main_interaction_once,
 )
+from modules.system.timing_experiment import (
+    BASELINE as TIMING_BASELINE,
+    FULL_SYSTEM as TIMING_FULL_SYSTEM,
+    TimingExperimentLogger,
+    advance_timing_condition,
+    build_timing_experiment_defaults,
+    build_timing_record,
+    capture_timing_start,
+    mark_timing_recorded,
+    new_timing_session_id,
+    reset_timing_trial,
+)
 from modules.system.manual_confirmation import (
     assess_manual_confirmation,
     build_manual_confirmation_preview,
@@ -170,6 +182,7 @@ from modules.ui.learner_state_status import (
     build_learner_state_view,
 )
 from modules.ui.voice_control_component import render_voice_control_component
+from modules.ui.timing_submit_component import render_timing_submit_component
 from modules.ui.design_tokens import (
     normalize_palette_id,
     palette_semantic,
@@ -205,6 +218,26 @@ MAIN_INTERACTION_LOG_PATH = (
     RUNTIME_DATA_DIR
     / "logs"
     / "main_interactions.jsonl"
+)
+
+TIMING_EXPERIMENT_AVAILABLE = (
+    os.environ.get("ATTENTIVE_TIMING_EXPERIMENT_AVAILABLE", "0") == "1"
+)
+
+TIMING_EXPERIMENT_LOG_DIR = (
+    RUNTIME_DATA_DIR
+    / "timing_experiments"
+)
+
+TIMING_SAVED_PREFERENCE_KEYS = (
+    "main_interaction_flow",
+    "main_speech_mode",
+    "main_live_master_enabled",
+    "main_answer_audio_enabled",
+    "main_target_scope",
+    "main_target_scope_control",
+    "main_target_scope_explicit",
+    "main_confirmation_policy",
 )
 
 
@@ -520,6 +553,11 @@ def _main_interaction_logger() -> InteractionLogger:
     return InteractionLogger(MAIN_INTERACTION_LOG_PATH)
 
 
+@st.cache_resource
+def _timing_experiment_logger() -> TimingExperimentLogger:
+    return TimingExperimentLogger(TIMING_EXPERIMENT_LOG_DIR)
+
+
 def _has_uploaded_deck() -> bool:
     """Return whether the learner has loaded a real PDF deck."""
     return bool(st.session_state.get("main_uploaded_deck_id"))
@@ -768,6 +806,7 @@ def _initialize_global_state() -> None:
         **build_main_conversation_defaults(),
         **build_main_live_defaults(),
         **build_main_review_defaults(),
+        **build_timing_experiment_defaults(),
     }
 
     for key, value in defaults.items():
@@ -838,6 +877,21 @@ def _normalized_range(
 
 def _normalize_widget_state() -> None:
     """Normalize persisted state before widgets are instantiated."""
+    st.session_state["main_timing_enabled"] = bool(
+        TIMING_EXPERIMENT_AVAILABLE
+        and st.session_state.get("main_timing_enabled", False)
+    )
+    if not isinstance(st.session_state.get("main_timing_logged_submit_ids"), list):
+        st.session_state["main_timing_logged_submit_ids"] = []
+    if not isinstance(st.session_state.get("main_timing_seen_start_event_ids"), list):
+        st.session_state["main_timing_seen_start_event_ids"] = []
+    if not isinstance(st.session_state.get("main_timing_seen_submit_event_ids"), list):
+        st.session_state["main_timing_seen_submit_event_ids"] = []
+    if st.session_state.get("main_timing_condition") not in {
+        TIMING_FULL_SYSTEM,
+        TIMING_BASELINE,
+    }:
+        st.session_state["main_timing_condition"] = TIMING_FULL_SYSTEM
     st.session_state[
         "main_slide_width_percent"
     ] = normalize_main_slide_width_percent(
@@ -1007,6 +1061,7 @@ def _normalize_widget_state() -> None:
         raw_target_scope.casefold(),
         "Whole slide",
     )
+    _apply_timing_condition_preferences()
 
 
 @st.cache_data(show_spinner=False)
@@ -1073,6 +1128,165 @@ def _on_live_preference_change() -> None:
         # Empty string is a one-rerun retry sentinel so a deliberate Omni
         # selection is not mistaken for an unacknowledged fallback.
         st.session_state["main_voice_status_message"] = ""
+
+
+def _timing_mode_enabled() -> bool:
+    return bool(
+        TIMING_EXPERIMENT_AVAILABLE
+        and st.session_state.get("main_timing_enabled", False)
+    )
+
+
+def _apply_timing_condition_preferences() -> None:
+    """Lock only the inputs required by the active experiment condition."""
+    if not _timing_mode_enabled():
+        return
+    condition = st.session_state.get("main_timing_condition")
+    st.session_state["main_interaction_flow"] = "one_turn"
+    st.session_state["main_voice_engine"] = "single_turn"
+    st.session_state["main_history_enabled"] = False
+    st.session_state["main_speech_mode"] = "push_to_talk"
+    st.session_state["main_answer_audio_enabled"] = False
+    if condition == TIMING_FULL_SYSTEM:
+        st.session_state["main_live_master_enabled"] = True
+        st.session_state["main_target_scope"] = "Whole slide"
+        st.session_state["main_target_scope_control"] = "Whole slide"
+        st.session_state["main_target_scope_explicit"] = False
+    else:
+        st.session_state["main_live_master_enabled"] = False
+        st.session_state["main_target_scope"] = "Manual region"
+        st.session_state["main_target_scope_control"] = "Manual region"
+        st.session_state["main_target_scope_explicit"] = True
+
+
+def _on_timing_mode_change() -> None:
+    """Enter or leave the opt-in experiment without losing normal settings."""
+    enabled = bool(st.session_state.get("main_timing_enabled", False))
+    if enabled:
+        saved = {
+            key: st.session_state.get(key)
+            for key in TIMING_SAVED_PREFERENCE_KEYS
+        }
+        fresh = build_timing_experiment_defaults()
+        fresh["main_timing_enabled"] = True
+        fresh["main_timing_session_id"] = new_timing_session_id()
+        fresh["main_timing_saved_preferences"] = saved
+        fresh["main_timing_runtime_reset_needed"] = True
+        st.session_state.update(fresh)
+        _apply_timing_condition_preferences()
+        return
+    saved = st.session_state.get("main_timing_saved_preferences")
+    if isinstance(saved, dict):
+        for key in TIMING_SAVED_PREFERENCE_KEYS:
+            if key in saved:
+                st.session_state[key] = saved[key]
+    fresh = build_timing_experiment_defaults()
+    fresh["main_timing_runtime_reset_needed"] = True
+    st.session_state.update(fresh)
+
+
+def _prepare_timing_condition(
+    resources: MainLiveResources,
+    *,
+    advance: bool,
+) -> None:
+    if advance:
+        advance_timing_condition(st.session_state)
+    else:
+        reset_timing_trial(st.session_state)
+    _reset_live_turn(resources)
+    _apply_timing_condition_preferences()
+
+
+def _render_timing_sidebar(resources: MainLiveResources) -> None:
+    """Render the compact paired-trial controller and local export."""
+    if not _timing_mode_enabled():
+        return
+    condition = st.session_state["main_timing_condition"]
+    pair_index = int(st.session_state["main_timing_pair_index"])
+    full_system = condition == TIMING_FULL_SYSTEM
+    st.sidebar.markdown(
+        '<div class="as-field-label">Timing experiment</div>',
+        unsafe_allow_html=True,
+    )
+    st.sidebar.caption(
+        f"Pair {pair_index} · "
+        + ("FULL SYSTEM / PTT" if full_system else "BASELINE / SELECT REGION")
+    )
+    st.sidebar.caption(
+        "Press and hold V, then submit after recognition."
+        if full_system
+        else "Begin by drawing a region, then type and submit."
+    )
+    started = st.session_state.get("main_timing_started_at_browser_ms")
+    completed = bool(st.session_state.get("main_timing_completed"))
+    if completed:
+        record = st.session_state.get("main_timing_last_record") or {}
+        st.sidebar.success(
+            f"Saved · {float(record.get('duration_ms', 0.0)) / 1000.0:.2f} s"
+        )
+        if not full_system:
+            rows = _timing_experiment_logger().read(
+                str(st.session_state.get("main_timing_session_id") or "")
+            )
+            paired = next(
+                (
+                    row
+                    for row in reversed(rows)
+                    if row.get("pair_index") == pair_index
+                    and row.get("condition") == TIMING_FULL_SYSTEM
+                ),
+                None,
+            )
+            if paired is not None:
+                same_slide = paired.get("slide_id") == record.get("slide_id")
+                same_aoi = paired.get("confirmed_aoi_id") == record.get("confirmed_aoi_id")
+                paired_text = " ".join(
+                    str(paired.get("question_text") or "").casefold().split()
+                )
+                current_text = " ".join(
+                    str(record.get("question_text") or "").casefold().split()
+                )
+                same_text = paired_text == current_text
+                st.sidebar.caption(
+                    "Pair check · "
+                    f"slide {'match' if same_slide else 'DIFF'} · "
+                    f"AOI {'match' if same_aoi else 'DIFF'} · "
+                    f"text {'match' if same_text else 'differs'}"
+                )
+        if st.sidebar.button(
+            "CONTINUE TO BASELINE" if full_system else "START NEXT PAIR",
+            key="main_timing_advance_button",
+            width="stretch",
+        ):
+            _prepare_timing_condition(resources, advance=True)
+            st.rerun()
+    else:
+        if full_system and started is None:
+            st.sidebar.caption("Timer ready · PTT timing is saved with ASK TUTOR")
+        else:
+            st.sidebar.caption("Timer active" if started is not None else "Timer waiting")
+        if st.sidebar.button(
+            "RESET CURRENT TRIAL",
+            key="main_timing_reset_trial_button",
+            width="stretch",
+        ):
+            _prepare_timing_condition(resources, advance=False)
+            st.rerun()
+    if st.session_state.get("main_timing_error"):
+        st.sidebar.error(str(st.session_state["main_timing_error"]))
+    session_id = str(st.session_state.get("main_timing_session_id") or "")
+    path = _timing_experiment_logger().path_for(session_id)
+    st.sidebar.caption(f"Session {session_id}")
+    if path.exists():
+        st.sidebar.download_button(
+            "DOWNLOAD JSONL",
+            data=path.read_bytes(),
+            file_name=path.name,
+            mime="application/x-ndjson",
+            width="stretch",
+            key="main_timing_download_button",
+        )
 
 
 def _on_interaction_flow_change() -> None:
@@ -1401,6 +1615,20 @@ def _render_live_controls(
         '<div class="as-eyebrow">RUNTIME CONFIGURATION</div>',
         unsafe_allow_html=True,
     )
+    if st.session_state.get("main_timing_runtime_reset_needed"):
+        _reset_live_turn(resources)
+        _apply_timing_condition_preferences()
+        st.session_state["main_timing_runtime_reset_needed"] = False
+    if TIMING_EXPERIMENT_AVAILABLE:
+        st.sidebar.checkbox(
+            "Timing experiment mode",
+            key="main_timing_enabled",
+            on_change=_on_timing_mode_change,
+            disabled=not mutations_enabled,
+            help="Runs paired PTT and manual-region trials without calling the tutor LLM.",
+        )
+        _render_timing_sidebar(resources)
+    timing_enabled = _timing_mode_enabled()
 
     st.sidebar.markdown(
         '<div class="as-field-label">Conversation flow</div>',
@@ -1416,7 +1644,7 @@ def _render_live_controls(
         }[value],
         key="main_interaction_flow",
         on_change=_on_interaction_flow_change,
-        disabled=not mutations_enabled,
+        disabled=not mutations_enabled or timing_enabled,
         label_visibility="collapsed",
         width="stretch",
     )
@@ -1433,7 +1661,7 @@ def _render_live_controls(
         ),
         key="main_speech_mode",
         on_change=_on_live_preference_change,
-        disabled=not mutations_enabled,
+        disabled=not mutations_enabled or timing_enabled,
         label_visibility="collapsed",
         width="stretch",
     )
@@ -1446,7 +1674,7 @@ def _render_live_controls(
         "Enable camera and microphone",
         key="main_live_master_enabled",
         on_change=_on_live_preference_change,
-        disabled=not mutations_enabled,
+        disabled=not mutations_enabled or timing_enabled,
         help=(
             "Media remains local to the runtime; only confirmed text may be "
             "sent to the cloud tutor. Typed input remains available when off."
@@ -1462,7 +1690,7 @@ def _render_live_controls(
         "Answer audio",
         key="main_answer_audio_enabled",
         on_change=_on_live_preference_change,
-        disabled=not mutations_enabled,
+        disabled=not mutations_enabled or timing_enabled,
     )
 
     st.sidebar.markdown(
@@ -1522,7 +1750,7 @@ def _render_live_controls(
             ],
             key="main_confirmation_policy",
             on_change=_on_live_preference_change,
-            disabled=not mutations_enabled,
+            disabled=not mutations_enabled or timing_enabled,
         )
         if (
             st.session_state["main_confirmation_policy"]
@@ -1535,7 +1763,7 @@ def _render_live_controls(
                 step=0.01,
                 key="main_auto_confirm_threshold",
                 on_change=_on_live_preference_change,
-                disabled=not mutations_enabled,
+                disabled=not mutations_enabled or timing_enabled,
             )
 
     deck_id = resources.bound_deck_id
@@ -2848,6 +3076,7 @@ def _render_target_column(
         horizontal=True,
         key="main_target_scope_control",
         on_change=_on_target_scope_change,
+        disabled=_timing_mode_enabled(),
         label_visibility="collapsed",
     )
 
@@ -2944,6 +3173,17 @@ def _render_unified_answer(
     resources: MainLiveResources,
 ) -> None:
     """Render every tutor mode through the same compact output route."""
+    if _timing_mode_enabled():
+        record = st.session_state.get("main_timing_last_record")
+        if isinstance(record, dict) and st.session_state.get("main_timing_completed"):
+            st.success(
+                "Timing saved locally · "
+                f"{float(record.get('duration_ms', 0.0)) / 1000.0:.2f} s · "
+                "Tutor LLM was not called."
+            )
+        else:
+            st.info("Complete the current timing trial; tutor generation is disabled.")
+        return
     _render_generation_status(view, resources)
     realtime_answer = (
         str(resources.voice.snapshot().get("answer_text") or "").strip()
@@ -3286,6 +3526,8 @@ def _reset_turn_state() -> None:
 
 
 def _reset_live_turn(resources: MainLiveResources) -> None:
+    if _timing_mode_enabled():
+        reset_timing_trial(st.session_state)
     _reset_turn_state()
     resources.inbox.clear()
     st.session_state[
@@ -3438,8 +3680,10 @@ def _render_current_slide_llm_aoi_action(
     clicked = st.button(
         label,
         key="main_process_current_llm_aoi",
-        disabled=disabled or not configured,
+        disabled=disabled or not configured or _timing_mode_enabled(),
     )
+    if _timing_mode_enabled():
+        st.caption("LLM AOI generation is disabled during timing experiments")
     if not configured:
         st.caption("LLM AOI is not configured")
     if st.session_state.get("main_llm_aoi_error"):
@@ -3571,6 +3815,18 @@ def _render_slide_workspace(
         ):
             _render_builtin_slide_placeholder()
             return
+        viewport_component_key = (
+            "main_slide_viewport_"
+            f"{view.deck_id}_{view.active_slide_id}"
+        )
+        if _timing_mode_enabled():
+            viewport_component_key += (
+                "_timing_"
+                f"{st.session_state.get('main_timing_session_id')}_"
+                f"{st.session_state.get('main_timing_pair_index')}_"
+                f"{st.session_state.get('main_timing_condition')}_"
+                f"{st.session_state.get('main_timing_trial_revision')}"
+            )
         payload = render_slide_viewport(
             deck_id=view.deck_id,
             slide=view.active_slide,
@@ -3581,6 +3837,10 @@ def _render_slide_workspace(
                 )
             ),
             drawing_enabled=drawing_enabled,
+            timing_enabled=(
+                _timing_mode_enabled()
+                and st.session_state.get("main_timing_condition") == TIMING_BASELINE
+            ),
             show_aoi_overlay=bool(
                 st.session_state["main_show_aoi_overlay"]
             ),
@@ -3600,10 +3860,7 @@ def _render_slide_workspace(
                     dict,
                 )
             ),
-            key=(
-                "main_slide_viewport_"
-                f"{view.deck_id}_{view.active_slide_id}"
-            ),
+            key=viewport_component_key,
         )
     if payload is None:
         _render_static_slide(view.active_slide)
@@ -3630,6 +3887,26 @@ def _render_slide_workspace(
         return
     if event != "manual_selection":
         return
+
+    if (
+        _timing_mode_enabled()
+        and st.session_state.get("main_timing_condition") == TIMING_BASELINE
+        and payload.get("timing_event_id")
+        and payload.get("timing_started_at_browser_ms") is not None
+    ):
+        try:
+            capture_timing_start(
+                st.session_state,
+                event_id=str(payload["timing_event_id"]),
+                started_at_browser_ms=float(payload["timing_started_at_browser_ms"]),
+                intermediate_at_browser_ms=(
+                    float(payload["timing_intermediate_at_browser_ms"])
+                    if payload.get("timing_intermediate_at_browser_ms") is not None
+                    else None
+                ),
+            )
+        except (TypeError, ValueError) as exc:
+            st.session_state["main_timing_error"] = str(exc)
 
     try:
         geometry = parse_component_geometry(
@@ -4080,6 +4357,7 @@ def _render_quick_intent_actions() -> None:
             ),
             help=action.description,
             width="stretch",
+            disabled=_timing_mode_enabled(),
             on_click=_apply_quick_intent,
             args=(
                 action.intent,
@@ -4101,6 +4379,7 @@ def _render_quick_intent_actions() -> None:
             ),
             help=action.description,
             width="stretch",
+            disabled=_timing_mode_enabled(),
             on_click=_apply_quick_intent,
             args=(
                 action.intent,
@@ -4120,6 +4399,88 @@ def _switch_to_whole_slide() -> None:
     st.session_state[
         "main_confirmation_target_choice"
     ] = "whole_slide"
+
+
+def _render_timing_submit(
+    *,
+    label: str,
+    disabled: bool,
+    key: str,
+) -> dict[str, object] | None:
+    payload = render_timing_submit_component(
+        label=label,
+        disabled=disabled or bool(st.session_state.get("main_timing_completed")),
+        palette_tokens=palette_semantic(st.session_state["main_ui_palette"]),
+        key=key,
+    )
+    if not isinstance(payload, dict) or payload.get("event") != "timing_submit":
+        return None
+    submit_id = str(payload.get("event_id") or "")
+    seen = st.session_state.setdefault("main_timing_seen_submit_event_ids", [])
+    if not submit_id or submit_id in seen:
+        return None
+    seen.append(submit_id)
+    return payload
+
+
+def _record_timing_submission(
+    view: MainUIViewModel,
+    payload: dict[str, object],
+) -> bool:
+    """Persist a completed trial without entering tutor generation."""
+    condition = st.session_state.get("main_timing_condition")
+    proposal = st.session_state.get("main_live_proposal")
+    target_source = (
+        str(proposal.gaze_source)
+        if condition == TIMING_FULL_SYSTEM
+        and isinstance(proposal, LiveInteractionProposal)
+        else "manual_selection"
+    )
+    try:
+        if (
+            condition == TIMING_FULL_SYSTEM
+            and st.session_state.get("main_timing_started_at_browser_ms") is None
+        ):
+            capture_timing_start(
+                st.session_state,
+                event_id=str(payload.get("timing_start_event_id") or ""),
+                started_at_browser_ms=float(
+                    payload["timing_started_at_browser_ms"]
+                ),
+                intermediate_at_browser_ms=float(
+                    payload["timing_intermediate_at_browser_ms"]
+                ),
+            )
+        record = build_timing_record(
+            st.session_state,
+            submit_event_id=str(payload.get("event_id") or ""),
+            submitted_at_browser_ms=float(payload["submitted_at_browser_ms"]),
+            deck_id=view.deck_id,
+            slide_id=view.active_slide_id,
+            question_text=str(st.session_state.get("main_typed_command") or ""),
+            original_transcript=(
+                str(st.session_state.get("main_live_original_transcript") or "")
+                if condition == TIMING_FULL_SYSTEM
+                else None
+            ),
+            confirmed_aoi_id=(
+                str(st.session_state.get("main_confirmed_aoi_id"))
+                if st.session_state.get("main_confirmed_aoi_id") is not None
+                else None
+            ),
+            target_source=target_source,
+            manual_bbox=(
+                st.session_state.get("main_manual_bbox")
+                if condition == TIMING_BASELINE
+                else None
+            ),
+        )
+        _timing_experiment_logger().append(record)
+        mark_timing_recorded(st.session_state, record)
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        st.session_state["main_timing_error"] = f"{type(exc).__name__}: {exc}"
+        return False
+    return True
 
 
 def _render_confirmation_panel(
@@ -4221,30 +4582,38 @@ def _render_confirmation_panel(
         st.columns(3)
     )
 
-    confirm_clicked = confirm_column.button(
-        "Ask tutor",
-        type="primary",
-        disabled=(
-            not assessment.ready
-            or (
-                st.session_state[
-                    "main_confirmed"
-                ]
-                and st.session_state.get(
-                    "main_confirmed_aoi_id"
-                )
-                == selected_target_id
-            )
-        ),
-        width="stretch",
-        key="main_confirm_button",
+    confirm_disabled = (
+        not assessment.ready
+        or (
+            not _timing_mode_enabled()
+            and st.session_state["main_confirmed"]
+            and st.session_state.get("main_confirmed_aoi_id") == selected_target_id
+        )
     )
+    timing_submit_payload = None
+    if _timing_mode_enabled():
+        with confirm_column:
+            timing_submit_payload = _render_timing_submit(
+                label="ASK TUTOR",
+                disabled=confirm_disabled,
+                key="main_timing_manual_submit",
+            )
+        confirm_clicked = timing_submit_payload is not None
+    else:
+        confirm_clicked = confirm_column.button(
+            "Ask tutor",
+            type="primary",
+            disabled=confirm_disabled,
+            width="stretch",
+            key="main_confirm_button",
+        )
 
     whole_column.button(
         "Use whole slide",
         disabled=(
             selected_target_id
             == "whole_slide"
+            or _timing_mode_enabled()
         ),
         width="stretch",
         key="main_use_whole_slide_button",
@@ -4309,6 +4678,9 @@ def _render_confirmation_panel(
             st.session_state[
                 "main_confirmation_error"
             ] = None
+            if timing_submit_payload is not None:
+                if _record_timing_submission(view, timing_submit_payload):
+                    st.rerun()
 
     if st.session_state[
         "main_confirmation_error"
@@ -4699,6 +5071,8 @@ def _generate_confirmed_turn(
     resources: MainLiveResources,
 ) -> bool:
     """Generate one confirmed turn while preserving existing backend gates."""
+    if _timing_mode_enabled():
+        return False
     if not _study_mutations_enabled(resources):
         return False
     confirmed_wrapper = st.session_state.get("main_confirmed_interaction")
@@ -4808,6 +5182,8 @@ def _render_generation_status(
     view: MainUIViewModel,
     resources: MainLiveResources,
 ) -> None:
+    if _timing_mode_enabled():
+        return
     assessment = assess_tutor_generation(
         st.session_state["main_confirmed_interaction"],
         cloud_text_allowed=st.session_state["main_cloud_text_allowed"],
@@ -5579,6 +5955,10 @@ def _render_voice_component(
         flow=str(st.session_state["main_interaction_flow"]),
         speech_mode=str(st.session_state["main_speech_mode"]),
         study_paused=lifecycle.status in {"paused", "finish_pending"},
+        timing_enabled=(
+            _timing_mode_enabled()
+            and st.session_state.get("main_timing_condition") == TIMING_FULL_SYSTEM
+        ),
         palette_tokens=palette_semantic(st.session_state["main_ui_palette"]),
         key=(
             "main_voice_control_"
@@ -5725,13 +6105,22 @@ def _render_unified_interaction(
         or not str(st.session_state.get("main_typed_command") or "").strip()
         or submission_started
     )
-    confirm_clicked = st.button(
-        "ASK TUTOR",
-        type="primary",
-        disabled=confirm_disabled,
-        width="stretch",
-        key="main_live_confirm_button",
-    )
+    timing_submit_payload = None
+    if _timing_mode_enabled():
+        timing_submit_payload = _render_timing_submit(
+            label="ASK TUTOR",
+            disabled=confirm_disabled,
+            key="main_timing_live_submit",
+        )
+        confirm_clicked = timing_submit_payload is not None
+    else:
+        confirm_clicked = st.button(
+            "ASK TUTOR",
+            type="primary",
+            disabled=confirm_disabled,
+            width="stretch",
+            key="main_live_confirm_button",
+        )
     if confirm_clicked and selected is not None:
         try:
             if not st.session_state["main_confirmed"]:
@@ -5742,7 +6131,10 @@ def _render_unified_interaction(
                     selected_option=selected,
                     automatic=False,
                 )
-            _maybe_generate_confirmed_turn(view, resources)
+            if timing_submit_payload is not None:
+                _record_timing_submission(view, timing_submit_payload)
+            else:
+                _maybe_generate_confirmed_turn(view, resources)
         except Exception as exc:
             _invalidate_confirmation()
             st.session_state["main_confirmation_error"] = (
@@ -5840,6 +6232,10 @@ def _render_lower_workspace(
         with heading:
             output_ready = bool(
                 st.session_state.get("main_tutor_result")
+                or (
+                    _timing_mode_enabled()
+                    and st.session_state.get("main_timing_completed")
+                )
                 or (
                     st.session_state.get("main_interaction_flow") == "realtime"
                     and str(live_resources.voice.snapshot().get("answer_text") or "").strip()

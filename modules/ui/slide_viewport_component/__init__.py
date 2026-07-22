@@ -23,6 +23,7 @@ def render_slide_viewport(
     slide: MainUISlide,
     layout_revision: int,
     drawing_enabled: bool,
+    timing_enabled: bool = False,
     show_aoi_overlay: bool,
     display_width_percent: int,
     palette_tokens: Mapping[str, str],
@@ -62,6 +63,7 @@ def render_slide_viewport(
             for aoi in slide.aois
         ],
         drawing_enabled=bool(drawing_enabled),
+        timing_enabled=bool(timing_enabled),
         show_aoi_overlay=bool(show_aoi_overlay),
         clear_server_match=bool(clear_server_match),
         display_width_percent=bounded_width,

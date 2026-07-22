@@ -118,6 +118,7 @@
       const MEDIA_SESSION_KEY = "attentive-media-session";
       const AUDIO_PRODUCED_KEY_PREFIX = "attentive-audio-produced:";
       const AUDIO_ACKED_KEY_PREFIX = "attentive-audio-acked:";
+      const PTT_TIMING_KEY = "attentive-timing-ptt";
       const AUDIO_DRAIN_TIMEOUT_MS = 3000;
       const FRAME_HEIGHT = 150;
       const SEMANTIC_KEYS = [
@@ -141,6 +142,7 @@
         flow: "one_turn",
         speech_mode: "push_to_talk",
         study_paused: false,
+        timing_enabled: false,
         palette_tokens: {},
       };
       let socket = null;
@@ -149,6 +151,8 @@
       let pttStartPromise = null;
       let pttPointerId = null;
       let keyboardPttActive = false;
+      let pttTimingStartedAt = null;
+      let pttTimingEventId = null;
       let continuousSignature = null;
       let continuousPaused = false;
       let audioContext = null;
@@ -169,6 +173,17 @@
 
       function send(type, payload = {}) {
         window.parent.postMessage({ isStreamlitMessage: true, type, ...payload }, "*");
+      }
+
+      function browserTimestampMs() {
+        return performance.timeOrigin + performance.now();
+      }
+
+      function timingEventId(prefix) {
+        if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+          return prefix + "-" + globalThis.crypto.randomUUID();
+        }
+        return prefix + "-" + String(browserTimestampMs()) + "-" + Math.random().toString(16).slice(2);
       }
 
       function setFrameHeight() {
@@ -400,6 +415,10 @@
       async function startPtt(event) {
         if (event) event.preventDefault();
         if (args.study_paused || args.speech_mode !== "push_to_talk" || pttActive || pttStartPromise) return;
+        if (args.timing_enabled) {
+          pttTimingStartedAt = browserTimestampMs();
+          pttTimingEventId = timingEventId("ptt");
+        }
         if (event && Number.isInteger(event.pointerId) && ptt.setPointerCapture) {
           pttPointerId = event.pointerId;
           try { ptt.setPointerCapture(event.pointerId); } catch (_) {}
@@ -416,6 +435,8 @@
           })();
           handleCommandResponse(await pttStartPromise);
         } catch (error) {
+          pttTimingStartedAt = null;
+          pttTimingEventId = null;
           pttActive = false;
           keyboardPttActive = false;
           cancel.hidden = true;
@@ -442,6 +463,7 @@
       async function stopPtt(event) {
         if (event) event.preventDefault();
         if (!pttActive && !pttStartPromise) return;
+        const pttReleasedAt = browserTimestampMs();
         const pendingStart = pttStartPromise;
         pttActive = false;
         keyboardPttActive = false;
@@ -463,7 +485,20 @@
           handleCommandResponse(await command("/attentive-voice/ptt/stop", {
             "X-Attentive-Audio-Through-Sequence": String(throughSequence),
           }));
+          if (args.timing_enabled && pttTimingStartedAt !== null && pttTimingEventId) {
+            try {
+              globalThis.localStorage.setItem(PTT_TIMING_KEY, JSON.stringify({
+                event_id: pttTimingEventId,
+                started_at_browser_ms: pttTimingStartedAt,
+                released_at_browser_ms: pttReleasedAt,
+              }));
+            } catch (_) {}
+          }
+          pttTimingStartedAt = null;
+          pttTimingEventId = null;
         } catch (error) {
+          pttTimingStartedAt = null;
+          pttTimingEventId = null;
           updateStatus("Voice input needs attention", error.message, 0, true);
         }
       }

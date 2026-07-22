@@ -1,4 +1,4 @@
-"""Streamlit wrapper for same-origin voice controls without device capture."""
+"""Browser-timestamped submit button for the opt-in timing experiment."""
 
 from __future__ import annotations
 
@@ -13,30 +13,20 @@ from modules.ui.design_tokens import SEMANTIC_KEYS
 _COMPONENT: Any = None
 
 
-def render_voice_control_component(
+def render_timing_submit_component(
     *,
-    engine: str,
-    flow: str,
-    speech_mode: str,
-    study_paused: bool,
-    timing_enabled: bool = False,
+    label: str,
+    disabled: bool,
     palette_tokens: Mapping[str, str],
     key: str,
 ) -> dict[str, object] | None:
     missing = set(SEMANTIC_KEYS) - set(palette_tokens)
     if missing:
         raise ValueError("palette_tokens must contain every semantic token")
-    safe_tokens = {
-        name: str(palette_tokens[name])
-        for name in SEMANTIC_KEYS
-    }
     value: Any = _component()(
-        engine=str(engine),
-        flow=str(flow),
-        speech_mode=str(speech_mode),
-        study_paused=bool(study_paused),
-        timing_enabled=bool(timing_enabled),
-        palette_tokens=safe_tokens,
+        label=str(label),
+        disabled=bool(disabled),
+        palette_tokens={name: str(palette_tokens[name]) for name in SEMANTIC_KEYS},
         default={"event": "mounted"},
         key=key,
     )
@@ -47,7 +37,7 @@ def _component() -> Any:
     global _COMPONENT
     if _COMPONENT is None:
         _COMPONENT = components.declare_component(
-            "attentive_voice_control",
+            "attentive_timing_submit",
             path=str(Path(__file__).parent),
         )
     return _COMPONENT
