@@ -11,6 +11,30 @@ from modules.gaze_lock_test.contracts import LockedGazeTarget
 
 
 SCHEMA_VERSION = "gaze-lock-test.v1"
+ALLOWED_LOG_FIELDS = frozenset(
+    {
+        "schema_version",
+        "session_id",
+        "request_id",
+        "lock_id",
+        "deck_id",
+        "slide_id",
+        "aoi_id",
+        "aoi_label",
+        "layout_revision",
+        "target_confidence",
+        "stable_duration_sec",
+        "clicked_at_browser_ms",
+        "question_text",
+        "intent_source",
+        "target_source",
+        "response_status",
+        "provider",
+        "model",
+        "latency_ms",
+        "completed_at_server",
+    }
+)
 
 
 def gaze_lock_log_path(
@@ -89,6 +113,12 @@ class GazeLockTestLogger:
             raise ValueError("log row requires request_id.")
         if row.get("schema_version") != SCHEMA_VERSION:
             raise ValueError("log row has an unsupported schema_version.")
+        unexpected = set(row) - ALLOWED_LOG_FIELDS
+        if unexpected:
+            raise ValueError(
+                "log row contains non-allowlisted fields: "
+                + ", ".join(sorted(str(name) for name in unexpected))
+            )
         with self._lock:
             if request_id in self._logged_request_ids:
                 return False

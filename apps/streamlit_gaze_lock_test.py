@@ -377,6 +377,7 @@ def main() -> None:
                 "The deck, slide, AOIs, layout, or camera session changed. "
                 "Acquire the gaze target again."
             )
+            st.rerun()
 
         if st.button(
             "RETARGET",

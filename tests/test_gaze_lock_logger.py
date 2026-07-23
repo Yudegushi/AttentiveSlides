@@ -87,6 +87,23 @@ class GazeLockLoggerTest(unittest.TestCase):
             self.assertFalse(GazeLockTestLogger(path).append_once(row))
             self.assertEqual(len(path.read_text(encoding="utf-8").splitlines()), 1)
 
+    def test_writer_rejects_non_allowlisted_raw_gaze_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "session.jsonl"
+            row = build_gaze_lock_log_row(
+                session_id="session-a",
+                request_id="request-a",
+                target=make_target(),
+                question_text="Explain this",
+                tutor_response={"status": "ok"},
+                completed_at_server="now",
+            )
+            row["x_css"] = 150.0
+
+            with self.assertRaisesRegex(ValueError, "non-allowlisted"):
+                GazeLockTestLogger(path).append_once(row)
+            self.assertFalse(path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

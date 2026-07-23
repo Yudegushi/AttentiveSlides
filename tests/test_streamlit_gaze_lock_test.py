@@ -62,6 +62,19 @@ class StreamlitGazeLockTestModeTest(unittest.TestCase):
         self.assertIn("gaze_lock_log_path(", self.source)
         self.assertIn('"gaze_lock_session_id"', self.source)
 
+    def test_scope_invalidation_reruns_to_clear_the_old_highlight(self):
+        invalidation_start = self.source.index(
+            "if target is not None and not lock_is_current(target, scope):"
+        )
+        invalidation_end = self.source.index(
+            "\n\n        if st.button(",
+            invalidation_start,
+        )
+        invalidation = self.source[invalidation_start:invalidation_end]
+
+        self.assertIn("_clear_lock(increment_control=True)", invalidation)
+        self.assertIn("st.rerun()", invalidation)
+
 
 if __name__ == "__main__":
     unittest.main()
