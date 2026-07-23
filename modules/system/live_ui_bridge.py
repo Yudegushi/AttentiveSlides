@@ -23,6 +23,15 @@ from modules.system.runtime_state import RuntimeState
 from modules.system.slide_geometry import SlideViewportGeometry, ViewportBBox
 
 
+_PUBLIC_GAZE_SOURCES = {
+    "cloud_grid",
+    "eyetheia_local",
+    "voice_locked_target",
+}
+_MAX_PUBLIC_EVIDENCE_ITEMS = 6
+_MAX_PUBLIC_EVIDENCE_LENGTH = 240
+
+
 @dataclass(frozen=True)
 class LiveInteractionProposal:
     interaction_id: str
@@ -38,6 +47,7 @@ class LiveInteractionProposal:
     alternatives: tuple[TargetCandidate, ...] = ()
     original_speech_transcript: str = ""
     gaze_source: str = "cloud_grid"
+    sensing_evidence: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,17 +95,35 @@ def resolve_grid_target(
     geometry: SlideViewportGeometry,
     aois: Sequence[AOI],
 ) -> LiveInteractionProposal:
+    mismatch_reason = None
     if (
         proposal.deck_id != geometry.deck_id
         or proposal.slide_id != geometry.slide_id
-        or proposal.layout_revision not in {-1, geometry.layout_revision}
-        or proposal.gaze_grid not in _GRID_INDEX
     ):
+        mismatch_reason = (
+            "gaze-grid evidence discarded: deck or slide mismatch"
+        )
+    elif proposal.layout_revision not in {
+        -1,
+        geometry.layout_revision,
+    }:
+        mismatch_reason = (
+            "gaze-grid evidence discarded: layout revision mismatch"
+        )
+    elif proposal.gaze_grid not in _GRID_INDEX:
+        mismatch_reason = (
+            "gaze-grid evidence unavailable: invalid or unknown grid"
+        )
+    if mismatch_reason is not None:
         return replace(
             proposal,
             predicted_aoi_id=None,
             target_confidence=0.0,
             alternatives=(),
+            sensing_evidence=_append_public_evidence(
+                proposal.sensing_evidence,
+                mismatch_reason,
+            ),
         )
 
     row, column = _GRID_INDEX[proposal.gaze_grid]
@@ -260,6 +288,10 @@ def build_live_interaction_input(
             "layout_revision": proposal.layout_revision,
             "predicted_aoi_id": proposal.predicted_aoi_id,
             "confirmed_aoi_id": selected_aoi_id,
+            "gaze_source": _public_gaze_source(proposal.gaze_source),
+            "sensing_evidence": list(
+                _bounded_public_evidence(proposal.sensing_evidence)
+            ),
         },
     )
 
@@ -322,7 +354,10 @@ class ProposalTurnRunner:
                     for item in gaze.alternative_targets
                 ),
                 original_speech_transcript=transcript,
-                gaze_source=aggregated.gaze_source,
+                gaze_source=_public_gaze_source(aggregated.gaze_source),
+                sensing_evidence=_bounded_public_evidence(
+                    aggregated.evidence
+                ),
             )
         )
         return ProposalTurnOutcome(pending_confirmation=False)
@@ -394,6 +429,40 @@ class MainUILiveRuntime:
 
 def _normalized_type(value: str) -> str:
     return value.strip().casefold().replace("-", "_").replace(" ", "_")
+
+
+def _public_gaze_source(value: object) -> str:
+    normalized = str(value).strip().casefold()
+    return (
+        normalized
+        if normalized in _PUBLIC_GAZE_SOURCES
+        else "unknown"
+    )
+
+
+def _bounded_public_evidence(values: object) -> tuple[str, ...]:
+    if not isinstance(values, (list, tuple)):
+        return ()
+    evidence: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        normalized = " ".join(value.split())
+        if normalized:
+            evidence.append(normalized[:_MAX_PUBLIC_EVIDENCE_LENGTH])
+        if len(evidence) >= _MAX_PUBLIC_EVIDENCE_ITEMS:
+            break
+    return tuple(evidence)
+
+
+def _append_public_evidence(
+    values: object,
+    note: str,
+) -> tuple[str, ...]:
+    existing = _bounded_public_evidence(values)
+    return _bounded_public_evidence(
+        (*existing[: _MAX_PUBLIC_EVIDENCE_ITEMS - 1], note)
+    )
 
 
 def _area(rect: ViewportBBox) -> float:

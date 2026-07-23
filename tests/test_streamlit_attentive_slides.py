@@ -871,6 +871,77 @@ class TestStreamlitAttentiveSlides(
         ):
             self.assertNotIn(forbidden, renderer)
 
+    def test_multimodal_evidence_is_display_only(self) -> None:
+        renderer = self.function_source(
+            "_render_multimodal_evidence"
+        )
+        main_xai = self.function_source("_render_main_xai")
+        snapshot = self.function_source(
+            "_safe_live_proposal_xai_snapshot"
+        )
+
+        self.assertIn(
+            "_render_multimodal_evidence(",
+            main_xai,
+        )
+        self.assertIn(
+            "Multimodal Evidence Decomposition",
+            renderer,
+        )
+        self.assertIn("Read-only alternatives", renderer)
+        self.assertIn("Fusion status", renderer)
+        self.assertIn("st.container", renderer)
+        self.assertIn("_render_records_table", renderer)
+        self.assertIn(".metric(", renderer)
+
+        for forbidden in (
+            "st.session_state",
+            "st.button",
+            "st.expander",
+            "_navigate_to_slide",
+            "_retry_confirmed_turn",
+            "_store_live_confirmation",
+            "_confirm",
+            "_correct",
+            "st.rerun",
+        ):
+            self.assertNotIn(forbidden, renderer)
+
+        self.assertNotIn("__dict__", snapshot)
+        for field in (
+            "predicted_aoi_id",
+            "target_confidence",
+            "alternatives",
+            "gaze_grid",
+            "gaze_source",
+            "stable_duration_sec",
+            "layout_revision",
+            "sensing_evidence",
+        ):
+            self.assertIn(f'"{field}"', snapshot)
+        for forbidden in (
+            "interaction_id",
+            "transcript",
+            "raw_media",
+            "landmarks",
+            "request_id",
+            "prompt",
+        ):
+            self.assertNotIn(f'"{forbidden}"', snapshot)
+
+    def test_layout_discard_reasons_are_retained_for_xai(self) -> None:
+        consumer = self.function_source("_consume_live_proposal")
+
+        self.assertIn(
+            "current point-gaze evidence discarded",
+            consumer,
+        )
+        self.assertIn(
+            "gaze-grid evidence discarded",
+            consumer,
+        )
+        self.assertIn("sensing_evidence=", consumer)
+
     def test_no_arrow_backed_tables(
         self,
     ) -> None:

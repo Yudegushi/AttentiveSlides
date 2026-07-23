@@ -5467,6 +5467,151 @@ def _render_claim_evidence_map(
                                 st.warning(str(warning))
 
 
+def _safe_live_proposal_xai_snapshot(
+    proposal: Any,
+) -> dict[str, Any] | None:
+    """Copy only public proposal fields needed by display-only XAI."""
+    if not isinstance(proposal, LiveInteractionProposal):
+        return None
+    return {
+        "predicted_aoi_id": proposal.predicted_aoi_id,
+        "target_confidence": proposal.target_confidence,
+        "alternatives": [
+            {
+                "aoi_id": candidate.aoi_id,
+                "score": candidate.score,
+                "evidence": list(candidate.evidence),
+            }
+            for candidate in proposal.alternatives
+        ],
+        "gaze_grid": proposal.gaze_grid,
+        "gaze_source": proposal.gaze_source,
+        "stable_duration_sec": proposal.stable_duration_sec,
+        "layout_revision": proposal.layout_revision,
+        "sensing_evidence": list(proposal.sensing_evidence),
+    }
+
+
+def _render_multimodal_evidence(
+    decomposition: Any,
+) -> None:
+    """Render sanitized modality records without workflow controls."""
+    if not isinstance(decomposition, dict):
+        st.info("Multimodal target evidence is not available.")
+        return
+
+    st.markdown("#### Multimodal Evidence Decomposition")
+    st.caption(
+        str(
+            decomposition.get("summary")
+            or (
+                "Observable target evidence is shown by modality. "
+                "No weighted fusion was performed."
+            )
+        )
+    )
+
+    final = decomposition.get("final")
+    if not isinstance(final, dict):
+        final = {}
+    final_columns = st.columns(3)
+    final_columns[0].metric(
+        "Proposed target",
+        final.get("proposed_aoi_id") or "unavailable",
+    )
+    final_columns[1].metric(
+        "Confirmed target",
+        final.get("confirmed_aoi_id") or "pending",
+    )
+    final_columns[2].metric(
+        "Learner correction",
+        "Yes" if final.get("corrected_by_learner") else "No",
+    )
+
+    resolver_summary = decomposition.get("resolver_summary")
+    if resolver_summary:
+        st.write(str(resolver_summary))
+
+    modalities = decomposition.get("modalities")
+    if not isinstance(modalities, list):
+        modalities = []
+    public_rows = [
+        {
+            "modality": row.get("modality"),
+            "status": row.get("status"),
+            "available": row.get("available"),
+            "candidate_aoi_id": row.get("candidate_aoi_id"),
+            "confidence": row.get("confidence"),
+        }
+        for row in modalities
+        if isinstance(row, dict)
+    ]
+    if public_rows:
+        _render_records_table(
+            public_rows,
+            hide_index=True,
+            width="stretch",
+        )
+    else:
+        st.info("No modality records are available for this turn.")
+
+    for row in modalities:
+        if not isinstance(row, dict):
+            continue
+        evidence = row.get("evidence")
+        if not isinstance(evidence, list):
+            evidence = []
+        metrics = row.get("metrics")
+        if not isinstance(metrics, dict):
+            metrics = {}
+        discarded_reason = row.get("discarded_reason")
+        unavailable_reason = row.get("unavailable_reason")
+        if not evidence and not metrics and not (
+            discarded_reason or unavailable_reason
+        ):
+            continue
+        with st.container(border=True):
+            st.markdown(
+                f"##### {row.get('modality') or 'unknown modality'}"
+            )
+            if metrics:
+                _render_records_table(
+                    [
+                        {
+                            "metric": key,
+                            "value": value,
+                        }
+                        for key, value in metrics.items()
+                    ],
+                    hide_index=True,
+                    width="stretch",
+                )
+            for item in evidence:
+                if item:
+                    st.write(f"- {item}")
+            if discarded_reason:
+                st.warning(
+                    f"Discarded evidence: {discarded_reason}"
+                )
+            if unavailable_reason:
+                st.caption(
+                    f"Unavailable: {unavailable_reason}"
+                )
+
+    alternatives = decomposition.get("alternatives")
+    if isinstance(alternatives, list) and alternatives:
+        st.markdown("##### Read-only alternatives")
+        _render_records_table(
+            alternatives,
+            hide_index=True,
+            width="stretch",
+        )
+    st.caption(
+        "Fusion status: "
+        f"{decomposition.get('fusion') or 'not_performed'}"
+    )
+
+
 def _render_main_xai() -> None:
     """Render integrated, observable pipeline explanations."""
     integrated = build_integrated_pipeline_xai(
@@ -5512,6 +5657,9 @@ def _render_main_xai() -> None:
                 "main_cloud_text_allowed",
                 False,
             )
+        ),
+        live_proposal=_safe_live_proposal_xai_snapshot(
+            st.session_state.get("main_live_proposal")
         ),
     )
 
@@ -5638,6 +5786,11 @@ def _render_main_xai() -> None:
                 hide_index=True,
                 width="stretch",
             )
+
+    with st.container(border=True):
+        _render_multimodal_evidence(
+            integrated.get("multimodal_evidence")
+        )
 
     with st.container(
         border=True
@@ -6018,6 +6171,13 @@ def _consume_live_proposal(
                 predicted_aoi_id=None,
                 target_confidence=0.0,
                 alternatives=(),
+                sensing_evidence=(
+                    *raw.sensing_evidence[:5],
+                    (
+                        "current point-gaze evidence discarded: "
+                        "layout mismatch or geometry unavailable"
+                    ),
+                ),
             )
         )
     elif geometry is None:
@@ -6026,6 +6186,13 @@ def _consume_live_proposal(
             predicted_aoi_id=None,
             target_confidence=0.0,
             alternatives=(),
+            sensing_evidence=(
+                *raw.sensing_evidence[:5],
+                (
+                    "gaze-grid evidence discarded: "
+                    "current layout geometry unavailable"
+                ),
+            ),
         )
     else:
         proposal = resolve_grid_target(

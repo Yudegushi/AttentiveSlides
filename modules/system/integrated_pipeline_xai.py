@@ -36,6 +36,7 @@ def build_integrated_pipeline_xai(
     tutor_result: Mapping[str, Any] | None,
     llm_xai: Mapping[str, Any] | None,
     cloud_text_allowed: bool,
+    live_proposal: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one sanitized explanation for the complete pipeline."""
     interaction_wrapper = _as_mapping(
@@ -57,6 +58,12 @@ def build_integrated_pipeline_xai(
     confirmation = _as_mapping(
         interaction.get("confirmation")
     )
+
+    interaction_metadata = _as_mapping(
+        interaction.get("metadata")
+    )
+
+    proposal = _as_mapping(live_proposal)
 
     resolved_intent_payload = _as_mapping(
         intent_result
@@ -128,6 +135,25 @@ def build_integrated_pipeline_xai(
         validation=validation,
     )
 
+    multimodal_evidence = _build_multimodal_evidence(
+        target_view=target_view,
+        intent_view=intent_view,
+        target=target,
+        confirmation=confirmation,
+        interaction_metadata=interaction_metadata,
+        interaction_wrapper=interaction_wrapper,
+        live_proposal=proposal,
+        selection_matches=selection_matches,
+    )
+
+    privacy_view = _build_multimodal_privacy_view(
+        interaction=interaction,
+        intent_view=intent_view,
+        multimodal_evidence=multimodal_evidence,
+        cloud_text_allowed=cloud_text_allowed,
+        tutor=tutor,
+    )
+
     payload = {
         "schema_version": "1.0",
         "pipeline_status": (
@@ -142,25 +168,8 @@ def build_integrated_pipeline_xai(
             "reliability": reliability_view,
         },
         "pipeline": pipeline,
-        "privacy": {
-            "interaction_mode": "manual",
-            "camera_enabled": False,
-            "microphone_enabled": False,
-            "raw_biometrics_collected": False,
-            "cloud_text_allowed": (
-                bool(cloud_text_allowed)
-            ),
-            "cloud_tutor_called": bool(
-                tutor
-            ),
-            "raw_provider_response_exposed": (
-                False
-            ),
-            "prompt_messages_exposed": False,
-            "internal_reasoning_exposed": (
-                False
-            ),
-        },
+        "multimodal_evidence": multimodal_evidence,
+        "privacy": privacy_view,
         "corrective_actions": (
             _build_corrective_actions(
                 target_view=target_view,
@@ -181,6 +190,675 @@ def build_integrated_pipeline_xai(
     )
 
     return payload
+
+
+def _build_multimodal_evidence(
+    *,
+    target_view: Mapping[str, Any],
+    intent_view: Mapping[str, Any],
+    target: Mapping[str, Any],
+    confirmation: Mapping[str, Any],
+    interaction_metadata: Mapping[str, Any],
+    interaction_wrapper: Mapping[str, Any],
+    live_proposal: Mapping[str, Any],
+    selection_matches: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build an observable, display-only modality decomposition."""
+    target_source = _safe_choice(
+        target.get("source"),
+        {
+            "manual_rectangle",
+            "manual_aoi",
+            "gaze_prediction",
+            "whole_slide",
+        },
+    )
+    if not target_source and not live_proposal:
+        target_source = _safe_choice(
+            target_view.get("target_source"),
+            {
+                "manual_rectangle",
+                "manual_aoi",
+                "gaze_prediction",
+                "whole_slide",
+            },
+        )
+    proposed_aoi_id = _bounded_text(
+        target_view.get("proposed_aoi_id")
+    )
+    if not proposed_aoi_id:
+        proposed_aoi_id = _bounded_text(
+            live_proposal.get("predicted_aoi_id")
+        )
+    if not proposed_aoi_id:
+        proposed_aoi_id = _bounded_text(
+            interaction_metadata.get("predicted_aoi_id")
+        )
+    if not proposed_aoi_id:
+        proposed_aoi_id = _bounded_text(
+            target.get("predicted_aoi_id")
+        )
+
+    confirmed_aoi_id = _bounded_text(
+        target_view.get("confirmed_aoi_id")
+    )
+    if not confirmed_aoi_id:
+        confirmed_aoi_id = _bounded_text(
+            target_view.get("selected_aoi_id")
+        )
+
+    gaze_source = _safe_choice(
+        live_proposal.get("gaze_source"),
+        {
+            "cloud_grid",
+            "eyetheia_local",
+            "voice_locked_target",
+            "unknown",
+        },
+    )
+    if not gaze_source:
+        gaze_source = _safe_choice(
+            interaction_metadata.get("gaze_source"),
+            {
+                "cloud_grid",
+                "eyetheia_local",
+                "voice_locked_target",
+                "unknown",
+            },
+        )
+
+    sensing_evidence = _bounded_evidence(
+        live_proposal.get("sensing_evidence")
+    )
+    if not sensing_evidence:
+        sensing_evidence = _bounded_evidence(
+            interaction_metadata.get("sensing_evidence")
+        )
+
+    confidence = _normalized_confidence(
+        live_proposal.get("target_confidence")
+    )
+    if confidence is None:
+        confidence = _normalized_confidence(
+            interaction_metadata.get("target_confidence")
+        )
+    if confidence is None:
+        confidence = _normalized_confidence(
+            target.get("confidence")
+        )
+
+    gaze_grid = _bounded_text(
+        live_proposal.get("gaze_grid"),
+        max_length=80,
+    )
+    if not gaze_grid:
+        gaze_grid = _bounded_text(
+            interaction_metadata.get("gaze_grid"),
+            max_length=80,
+        )
+    stable_duration = _bounded_nonnegative_float(
+        live_proposal.get("stable_duration_sec")
+    )
+    if stable_duration is None:
+        stable_duration = _bounded_nonnegative_float(
+            target.get("stable_duration_sec")
+        )
+    layout_revision = _nonnegative_int(
+        live_proposal.get("layout_revision")
+    )
+    if layout_revision is None:
+        layout_revision = _nonnegative_int(
+            interaction_metadata.get("layout_revision")
+        )
+
+    alternatives = _multimodal_alternatives(
+        target=target,
+        live_proposal=live_proposal,
+        selection_matches=selection_matches,
+    )
+    records: list[dict[str, Any]] = []
+
+    if target_source in {
+        "manual_rectangle",
+        "manual_aoi",
+        "whole_slide",
+    }:
+        manual_metrics: dict[str, Any] = {
+            "target_scope": _bounded_text(
+                target_view.get("target_scope"),
+                max_length=80,
+            )
+            or None,
+        }
+        bbox = _safe_bbox(target_view.get("bbox"))
+        if bbox is not None:
+            manual_metrics["bbox"] = list(bbox)
+        if target_source == "manual_rectangle":
+            manual_metrics["candidate_count"] = len(
+                _candidate_rows(selection_matches)[:5]
+            )
+        records.append(
+            _modality_record(
+                modality=target_source,
+                status="available",
+                available=True,
+                candidate_aoi_id=(
+                    confirmed_aoi_id
+                    or proposed_aoi_id
+                    or (
+                        "whole_slide"
+                        if target_source == "whole_slide"
+                        else None
+                    )
+                ),
+                confidence=None,
+                metrics=manual_metrics,
+                evidence=(
+                    [
+                        "The learner supplied this target directly."
+                    ]
+                ),
+            )
+        )
+
+    intent_source = _safe_choice(
+        intent_view.get("source"),
+        {"typed_text", "speech_transcript", "ui_action"},
+    )
+    command = _bounded_text(
+        intent_view.get("command"),
+        max_length=240,
+    )
+    intent_confidence = _normalized_confidence(
+        intent_view.get("confidence")
+    )
+    explicit_target_hint = _bounded_text(
+        intent_view.get("explicit_target_hint")
+    )
+    intent_evidence = (
+        [f"User command: {command}"]
+        if command
+        else []
+    )
+    if explicit_target_hint:
+        intent_evidence.append(
+            "The parser found an explicit target hint, but the "
+            "canonical target resolver did not use it as a candidate."
+        )
+    records.append(
+        _modality_record(
+            modality="language_intent",
+            status=(
+                "available"
+                if intent_source
+                else "unavailable"
+            ),
+            available=bool(intent_source),
+            candidate_aoi_id=None,
+            confidence=intent_confidence,
+            metrics={
+                "source": intent_source,
+                "resolved_intent": (
+                    _bounded_text(
+                        intent_view.get("resolved_intent"),
+                        max_length=80,
+                    )
+                    or None
+                ),
+                "has_deictic_reference": bool(
+                    intent_view.get("has_deictic_reference", False)
+                ),
+                "confidence_kind": (
+                    "intent_parser"
+                    if intent_confidence is not None
+                    else None
+                ),
+                "explicit_target_hint": (
+                    explicit_target_hint or None
+                ),
+                "target_hint_used_by_resolver": False,
+            },
+            evidence=intent_evidence,
+            unavailable_reason=(
+                None
+                if intent_source
+                else "No typed, speech, or UI intent is available."
+            ),
+        )
+    )
+
+    discarded_reason = _discarded_reason(sensing_evidence)
+    gaze_candidate = proposed_aoi_id or None
+    if gaze_source == "eyetheia_local":
+        available = bool(gaze_candidate) and not (
+            discarded_reason
+            and _evidence_invalidates_current_candidate(discarded_reason)
+        )
+        records.append(
+            _modality_record(
+                modality="point_gaze",
+                status=(
+                    "available"
+                    if available
+                    else (
+                        "discarded"
+                        if discarded_reason
+                        else "unavailable"
+                    )
+                ),
+                available=available,
+                candidate_aoi_id=(
+                    gaze_candidate if available else None
+                ),
+                confidence=(
+                    confidence if available else None
+                ),
+                metrics={
+                    "stable_duration_sec": stable_duration,
+                    "layout_revision": layout_revision,
+                },
+                evidence=sensing_evidence,
+                discarded_reason=discarded_reason,
+                unavailable_reason=(
+                    None
+                    if available or discarded_reason
+                    else "No resolved local point-gaze candidate is available."
+                ),
+            )
+        )
+    elif gaze_source == "cloud_grid":
+        available = bool(
+            gaze_grid
+            and gaze_grid != "unknown"
+            and gaze_candidate
+        )
+        status = (
+            "available"
+            if available
+            else (
+                "discarded"
+                if discarded_reason
+                else "unavailable"
+            )
+        )
+        records.append(
+            _modality_record(
+                modality="gaze_grid",
+                status=status,
+                available=available,
+                candidate_aoi_id=(
+                    gaze_candidate if available else None
+                ),
+                confidence=(
+                    confidence if available else None
+                ),
+                metrics={
+                    "gaze_grid": gaze_grid or None,
+                    "stable_duration_sec": stable_duration,
+                    "layout_revision": layout_revision,
+                },
+                evidence=sensing_evidence,
+                discarded_reason=discarded_reason,
+                unavailable_reason=(
+                    None
+                    if available or discarded_reason
+                    else "No resolved gaze-grid candidate is available."
+                ),
+            )
+        )
+    elif gaze_source == "voice_locked_target":
+        records.append(
+            _modality_record(
+                modality="voice_locked_target",
+                status="available",
+                available=True,
+                candidate_aoi_id=gaze_candidate,
+                confidence=None,
+                metrics={"source": "voice_locked_target"},
+                evidence=[
+                    "The UI target was locked before the speech turn."
+                ],
+            )
+        )
+        records.append(
+            _modality_record(
+                modality="gaze",
+                status="not_applicable",
+                available=False,
+                candidate_aoi_id=None,
+                confidence=None,
+                metrics={},
+                evidence=[],
+                unavailable_reason=(
+                    "This voice-locked target did not use gaze."
+                ),
+            )
+        )
+    else:
+        records.append(
+            _modality_record(
+                modality="gaze",
+                status=(
+                    "not_applicable"
+                    if target_source
+                    in {
+                        "manual_rectangle",
+                        "manual_aoi",
+                        "whole_slide",
+                    }
+                    else "unavailable"
+                ),
+                available=False,
+                candidate_aoi_id=None,
+                confidence=None,
+                metrics={},
+                evidence=sensing_evidence,
+                discarded_reason=discarded_reason,
+                unavailable_reason=(
+                    "The target was supplied without gaze."
+                    if target_source
+                    in {
+                        "manual_rectangle",
+                        "manual_aoi",
+                        "whole_slide",
+                    }
+                    else "No explicit gaze source was retained."
+                ),
+            )
+        )
+
+    confirmed = bool(confirmation.get("confirmed", False))
+    confirmation_source = _safe_choice(
+        confirmation.get("source"),
+        {
+            "explicit_user_confirmation",
+            "manual_correction",
+            "automatic_high_confidence",
+        },
+    )
+    records.append(
+        _modality_record(
+            modality="confirmation",
+            status="confirmed" if confirmed else "pending",
+            available=confirmed,
+            candidate_aoi_id=(
+                confirmed_aoi_id or None
+            ),
+            confidence=None,
+            metrics={
+                "source": confirmation_source,
+                "automatic": (
+                    confirmation_source
+                    == "automatic_high_confidence"
+                ),
+            },
+            evidence=[],
+            unavailable_reason=(
+                None
+                if confirmed
+                else "The target has not been confirmed."
+            ),
+        )
+    )
+
+    corrected_from = _bounded_text(
+        target_view.get("corrected_from_aoi_id")
+    )
+    corrected = bool(
+        target_view.get("corrected_by_learner", False)
+    )
+    if corrected:
+        records.append(
+            _modality_record(
+                modality="correction",
+                status="applied",
+                available=True,
+                candidate_aoi_id=confirmed_aoi_id or None,
+                confidence=None,
+                metrics={
+                    "corrected_from_aoi_id": (
+                        corrected_from or proposed_aoi_id or None
+                    ),
+                },
+                evidence=[
+                    "The learner replaced the proposed target."
+                ],
+            )
+        )
+
+    resolver_summary = _multimodal_resolver_summary(
+        target_source=target_source,
+        gaze_source=gaze_source,
+        confirmation_source=confirmation_source,
+        corrected=corrected,
+        proposed_aoi_id=proposed_aoi_id,
+        confirmed_aoi_id=confirmed_aoi_id,
+    )
+    status = (
+        "ready"
+        if proposed_aoi_id or confirmed_aoi_id or target_source
+        else "pending"
+    )
+    return {
+        "status": status,
+        "summary": (
+            "Observable target evidence is decomposed by source; "
+            "confidence values apply only to their named modality."
+        ),
+        "final": {
+            "proposed_aoi_id": proposed_aoi_id or None,
+            "confirmed_aoi_id": confirmed_aoi_id or None,
+            "corrected_by_learner": corrected,
+            "confirmation_source": confirmation_source,
+        },
+        "resolver_summary": resolver_summary,
+        "modalities": records,
+        "alternatives": alternatives,
+        "fusion": "not_performed",
+    }
+
+
+def _build_multimodal_privacy_view(
+    *,
+    interaction: Mapping[str, Any],
+    intent_view: Mapping[str, Any],
+    multimodal_evidence: Mapping[str, Any],
+    cloud_text_allowed: bool,
+    tutor: Mapping[str, Any],
+) -> dict[str, Any]:
+    records = multimodal_evidence.get("modalities")
+    if not isinstance(records, list):
+        records = []
+    modality_names = {
+        row.get("modality")
+        for row in records
+        if isinstance(row, Mapping)
+        and row.get("available") is True
+    }
+    camera_used = bool(
+        modality_names & {"gaze_grid", "point_gaze"}
+    )
+    intent_source = _safe_choice(
+        intent_view.get("source"),
+        {"typed_text", "speech_transcript", "ui_action"},
+    )
+    interaction_mode = _safe_choice(
+        interaction.get("mode"),
+        {"manual", "sensor_assisted", "hybrid"},
+    )
+    if not interaction_mode:
+        interaction_mode = (
+            "sensor_assisted"
+            if camera_used
+            else "pending"
+            if modality_names
+            else "manual"
+        )
+    return {
+        "interaction_mode": interaction_mode,
+        "camera_enabled": camera_used,
+        "microphone_enabled": (
+            intent_source == "speech_transcript"
+        ),
+        "raw_biometrics_collected": (
+            None if camera_used else False
+        ),
+        "cloud_text_allowed": bool(cloud_text_allowed),
+        "cloud_tutor_called": bool(tutor),
+        "raw_provider_response_exposed": False,
+        "prompt_messages_exposed": False,
+        "internal_reasoning_exposed": False,
+        "raw_media_exposed": False,
+        "raw_gaze_coordinates_exposed": False,
+        "landmarks_exposed": False,
+    }
+
+
+def _modality_record(
+    *,
+    modality: str,
+    status: str,
+    available: bool,
+    candidate_aoi_id: str | None,
+    confidence: float | None,
+    metrics: Mapping[str, Any],
+    evidence: Sequence[str],
+    discarded_reason: str | None = None,
+    unavailable_reason: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "modality": modality,
+        "status": status,
+        "available": bool(available),
+        "candidate_aoi_id": (
+            _bounded_text(candidate_aoi_id) or None
+        ),
+        "confidence": _normalized_confidence(confidence),
+        "metrics": {
+            str(key): value
+            for key, value in metrics.items()
+            if value is not None
+        },
+        "evidence": _bounded_evidence(evidence),
+        "discarded_reason": (
+            _bounded_text(discarded_reason, max_length=240)
+            or None
+        ),
+        "unavailable_reason": (
+            _bounded_text(unavailable_reason, max_length=240)
+            or None
+        ),
+    }
+
+
+def _multimodal_alternatives(
+    *,
+    target: Mapping[str, Any],
+    live_proposal: Mapping[str, Any],
+    selection_matches: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    source = live_proposal.get("alternatives")
+    source_name = "proposal"
+    if not isinstance(source, (list, tuple)):
+        source = target.get("alternatives")
+    if not isinstance(source, (list, tuple)) or not source:
+        source = selection_matches
+        source_name = "manual_overlap"
+    rows: list[dict[str, Any]] = []
+    for item in source:
+        if not isinstance(item, Mapping):
+            continue
+        aoi_id = _bounded_text(item.get("aoi_id"))
+        if not aoi_id:
+            continue
+        score = _normalized_confidence(item.get("score"))
+        evidence = _bounded_evidence(item.get("evidence"))
+        rows.append(
+            {
+                "aoi_id": aoi_id,
+                "score": score,
+                "source": source_name,
+                "evidence": evidence,
+            }
+        )
+        if len(rows) >= 5:
+            break
+    return rows
+
+
+def _discarded_reason(evidence: Sequence[str]) -> str | None:
+    for item in evidence:
+        if _evidence_invalidates_current_candidate(item):
+            return item
+    for item in evidence:
+        normalized = item.casefold()
+        if any(
+            marker in normalized
+            for marker in (
+                "discarded",
+                "layout mismatch",
+                "stale",
+                "insufficient",
+            )
+        ):
+            return item
+    return None
+
+
+def _evidence_invalidates_current_candidate(reason: str) -> bool:
+    normalized = reason.casefold()
+    return (
+        "layout mismatch" in normalized
+        or "insufficient" in normalized
+        or "current point-gaze evidence discarded" in normalized
+    )
+
+
+def _multimodal_resolver_summary(
+    *,
+    target_source: str | None,
+    gaze_source: str | None,
+    confirmation_source: str | None,
+    corrected: bool,
+    proposed_aoi_id: str,
+    confirmed_aoi_id: str,
+) -> str:
+    if corrected:
+        return (
+            f"Learner correction replaced "
+            f"{proposed_aoi_id or 'the proposal'} with "
+            f"{confirmed_aoi_id or 'the confirmed target'}."
+        )
+    if confirmation_source == "automatic_high_confidence":
+        return (
+            "The existing confidence-based auto-confirm gates accepted "
+            "the proposed target."
+        )
+    if target_source == "manual_rectangle":
+        return (
+            "Manual rectangle selection supplied the target; overlap "
+            "scores are shown as alternatives, not fusion weights."
+        )
+    if target_source == "manual_aoi":
+        return "The learner selected the AOI directly."
+    if target_source == "whole_slide":
+        return "The learner selected the whole slide directly."
+    if gaze_source == "voice_locked_target":
+        return (
+            "The preselected UI target was locked for the speech turn; "
+            "gaze was not used."
+        )
+    if gaze_source == "eyetheia_local":
+        return (
+            "Local point-gaze dwell and spatial matching proposed the "
+            "target before confirmation."
+        )
+    if gaze_source == "cloud_grid":
+        return (
+            "The gaze grid was mapped to visible AOIs before "
+            "confirmation."
+        )
+    return "No observable target-resolution path is available yet."
 
 
 def assert_public_integrated_xai_payload(
@@ -1576,6 +2254,65 @@ def _safe_text(
         return ""
 
     return str(value).strip()
+
+
+def _bounded_text(
+    value: Any,
+    *,
+    max_length: int = 160,
+) -> str:
+    if not isinstance(value, (str, int)):
+        return ""
+    return " ".join(str(value).split())[:max_length]
+
+
+def _bounded_evidence(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    rows: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = _bounded_text(item, max_length=240)
+        if text:
+            rows.append(text)
+        if len(rows) >= 6:
+            break
+    return rows
+
+
+def _safe_choice(
+    value: Any,
+    allowed: set[str],
+) -> str | None:
+    text = _bounded_text(value, max_length=80)
+    return text if text in allowed else None
+
+
+def _normalized_confidence(value: Any) -> float | None:
+    return _optional_normalized_float(value)
+
+
+def _bounded_nonnegative_float(value: Any) -> float | None:
+    number = _optional_float(value)
+    if (
+        number is None
+        or not math.isfinite(number)
+        or number < 0.0
+        or number > 3600.0
+    ):
+        return None
+    return number
+
+
+def _nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if 0 <= number <= 1_000_000 else None
 
 
 def _optional_float(

@@ -117,6 +117,28 @@ class GridTargetResolverTest(unittest.TestCase):
 
         self.assertIsNone(mismatched.predicted_aoi_id)
         self.assertIsNone(low.predicted_aoi_id)
+        self.assertIn(
+            "deck or slide mismatch",
+            mismatched.sensing_evidence[-1],
+        )
+
+    def test_layout_revision_mismatch_retains_discard_reason(self):
+        from modules.system.live_ui_bridge import resolve_grid_target
+
+        mismatched = resolve_grid_target(
+            make_proposal(
+                layout_revision=6,
+                sensing_evidence=("prior public note",),
+            ),
+            make_geometry(layout_revision=7),
+            self.aois(),
+        )
+
+        self.assertIsNone(mismatched.predicted_aoi_id)
+        self.assertEqual(
+            mismatched.sensing_evidence[-1],
+            "gaze-grid evidence discarded: layout revision mismatch",
+        )
 
 
 class LiveConfirmationContractTest(unittest.TestCase):
@@ -236,6 +258,56 @@ class LiveConfirmationContractTest(unittest.TestCase):
             interaction.metadata["predicted_aoi_id"],
             "right",
         )
+
+    def test_public_gaze_provenance_is_retained_and_bounded(self):
+        from modules.system.live_ui_bridge import build_live_interaction_input
+
+        interaction = build_live_interaction_input(
+            self.resolved(
+                gaze_source="eyetheia_local",
+                sensing_evidence=(
+                    "local point-gaze matched dwell=0.400s",
+                    "older layout revision evidence discarded; "
+                    "newest layout retained",
+                    42,
+                    "x" * 300,
+                ),
+            ),
+            command="Explain this",
+            selected_aoi_id="right",
+        )
+
+        self.assertEqual(
+            interaction.metadata["gaze_source"],
+            "eyetheia_local",
+        )
+        self.assertEqual(
+            interaction.metadata["sensing_evidence"][:2],
+            [
+                "local point-gaze matched dwell=0.400s",
+                "older layout revision evidence discarded; "
+                "newest layout retained",
+            ],
+        )
+        self.assertEqual(
+            len(interaction.metadata["sensing_evidence"][2]),
+            240,
+        )
+
+    def test_unknown_gaze_provenance_fails_safe(self):
+        from modules.system.live_ui_bridge import build_live_interaction_input
+
+        interaction = build_live_interaction_input(
+            self.resolved(
+                gaze_source="raw-private-provider",
+                sensing_evidence="not-a-list",
+            ),
+            command="Explain this",
+            selected_aoi_id="right",
+        )
+
+        self.assertEqual(interaction.metadata["gaze_source"], "unknown")
+        self.assertEqual(interaction.metadata["sensing_evidence"], [])
 
     def test_transcript_edit_enters_hybrid_mode(self):
         from modules.system.live_ui_bridge import build_live_interaction_input
@@ -360,6 +432,7 @@ class ProposalTurnRunnerTest(unittest.TestCase):
         proposal = inbox.pop()
 
         self.assertEqual(proposal.gaze_source, "eyetheia_local")
+        self.assertEqual(proposal.sensing_evidence, ("local dwell",))
         self.assertEqual(proposal.layout_revision, 7)
         self.assertEqual(proposal.predicted_aoi_id, "right")
         self.assertEqual(proposal.target_confidence, 0.82)
