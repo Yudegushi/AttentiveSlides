@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gaze-lock camera capture</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { color: #172033; font: 14px/1.45 system-ui, sans-serif; margin: 0; }
+    button {
+      background: #2457d6; border: 0; border-radius: 5px; color: white;
+      cursor: pointer; font-weight: 700; padding: .55rem .9rem;
+    }
+    button:disabled { cursor: not-allowed; opacity: .5; }
+    #stop { background: #667085; margin-left: .4rem; }
+    #status { font-weight: 650; margin: 0 0 .35rem; }
+    #gaze-status { color: #526072; margin: 0 0 .65rem; }
+    video {
+      background: #111; border-radius: 6px; display: block; margin-top: .7rem;
+      max-height: 220px; object-fit: cover; width: min(100%, 320px);
+    }
+  </style>
+</head>
+<body>
+  <p id="status">Camera is off. No microphone is requested.</p>
+  <p id="gaze-status">EyeTheia: waiting for camera.</p>
+  <button id="start" type="button">START CAMERA</button>
+  <button id="stop" type="button" disabled>STOP</button>
+  <video id="preview" autoplay muted playsinline></video>
+  <script
+    src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js"
+    crossorigin="anonymous"></script>
+  <script>
+  (() => {
+    const FACE_MESH_ROOT =
+      "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619";
+    const EYETHEIA_URL = "ws://127.0.0.1:8001/ws/predict_gaze";
+    const DEBUG_CHANNEL_NAME = "attentiveslides-gaze-debug-v1";
+    const sessionId = globalThis.crypto && crypto.randomUUID
+      ? crypto.randomUUID()
+      : String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+    const debugChannel = typeof BroadcastChannel === "function"
+      ? new BroadcastChannel(DEBUG_CHANNEL_NAME)
+      : null;
+    const status = document.getElementById("status");
+    const gazeStatus = document.getElementById("gaze-status");
+    const startButton = document.getElementById("start");
+    const stopButton = document.getElementById("stop");
+    const preview = document.getElementById("preview");
+    const eyeCanvas = document.createElement("canvas");
+    const eyeContext = eyeCanvas.getContext("2d", { alpha: false });
+    let stream = null;
+    let running = false;
+    let heartbeatTimer = null;
+    let faceMeshTimer = null;
+    let gazeUploadTimer = null;
+    let reconnectTimer = null;
+    let faceMesh = null;
+    let faceMeshInFlight = false;
+    let eyeFrameBusy = false;
+    let eyeSocket = null;
+    let eyeViewport = null;
+    let screenAcknowledged = false;
+    let filterResetAcknowledged = false;
+    let gazeInFlight = false;
+    let latestGaze = null;
+    let lastGazeUploadAt = -Infinity;
+    let sequence = 0;
+
+    function headers(extra = {}) {
+      return { "X-Attentive-Media-Session": sessionId, ...extra };
+    }
+
+    async function requireOk(response) {
+      if (!response.ok) {
+        throw new Error(await response.text() || ("HTTP " + response.status));
+      }
+      return response;
+    }
+
+    function publishDebug(message) {
+      if (debugChannel) debugChannel.postMessage({ version: 1, ...message });
+    }
+
+    function topViewportSize() {
+      try {
+        const width = Number(window.top.innerWidth);
+        const height = Number(window.top.innerHeight);
+        if (!(width > 0 && height > 0)) throw new Error("viewport unavailable");
+        return { width, height };
+      } catch (error) {
+        gazeStatus.textContent = "EyeTheia: top-level viewport unavailable.";
+        return null;
+      }
+    }
+
+    function ensureEyeCanvasSize() {
+      const width = Math.max(1, Math.round(preview.videoWidth));
+      const height = Math.max(1, Math.round(preview.videoHeight));
+      if (eyeCanvas.width !== width) eyeCanvas.width = width;
+      if (eyeCanvas.height !== height) eyeCanvas.height = height;
+    }
+
+    function packEyeTheiaMessage(meta, payload = new ArrayBuffer(0)) {
+      const metadata = new TextEncoder().encode(JSON.stringify(meta));
+      const bytes = payload instanceof ArrayBuffer
+        ? new Uint8Array(payload)
+        : new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+      const packed = new Uint8Array(4 + metadata.length + bytes.length);
+      new DataView(packed.buffer).setUint32(0, metadata.length, false);
+      packed.set(metadata, 4);
+      packed.set(bytes, 4 + metadata.length);
+      return packed.buffer;
+    }
+
+    function sendControl(meta) {
+      if (eyeSocket && eyeSocket.readyState === WebSocket.OPEN) {
+        eyeSocket.send(packEyeTheiaMessage(meta));
+      }
+    }
+
+    function announceViewport(viewport, resetFilter) {
+      eyeViewport = viewport;
+      screenAcknowledged = false;
+      filterResetAcknowledged = !resetFilter;
+      sendControl({ type: "screen", w: viewport.width, h: viewport.height });
+      if (resetFilter) sendControl({ type: "reset_filter" });
+    }
+
+    function checkViewport() {
+      const viewport = topViewportSize();
+      if (!viewport) return false;
+      if (
+        eyeViewport
+        && (viewport.width !== eyeViewport.width || viewport.height !== eyeViewport.height)
+      ) {
+        announceViewport(viewport, true);
+      }
+      return true;
+    }
+
+    function scheduleReconnect() {
+      if (!running || reconnectTimer !== null) return;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connectEyeTheia();
+      }, 2000);
+    }
+
+    function localGazeFailure(detail) {
+      latestGaze = null;
+      publishDebug({ kind: "gaze_clear" });
+      gazeStatus.textContent = "EyeTheia: unavailable; reconnecting…";
+      if (detail) console.warn("Gaze-lock EyeTheia unavailable", detail);
+      scheduleReconnect();
+    }
+
+    function scheduleGazeUpload() {
+      if (!running || gazeUploadTimer !== null || gazeInFlight || !latestGaze) return;
+      const delay = Math.max(0, 200 - (performance.now() - lastGazeUploadAt));
+      gazeUploadTimer = window.setTimeout(() => {
+        gazeUploadTimer = null;
+        void flushGazeUpload();
+      }, delay);
+    }
+
+    async function flushGazeUpload() {
+      if (!running || gazeInFlight || !latestGaze) return;
+      const payload = latestGaze;
+      latestGaze = null;
+      gazeInFlight = true;
+      lastGazeUploadAt = performance.now();
+      try {
+        await requireOk(await fetch("/attentive-media/gaze", {
+          method: "POST",
+          headers: headers({ "Content-Type": "application/json" }),
+          body: JSON.stringify(payload),
+        }));
+      } catch (error) {
+        localGazeFailure("gaze upload failed: " + error.message);
+      } finally {
+        gazeInFlight = false;
+        scheduleGazeUpload();
+      }
+    }
+
+    function handleEyeTheiaMessage(event) {
+      let message;
+      try {
+        message = JSON.parse(event.data);
+      } catch (error) {
+        localGazeFailure("invalid response: " + error.message);
+        return;
+      }
+      if (message.type === "screen_ack") {
+        screenAcknowledged = Boolean(
+          eyeViewport
+          && Number(message.w) === eyeViewport.width
+          && Number(message.h) === eyeViewport.height
+        );
+        if (screenAcknowledged && filterResetAcknowledged) {
+          gazeStatus.textContent = "EyeTheia: ready.";
+        }
+        return;
+      }
+      if (message.type === "filter_reset") {
+        filterResetAcknowledged = true;
+        if (screenAcknowledged) gazeStatus.textContent = "EyeTheia: ready.";
+        return;
+      }
+      if (message.type === "error") {
+        localGazeFailure(String(message.detail || "EyeTheia error"));
+        return;
+      }
+      if (message.type !== "pred" || !checkViewport()) return;
+      if (!screenAcknowledged || !filterResetAcknowledged) return;
+      const viewport = topViewportSize();
+      if (!viewport) return;
+      latestGaze = {
+        sequence: Number(message.seq),
+        browser_timestamp_ms: performance.timeOrigin + performance.now(),
+        x_css: Number(message.x_px),
+        y_css: Number(message.y_px),
+        viewport_width: viewport.width,
+        viewport_height: viewport.height,
+        valid: true,
+        face_detected: true,
+        source: "eyetheia_local",
+      };
+      publishDebug({ kind: "gaze", ...latestGaze });
+      scheduleGazeUpload();
+    }
+
+    function connectEyeTheia() {
+      if (!running || (eyeSocket && eyeSocket.readyState < WebSocket.CLOSING)) return;
+      const viewport = topViewportSize();
+      if (!viewport) return;
+      const socket = new WebSocket(EYETHEIA_URL);
+      eyeSocket = socket;
+      socket.addEventListener("open", () => {
+        if (socket !== eyeSocket || !running) return;
+        announceViewport(viewport, false);
+        gazeStatus.textContent = "EyeTheia: connected; synchronizing viewport…";
+      });
+      socket.addEventListener("message", handleEyeTheiaMessage);
+      socket.addEventListener("error", () => {
+        if (socket === eyeSocket) localGazeFailure("WebSocket error");
+      });
+      socket.addEventListener("close", () => {
+        if (socket !== eyeSocket) return;
+        eyeSocket = null;
+        screenAcknowledged = false;
+        filterResetAcknowledged = false;
+        localGazeFailure("WebSocket closed");
+      });
+    }
+
+    function sendCurrentFrame(landmarks) {
+      if (
+        !eyeSocket
+        || eyeSocket.readyState !== WebSocket.OPEN
+        || eyeSocket.bufferedAmount > 1_000_000
+        || !screenAcknowledged
+        || !filterResetAcknowledged
+      ) {
+        eyeFrameBusy = false;
+        return;
+      }
+      const frameSequence = sequence++;
+      eyeCanvas.toBlob(async (blob) => {
+        try {
+          if (!blob || !running || !eyeSocket || eyeSocket.readyState !== WebSocket.OPEN) return;
+          eyeSocket.send(packEyeTheiaMessage(
+            { type: "frame", seq: frameSequence, landmarks },
+            await blob.arrayBuffer(),
+          ));
+        } catch (error) {
+          localGazeFailure("frame send failed: " + error.message);
+        } finally {
+          eyeFrameBusy = false;
+        }
+      }, "image/jpeg", 0.9);
+    }
+
+    function startLocalGaze() {
+      if (!window.FaceMesh) throw new Error("Face Mesh bundle did not load");
+      faceMesh = new window.FaceMesh({
+        locateFile: (file) => `${FACE_MESH_ROOT}/${file}`,
+      });
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6,
+      });
+      faceMesh.onResults((results) => {
+        const faces = results && results.multiFaceLandmarks;
+        const landmarks = (
+          Array.isArray(faces)
+          && faces.length === 1
+          && Array.isArray(faces[0])
+          && faces[0].length === 478
+        ) ? faces[0] : null;
+        faceMeshInFlight = false;
+        if (landmarks) sendCurrentFrame(landmarks);
+        else eyeFrameBusy = false;
+      });
+      connectEyeTheia();
+      faceMeshTimer = window.setInterval(() => {
+        if (
+          !running || faceMeshInFlight || eyeFrameBusy || !faceMesh
+          || preview.videoWidth === 0 || !checkViewport()
+        ) return;
+        ensureEyeCanvasSize();
+        eyeContext.drawImage(preview, 0, 0, eyeCanvas.width, eyeCanvas.height);
+        faceMeshInFlight = true;
+        eyeFrameBusy = true;
+        faceMesh.send({ image: eyeCanvas }).catch((error) => {
+          faceMeshInFlight = false;
+          eyeFrameBusy = false;
+          localGazeFailure("Face Mesh failed: " + error.message);
+        });
+      }, 100);
+    }
+
+    function stopLocalGaze() {
+      publishDebug({ kind: "gaze_clear" });
+      window.clearInterval(faceMeshTimer);
+      window.clearTimeout(gazeUploadTimer);
+      window.clearTimeout(reconnectTimer);
+      faceMeshTimer = null;
+      gazeUploadTimer = null;
+      reconnectTimer = null;
+      latestGaze = null;
+      faceMeshInFlight = false;
+      eyeFrameBusy = false;
+      gazeInFlight = false;
+      if (eyeSocket) {
+        const socket = eyeSocket;
+        eyeSocket = null;
+        socket.close();
+      }
+      if (faceMesh && typeof faceMesh.close === "function") {
+        Promise.resolve(faceMesh.close()).catch(() => {});
+      }
+      faceMesh = null;
+      eyeViewport = null;
+      screenAcknowledged = false;
+      filterResetAcknowledged = false;
+      gazeStatus.textContent = "EyeTheia: capture stopped.";
+    }
+
+    function startHeartbeat() {
+      heartbeatTimer = window.setInterval(() => {
+        if (!running) return;
+        fetch("/attentive-media/heartbeat", {
+          method: "POST",
+          headers: headers(),
+        }).then(requireOk).catch((error) => {
+          status.textContent = "Session heartbeat failed: " + error.message;
+          void stopCapture(false);
+        });
+      }, 1000);
+    }
+
+    async function startCapture() {
+      if (running) return;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false,
+        });
+        if (
+          stream.getVideoTracks().length !== 1
+          || stream.getAudioTracks().length !== 0
+        ) {
+          throw new Error("Exactly one camera track and no audio track are required.");
+        }
+        await requireOk(await fetch("/attentive-media/start", {
+          method: "POST",
+          headers: headers(),
+        }));
+        preview.srcObject = stream;
+        await preview.play();
+        running = true;
+        stream.getVideoTracks()[0].addEventListener(
+          "ended",
+          () => void stopCapture(true),
+        );
+        startLocalGaze();
+        startHeartbeat();
+        startButton.disabled = true;
+        stopButton.disabled = false;
+        status.textContent = "Camera active locally. No microphone or media upload.";
+      } catch (error) {
+        status.textContent = "Camera did not start: " + error.message;
+        await stopCapture(true);
+      }
+    }
+
+    async function stopCapture(notifyServer) {
+      const wasActive = running || stream;
+      running = false;
+      window.clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+      stopLocalGaze();
+      if (stream) stream.getTracks().forEach((track) => track.stop());
+      stream = null;
+      preview.srcObject = null;
+      startButton.disabled = false;
+      stopButton.disabled = true;
+      if (notifyServer && wasActive) {
+        await fetch("/attentive-media/stop", {
+          method: "POST",
+          headers: headers(),
+        }).catch(() => {});
+      }
+      if (!status.textContent.startsWith("Camera did not start")) {
+        status.textContent = "Camera is off. No microphone is requested.";
+      }
+    }
+
+    startButton.addEventListener("click", () => void startCapture());
+    stopButton.addEventListener("click", () => void stopCapture(true));
+    window.addEventListener("pagehide", () => {
+      running = false;
+      window.clearInterval(heartbeatTimer);
+      stopLocalGaze();
+      if (stream) stream.getTracks().forEach((track) => track.stop());
+      navigator.sendBeacon(
+        "/attentive-media/stop?session=" + encodeURIComponent(sessionId),
+        "",
+      );
+    });
+  })();
+  </script>
+</body>
+</html>
