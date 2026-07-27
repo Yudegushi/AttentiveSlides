@@ -44,7 +44,7 @@
           + "-" + Math.random().toString(16).slice(2);
       }
 
-      button.addEventListener("click", () => {
+      function submitLock() {
         if (button.disabled || submitted) return;
         submitted = true;
         button.disabled = true;
@@ -53,6 +53,14 @@
           event_id: eventId(),
           clicked_at_browser_ms: performance.timeOrigin + performance.now(),
         });
+      }
+
+      button.addEventListener("click", submitLock);
+
+      button.addEventListener("keyup", (event) => {
+        if (event.key !== "Tab" || event.shiftKey) return;
+        if (document.activeElement !== button) return;
+        submitLock();
       });
 
       function render(args) {

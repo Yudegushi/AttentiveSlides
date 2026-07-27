@@ -180,7 +180,8 @@ def _confirmed_context(slide: MainUISlide, aoi_id: str) -> str:
 def _render_target(target: LockedGazeTarget | None) -> None:
     if target is None:
         st.info(
-            "Look steadily at the intended AOI, then press LOCK GAZE TARGET."
+            "Look steadily at the intended AOI, then click LOCK GAZE TARGET "
+            "or Tab forward onto it; releasing Tab locks the target."
         )
         return
     st.success(f"Locked: {target.aoi_label}")

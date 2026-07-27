@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class GazeLockControlComponentTest(unittest.TestCase):
-    def test_lock_control_uses_browser_click_timestamp(self):
+    def test_lock_control_uses_browser_timestamp_for_click_or_tab_release(self):
         source = (
             ROOT
             / "modules"
@@ -22,6 +22,10 @@ class GazeLockControlComponentTest(unittest.TestCase):
             source,
         )
         self.assertIn("if (button.disabled || submitted) return", source)
+        self.assertIn('button.addEventListener("click", submitLock)', source)
+        self.assertIn('button.addEventListener("keyup", (event) => {', source)
+        self.assertIn('event.key !== "Tab" || event.shiftKey', source)
+        self.assertIn("document.activeElement !== button", source)
 
 
 if __name__ == "__main__":

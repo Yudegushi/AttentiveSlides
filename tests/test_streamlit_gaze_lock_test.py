@@ -33,6 +33,7 @@ class StreamlitGazeLockTestModeTest(unittest.TestCase):
         for required in (
             '"B Gaze-Lock Typed Test"',
             '"LOCK GAZE TARGET"',
+            '"or Tab forward onto it; releasing Tab locks the target."',
             '"RETARGET"',
             '"Typed question"',
             '"ASK TUTOR"',
