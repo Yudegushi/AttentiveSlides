@@ -15,8 +15,7 @@ tracked.
 
 Reviewed user recordings are kept locally in root `audio_eval/` and transferred to an
 ignored `data/audio_eval/user_smoke/` directory only on an evaluation machine. The matching
-CSV and profile results are also ignored. The repository-level data and privacy
-boundary is recorded in [SYSTEM_FEATURES.md](../../SYSTEM_FEATURES.md).
+CSV and profile results are also ignored and remain outside Git.
 
 Install the canonical project environment before preparing or evaluating
 audio:

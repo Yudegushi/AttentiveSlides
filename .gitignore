@@ -13,10 +13,9 @@ build/
 .coverage
 htmlcov/
 
-# Local documentation scratch space. Track only durable public guides.
-/docs/*
-!/docs/deployment.md
-!/docs/README_ASSET_CHECKLIST.md
+# Local documentation and internal feature inventory.
+/docs/
+/SYSTEM_FEATURES.md
 
 # Local generated data and private study inputs.
 /audio_eval/

@@ -13,11 +13,8 @@
   <a href="#what-is-attentiveslides">About</a> ·
   <a href="#quick-start-manual-mode">Quick Start</a> ·
   <a href="#full-setup-live-mode">Live Setup</a> ·
-  <a href="#architecture">Architecture</a> ·
-  <a href="SYSTEM_FEATURES.md">System Features</a>
+  <a href="#architecture">Architecture</a>
 </p>
-
-<!-- TODO(readme-assets): Add .github/assets/hero-workspace.png using docs/README_ASSET_CHECKLIST.md. -->
 
 ## What is AttentiveSlides?
 
@@ -69,8 +66,6 @@ PDF
 *Gaze and language propose a target; the learner confirms or corrects it before
 the grounded tutor answers. Study Review uses derived session information only.*
 
-<!-- TODO(readme-assets): Add .github/assets/demo-grounding.gif using docs/README_ASSET_CHECKLIST.md. -->
-
 ## Key features
 
 ### Study slides without special hardware
@@ -91,8 +86,6 @@ the grounded tutor answers. Study Review uses derived session information only.*
 - Treat a target switch in persistent voice as a new proposal requiring a
   learner decision.
 
-<!-- TODO(readme-assets): Add .github/assets/feature-confirmation.png using docs/README_ASSET_CHECKLIST.md. -->
-
 ### Ask a source-grounded tutor
 
 - Build context from the confirmed AOI, slide text, visual context, bounded
@@ -101,8 +94,6 @@ the grounded tutor answers. Study Review uses derived session information only.*
 - Validate structured responses and source IDs with one bounded retry.
 - Show a retryable error instead of presenting an unsupported fallback answer
   as confidently grounded.
-
-<!-- TODO(readme-assets): Add .github/assets/feature-grounded-tutor.png using docs/README_ASSET_CHECKLIST.md. -->
 
 ### Learn by voice
 
@@ -115,8 +106,6 @@ the grounded tutor answers. Study Review uses derived session information only.*
 - Optionally synthesize a completed tutor answer with DashScope/Bailian TTS;
   speech failure does not invalidate the text answer.
 
-<!-- TODO(readme-assets): Add .github/assets/feature-live-voice.png using docs/README_ASSET_CHECKLIST.md. -->
-
 ### Review derived study patterns
 
 - Start, pause, resume, finish, and revisit Study sessions.
@@ -124,11 +113,6 @@ the grounded tutor answers. Study Review uses derived session information only.*
 - Review time-weighted emotion, engagement, fatigue, reminder, study-time, and
   completed-interaction summaries as non-diagnostic estimates.
 - Export review data or explicitly delete stored sessions.
-
-<!-- TODO(readme-assets): Add .github/assets/feature-study-review.png using docs/README_ASSET_CHECKLIST.md. -->
-
-For the complete implementation-backed inventory, see
-[`SYSTEM_FEATURES.md`](SYSTEM_FEATURES.md).
 
 ## Human-centered by design
 
@@ -232,8 +216,9 @@ ws://127.0.0.1:8001/ws/predict_gaze
 ```
 
 EyeTheia failure does not stop the rest of Live Mode; targeting degrades to the
-configured grid/manual path. See [Advanced Remote Deployment](docs/deployment.md)
-when the browser and GPU services run on different machines.
+configured grid/manual path. When the browser and GPU services run on different
+machines, expose the EyeTheia loopback endpoint through an SSH tunnel or
+equivalent secure forwarding.
 
 ### 4. Enable OCR only when needed
 
@@ -319,8 +304,8 @@ of calling Streamlit directly. Runtime files default to
 `$XDG_DATA_HOME/attentive_slides` or `~/.local/share/attentive_slides` and can be
 overridden with `ATTENTIVE_RUNTIME_DATA_DIR`.
 
-See [`SYSTEM_FEATURES.md`](SYSTEM_FEATURES.md) for module boundaries and primary
-implementation paths.
+Primary implementation paths are organized under `modules/`, with the
+production launcher in `scripts/run_live_single_port.py`.
 
 ## Privacy and capability boundaries
 
